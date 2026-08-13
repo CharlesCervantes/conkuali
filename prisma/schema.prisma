@@ -224,10 +224,24 @@ model Proyecto {
   estatus     EstatusProyecto @default(ACTIVO)
   fechaInicio DateTime?
   fechaCierre DateTime?
+
+  // Administración de proyectos (Control de Obra — Etapa 1). `cliente` es
+  // texto libre por ahora, sin catálogo propio todavía. `numeroContrato` es el
+  // contrato principal del proyecto con el cliente — no el de los
+  // contratistas (eso se resuelve después con ContratoContratista, ver
+  // docs/negocio/04-modulo-control-de-obra.md sección 49).
+  cliente              String?
+  ubicacion            String?
+  numeroContrato       String?
+  descripcion          String?
+  notas                String?
+  fechaEstimadaTermino DateTime?
+
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
   beneficiarios BeneficiarioProyecto[]
+  partidas      Partida[]
 
   @@index([empresaId])
   @@map("proyectos")
@@ -307,6 +321,7 @@ model BeneficiarioProyecto {
 
   aditivas    Aditiva[]
   movimientos MovimientoSemanal[]
+  contratos   ContratoContratista[]
 
   @@unique([beneficiarioId, proyectoId])
   @@index([proyectoId])
@@ -402,4 +417,88 @@ model ComentarioMovimiento {
 
   @@index([movimientoId])
   @@map("comentarios_movimiento")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 2: estructura contractual
+// Ver /docs/negocio/04-modulo-control-de-obra.md (sección 49 para las
+// decisiones de arquitectura de esta capa: BeneficiarioProyecto conserva su
+// significado, ContratoContratista es 1:N debajo de él, sin precios
+// normal/privado todavía).
+// ---------------------------------------------------------------------------
+
+enum ConceptoEstatus {
+  ACTIVO
+  CANCELADO
+}
+
+model Partida {
+  id         String   @id @default(cuid())
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  nombre     String
+  orden      Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  conceptos Concepto[]
+
+  @@index([proyectoId])
+  @@map("partidas")
+}
+
+model Concepto {
+  id                 String          @id @default(cuid())
+  partida            Partida         @relation(fields: [partidaId], references: [id])
+  partidaId          String
+  codigo             String?
+  descripcion        String
+  unidad             String
+  cantidadContratada Decimal         @db.Decimal(14, 3)
+  orden              Int             @default(0)
+  notas              String?
+  estatus            ConceptoEstatus @default(ACTIVO)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  asignaciones ContratoConcepto[]
+
+  @@index([partidaId])
+  @@map("conceptos")
+}
+
+// Un contrato específico de un contratista dentro de su participación en el
+// proyecto (BeneficiarioProyecto). Un mismo BeneficiarioProyecto puede tener
+// varios ContratoContratista. Solo aplica a beneficiarios tipo CONTRATISTA
+// (validado en el servicio). No guarda monto — se calcula sumando
+// ContratoConcepto al vuelo.
+model ContratoContratista {
+  id                     String               @id @default(cuid())
+  beneficiarioProyecto   BeneficiarioProyecto @relation(fields: [beneficiarioProyectoId], references: [id])
+  beneficiarioProyectoId String
+  numeroContrato         String?
+  descripcion            String?
+  fecha                  DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+
+  conceptos ContratoConcepto[]
+
+  @@index([beneficiarioProyectoId])
+  @@map("contratos_contratista")
+}
+
+model ContratoConcepto {
+  id                        String              @id @default(cuid())
+  contratoContratista       ContratoContratista @relation(fields: [contratoContratistaId], references: [id])
+  contratoContratistaId     String
+  concepto                  Concepto            @relation(fields: [conceptoId], references: [id])
+  conceptoId                String
+  cantidad                  Decimal             @db.Decimal(14, 3)
+  precioUnitarioContratista Decimal             @db.Decimal(14, 2)
+  createdAt                 DateTime            @default(now())
+  updatedAt                 DateTime            @updatedAt
+
+  @@unique([contratoContratistaId, conceptoId])
+  @@map("contrato_conceptos")
 }

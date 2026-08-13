@@ -18,3 +18,16 @@ export function empresaTieneModulo(
 export function esMaster(usuario: UsuarioSesion): boolean {
   return usuario.rol === "MASTER";
 }
+
+/**
+ * Administrar el catálogo de proyectos (crear/editar/cambiar estatus) es
+ * exclusivo de Administrador/Director/Master — el Supervisor puede consultar
+ * pero no administra (04-modulo-control-de-obra.md, sección 4).
+ */
+export function puedeAdministrarProyectos(usuario: UsuarioSesion): boolean {
+  return (
+    usuario.rol === "ADMINISTRADOR" ||
+    usuario.rol === "DIRECTOR" ||
+    usuario.rol === "MASTER"
+  );
+}

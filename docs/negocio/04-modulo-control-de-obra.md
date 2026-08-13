@@ -312,6 +312,12 @@ Cada participación contractual puede tener:
 - pagos acumulados;
 - saldo.
 
+> **Nota de arquitectura técnica (ver sección 49):** `BeneficiarioProyecto` (la
+> relación única beneficiario-proyecto de `03-modulo-reporte-general.md`) **no**
+> se convierte en el contrato. Un mismo contratista con varios contratos en la
+> misma obra se modela con una entidad `ContratoContratista` (1:N debajo de
+> `BeneficiarioProyecto`), no con múltiples `BeneficiarioProyecto`.
+
 ---
 
 # 10. Contrato del contratista
@@ -467,6 +473,11 @@ El sistema debe conservar estas diferencias y hacerlas visibles.
 
 No debe eliminar o sobrescribir información histórica para esconder diferencias.
 
+> **Nota de arquitectura técnica (ver sección 49):** `MovimientoSemanal` (Reporte
+> General) representa el movimiento/programación del pago, **no** se declara como
+> la fuente definitiva de cuánto se pagó realmente. Pagos múltiples/parciales se
+> resolverán con una futura entidad `PagoReal` (1:N desde `MovimientoSemanal`).
+
 ---
 
 # 16. Comparación pago vs. avance
@@ -528,6 +539,13 @@ Flujo:
 6. Una aditiva rechazada se conserva en histórico.
 
 Las aditivas no deben eliminarse para ocultar rechazos.
+
+> **Nota de arquitectura técnica (ver sección 49):** una aditiva puede tener
+> **varias líneas** (cabecera + detalle), no un único concepto. La cabecera
+> conserva proyecto/contrato, descripción, solicitante/autorizador, estatus y
+> fechas; el detalle contiene concepto, unidad, cantidad y precios por línea.
+> Cuando exista `ContratoContratista`, la aditiva se relacionará con ese
+> contrato específico, no con la participación completa.
 
 ---
 
@@ -654,6 +672,13 @@ Cantidad ejecutada
 → valoración privada
 
 No se debe duplicar la cantidad física para obtener estas valoraciones.
+
+> **Nota de arquitectura técnica (ver sección 49):** el modelo soporta los tres
+> precios (contratista/normal/privado) pero **no asume que siempre son distintos
+> entre sí** — es una capacidad flexible, no una regla funcional confirmada hasta
+> revisar más archivos reales. Además, cualquier estimación histórica debe
+> conservar el precio que aplicó **en ese momento** (snapshot), nunca
+> recalcularse con un precio vigente actualizado después.
 
 ---
 
@@ -1411,3 +1436,112 @@ La meta es construir una única fuente de información donde:
 - los reportes cliente se generen desde el sistema;
 - se conserve todo el histórico;
 - y los precios privados permanezcan protegidos.
+
+---
+
+# 49. Decisiones de arquitectura técnica (sesión de diseño, agosto 2026)
+
+Esta sección documenta cómo el análisis técnico de este módulo (hecho junto con
+Claude, comparando este documento contra `prisma/schema.prisma` y los módulos ya
+construidos) ajustó algunos de los conceptos descritos arriba. **Donde haya
+diferencia, esta sección manda** sobre las secciones anteriores para efectos de
+implementación — el resto del documento sigue siendo válido como descripción del
+negocio.
+
+## 49.1 `BeneficiarioProyecto` no es el contrato
+
+`BeneficiarioProyecto` (entidad ya implementada, ver `03-modulo-reporte-general.md`)
+conserva su significado actual: la relación única entre un Beneficiario y un
+Proyecto (`@@unique([beneficiarioId, proyectoId])`, sin cambio). Reporte General
+sigue trabajando a ese nivel sin modificaciones.
+
+La estructura contractual detallada que pide este documento (partidas, conceptos,
+múltiples contratos por obra) se resuelve con entidades nuevas **debajo** de
+`BeneficiarioProyecto`, todavía no implementadas:
+
+```text
+Beneficiario
+   ↓
+BeneficiarioProyecto        (ya existe — sin cambio)
+   ↓ 1:N
+ContratoContratista          (futuro — Etapa 2)
+   ↓ 1:N
+ContratoConcepto              (futuro — Etapa 2)
+```
+
+Ejemplo: Juan Pérez tiene un `BeneficiarioProyecto` en Villas La Herradura, y
+dentro de ese `BeneficiarioProyecto` puede tener dos filas de `ContratoContratista`
+("Contrato 01 — Obra Civil" y "Contrato 02 — Firmes y Exteriores"). Nunca dos
+`BeneficiarioProyecto` para representar dos contratos.
+
+Consecuencia futura ya anticipada: cuando exista `ContratoContratista`, `Aditiva`
+se relacionará con el contrato específico (`ContratoContratista`), no con el
+`BeneficiarioProyecto` completo — eso implicará mover su FK en esa etapa.
+
+## 49.2 Aditiva: cabecera + detalle
+
+`Aditiva` (ya implementada, con flujo Supervisor-solicita → Director-autoriza) va
+a evolucionar a cabecera + detalle, no a extenderse con campos planos:
+
+```text
+Aditiva                 (cabecera: proyecto/contrato, descripción, solicitante,
+   └── AditivaDetalle     autorizador, estatus, fechas, monto = suma del detalle)
+                         (detalle: concepto opcional, descripción, unidad,
+                          cantidad, P.U. contratista, valoración normal,
+                          P.U. privado, importe)
+```
+
+Motivo: una aditiva puede representar varias líneas de trabajo (ej. "Aditiva 03 —
+Modificación terraza": demolición adicional + block + zarpeo + instalación
+pluvial), no necesariamente un solo concepto.
+
+## 49.3 Tres precios posibles, no una regla de "siempre tres distintos"
+
+El modelo debe soportar tres valoraciones por concepto — precio contratista
+(lo que Conkuali paga), precio normal (capa supervisor) y precio privado (capa
+Administrador/Director) — pero **no se asume todavía** que en todos los proyectos
+los tres sean siempre diferentes o independientes entre sí. Es una capacidad del
+modelo, no una regla de negocio confirmada. Se revisará contra más archivos reales
+antes de convertirla en regla definitiva.
+
+## 49.4 Snapshots de precios históricos
+
+Los precios "vigentes" de un concepto sirven como default para nuevas capturas,
+pero cualquier registro histórico (estimación, y después Estimación Cliente) debe
+conservar el precio que aplicó **en el momento en que se generó**, nunca
+recalcularse si el precio vigente cambia después. Ejemplo: una estimación de
+febrero con P.U. privado $5,300 debe seguir mostrando $5,300 aunque en junio el
+precio vigente suba a $5,600.
+
+## 49.5 `MovimientoSemanal` no es la fuente definitiva del pago real
+
+`MovimientoSemanal` (Reporte General) sigue representando el movimiento/
+programación del pago dentro del ciclo semanal — no se declara como el registro
+definitivo de cuánto dinero se entregó realmente. Se deja abierta la posibilidad
+de una futura entidad `PagoReal` (1:N desde `MovimientoSemanal`) para soportar
+pagos parciales/múltiples, fechas, métodos, comprobantes y folio:
+
+```text
+EstimacionContratista → MovimientoSemanal → PagoReal (futuro, no implementado)
+```
+
+No implementado todavía — el diseño actual de `MovimientoSemanal` no bloquea
+agregarlo después (sería una tabla nueva con FK hacia `MovimientoSemanal`).
+
+## 49.6 Seguridad Normal/Privado
+
+Confirmado: la protección de información privada se aplica desde el
+servicio/query/API (el `select`/`where` de la consulta misma nunca incluye campos
+privados para un solicitante sin permiso), nunca únicamente ocultando componentes
+en el frontend. Ver sección 26.
+
+## 49.7 Alcance de la Etapa 1
+
+La Etapa 1 (administración de proyectos) **solo** agrega campos generales a
+`Proyecto` (`cliente`, `ubicacion`, `numeroContrato`, `descripcion`, `notas`,
+`fechaEstimadaTermino` — todos opcionales) y la pantalla/servicios para
+administrarlo. `cliente` es texto libre por ahora (no hay todavía un catálogo
+`Cliente` con razón social/RFC/contactos). `numeroContrato` representa el
+contrato principal del proyecto con el cliente — **no** los contratos de
+contratistas, que se resuelven después con `ContratoContratista`. Ninguna de las
+entidades de las secciones 49.1–49.5 se crea en esta etapa.
