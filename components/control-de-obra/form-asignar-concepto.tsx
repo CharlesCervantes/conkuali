@@ -8,11 +8,11 @@ import { asignarConceptoAction, type FormState } from "@/app/(app)/control-de-ob
 export function FormAsignarConcepto({
   contratoId,
   proyectoId,
-  conceptos,
+  conceptosPorPartida,
 }: {
   contratoId: string;
   proyectoId: string;
-  conceptos: { id: string; etiqueta: string }[];
+  conceptosPorPartida: { partidaNombre: string; conceptos: { id: string; etiqueta: string }[] }[];
 }) {
   const action = asignarConceptoAction.bind(null, contratoId, proyectoId);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
@@ -31,10 +31,14 @@ export function FormAsignarConcepto({
         <option value="" disabled>
           Selecciona un concepto
         </option>
-        {conceptos.map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.etiqueta}
-          </option>
+        {conceptosPorPartida.map((grupo) => (
+          <optgroup key={grupo.partidaNombre} label={grupo.partidaNombre}>
+            {grupo.conceptos.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.etiqueta}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
       <Input

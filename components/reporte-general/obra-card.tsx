@@ -1,7 +1,10 @@
 import { Card } from "@/components/ui/card";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { EstadoPagoBadge } from "./estado-pago-badge";
+import { GRID_PROYECTOS } from "./grid-proyectos";
+import { cn } from "@/lib/cn";
 import { formatMoney, formatMoneyOrDash } from "@/lib/dinero";
+import { calcularEstadoProyecto } from "@/lib/reporte-general/estado";
 import type { ReporteObra } from "@/lib/server/reporte-general/queries";
 
 const TIPO_LABEL: Record<string, string> = {
@@ -15,15 +18,21 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
     obra.contratistas.length === 0 &&
     obra.proveedores.length === 0 &&
     obra.administracion.length === 0;
+  const estadoProyecto = calcularEstadoProyecto(obra);
 
   return (
     <Card
       className="enter overflow-hidden"
-      style={{ transitionDelay: `${Math.min(index, 6) * 40}ms` }}
+      style={{ transitionDelay: `${Math.min(index, 6) * 30}ms` }}
     >
-      <details open={obra.totalSemana > 0} className="group">
-        <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-          <div className="flex items-center gap-3">
+      <details className="group">
+        <summary
+          className={cn(
+            GRID_PROYECTOS,
+            "cursor-pointer list-none px-5 py-3.5 select-none [&::-webkit-details-marker]:hidden"
+          )}
+        >
+          <div className="flex min-w-0 items-center gap-3">
             <svg
               viewBox="0 0 20 20"
               className="h-3.5 w-3.5 shrink-0 text-[var(--muted)] transition-transform duration-200 ease-out group-open:rotate-90"
@@ -31,18 +40,37 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
             >
               <path d="M7 4l6 6-6 6V4z" />
             </svg>
-            <div>
-              <h3 className="text-sm font-semibold text-[var(--foreground)]">
+            <div className="min-w-0">
+              <h3 className="truncate text-sm font-semibold text-[var(--foreground)]">
                 {obra.proyecto.nombre}
               </h3>
-              <p className="text-xs text-[var(--muted)]">
+              <p className="truncate text-xs text-[var(--muted)]">
                 {TIPO_LABEL[obra.proyecto.tipo] ?? obra.proyecto.tipo}
                 {obra.proyecto.estatus === "PAUSADO" && " · Pausada"}
               </p>
             </div>
           </div>
-          <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+          <span className="text-right text-sm tabular-nums text-[var(--foreground)]">
+            {formatMoneyOrDash(obra.totalEntreSemana)}
+          </span>
+          <span className="text-right text-sm tabular-nums text-[var(--foreground)]">
+            {formatMoneyOrDash(obra.totalFinSemana)}
+          </span>
+          <span className="text-right text-base font-semibold tabular-nums text-[var(--foreground)]">
             {formatMoney(obra.totalSemana)}
+          </span>
+          <span
+            className={cn(
+              "text-right text-sm tabular-nums",
+              obra.pendienteSemana > 0
+                ? "font-medium text-red-700"
+                : "text-[var(--muted)]"
+            )}
+          >
+            {formatMoneyOrDash(obra.pendienteSemana)}
+          </span>
+          <span className="flex justify-end">
+            <EstadoPagoBadge estatus={estadoProyecto} />
           </span>
         </summary>
 
@@ -61,9 +89,8 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                       <Tr>
                         <Th>Contratista</Th>
                         <Th>Concepto</Th>
-                        <Th className="text-right">Contrato</Th>
-                        <Th className="text-right">Aditivas</Th>
-                        <Th className="text-right">Pagado</Th>
+                        <Th className="text-right">Contrato vigente</Th>
+                        <Th className="text-right">Pagado acumulado</Th>
                         <Th className="text-right">Saldo</Th>
                         <Th className="text-right">Entre semana</Th>
                         <Th className="text-right">Fin de semana</Th>
@@ -78,10 +105,31 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {fila.concepto ?? "—"}
                           </Td>
                           <Td className="text-right tabular-nums">
-                            {formatMoney(fila.montoContrato)}
-                          </Td>
-                          <Td className="text-right tabular-nums">
-                            {formatMoneyOrDash(fila.aditivasAutorizadas)}
+                            <details className="group/vigente relative inline-block text-left">
+                              <summary className="cursor-pointer list-none underline decoration-dotted underline-offset-4 [&::-webkit-details-marker]:hidden">
+                                {formatMoney(fila.montoContractualVigente)}
+                              </summary>
+                              <div className="absolute right-0 z-20 mt-1.5 w-56 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3 text-xs shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.16)]">
+                                <div className="flex items-center justify-between gap-4 text-[var(--muted)]">
+                                  <span>Contrato base</span>
+                                  <span className="tabular-nums text-[var(--foreground)]">
+                                    {formatMoney(fila.montoContrato)}
+                                  </span>
+                                </div>
+                                <div className="mt-1.5 flex items-center justify-between gap-4 text-[var(--muted)]">
+                                  <span>Aditivas autorizadas</span>
+                                  <span className="tabular-nums text-[var(--foreground)]">
+                                    {formatMoneyOrDash(fila.aditivasAutorizadas)}
+                                  </span>
+                                </div>
+                                <div className="mt-1.5 flex items-center justify-between gap-4 border-t border-[var(--border)] pt-1.5 font-semibold text-[var(--foreground)]">
+                                  <span>Total vigente</span>
+                                  <span className="tabular-nums">
+                                    {formatMoney(fila.montoContractualVigente)}
+                                  </span>
+                                </div>
+                              </div>
+                            </details>
                           </Td>
                           <Td className="text-right tabular-nums">
                             {formatMoneyOrDash(fila.pagadoHistorico)}
@@ -176,27 +224,6 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
               )}
             </div>
           )}
-
-          <div className="mt-4 flex items-center justify-end gap-6 border-t border-[var(--border)] pt-3 text-sm">
-            <span className="text-[var(--muted)]">
-              Entre semana{" "}
-              <span className="font-medium tabular-nums text-[var(--foreground)]">
-                {formatMoney(obra.totalEntreSemana)}
-              </span>
-            </span>
-            <span className="text-[var(--muted)]">
-              Fin de semana{" "}
-              <span className="font-medium tabular-nums text-[var(--foreground)]">
-                {formatMoney(obra.totalFinSemana)}
-              </span>
-            </span>
-            <span className="text-[var(--foreground)]">
-              Total{" "}
-              <span className="font-semibold tabular-nums">
-                {formatMoney(obra.totalSemana)}
-              </span>
-            </span>
-          </div>
         </div>
       </details>
     </Card>

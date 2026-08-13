@@ -54,6 +54,9 @@ export type ReporteObra = {
   totalEntreSemana: number;
   totalFinSemana: number;
   totalSemana: number;
+  // Suma de los movimientos en estatusPago PENDIENTE_PAGO (dinero que falta
+  // por pagar esta semana; no incluye lo ya cubierto por fondo puente).
+  pendienteSemana: number;
 };
 
 export async function obtenerReporteSemana(
@@ -161,6 +164,10 @@ export async function obtenerReporteSemana(
       sumaAprobadaPorGrupo(contratistas, "montoFinSemana") +
       sumaAprobadaPorGrupo(proveedores, "montoFinSemana") +
       sumaAprobadaPorGrupo(administracion, "montoFinSemana");
+    const pendienteSemana =
+      sumaPendientePorGrupo(contratistas) +
+      sumaPendientePorGrupo(proveedores) +
+      sumaPendientePorGrupo(administracion);
 
     return {
       proyecto: {
@@ -175,6 +182,7 @@ export async function obtenerReporteSemana(
       totalEntreSemana,
       totalFinSemana,
       totalSemana: totalEntreSemana + totalFinSemana,
+      pendienteSemana,
     };
   });
 }
@@ -191,4 +199,22 @@ function sumaAprobadaPorGrupo<
   return filas
     .filter((f) => f.estatusAprobacion === "APROBADO")
     .reduce((total, f) => total + f[campo], 0);
+}
+
+// Dinero aprobado que todavía no se paga (estatusPago = PENDIENTE_PAGO). No
+// incluye lo cubierto por fondo puente, que ya se considera pagado al
+// beneficiario aunque la empresa deba reponer el fondo.
+function sumaPendientePorGrupo<
+  T extends {
+    montoEntreSemana: number;
+    montoFinSemana: number;
+    estatusAprobacion: EstatusAprobacion | null;
+    estatusPago: EstatusPago | null;
+  }
+>(filas: T[]): number {
+  return filas
+    .filter(
+      (f) => f.estatusAprobacion === "APROBADO" && f.estatusPago === "PENDIENTE_PAGO"
+    )
+    .reduce((total, f) => total + f.montoEntreSemana + f.montoFinSemana, 0);
 }

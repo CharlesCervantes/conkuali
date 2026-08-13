@@ -4,11 +4,11 @@ import { formatMoney } from "@/lib/dinero";
 export function ResumenSemana({
   totalEntreSemana,
   totalFinSemana,
-  obrasConMovimientos,
+  pendienteDePago,
 }: {
   totalEntreSemana: number;
   totalFinSemana: number;
-  obrasConMovimientos: number;
+  pendienteDePago: number;
 }) {
   const total = totalEntreSemana + totalFinSemana;
 
@@ -17,8 +17,9 @@ export function ResumenSemana({
     { etiqueta: "Entre semana", valor: formatMoney(totalEntreSemana) },
     { etiqueta: "Fin de semana", valor: formatMoney(totalFinSemana) },
     {
-      etiqueta: "Obras con movimientos",
-      valor: String(obrasConMovimientos),
+      etiqueta: "Pendiente de pago",
+      valor: formatMoney(pendienteDePago),
+      alerta: pendienteDePago > 0,
     },
   ];
 
@@ -36,8 +37,10 @@ export function ResumenSemana({
           <p
             className={
               t.destacado
-                ? "mt-1 text-2xl font-semibold tabular-nums text-[var(--brand)]"
-                : "mt-1 text-2xl font-semibold tabular-nums text-[var(--foreground)]"
+                ? "mt-1 text-3xl font-semibold tabular-nums text-[var(--brand)]"
+                : t.alerta
+                  ? "mt-1 text-2xl font-semibold tabular-nums text-red-700"
+                  : "mt-1 text-2xl font-semibold tabular-nums text-[var(--foreground)]"
             }
           >
             {t.valor}

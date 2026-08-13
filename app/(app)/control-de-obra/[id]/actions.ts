@@ -11,6 +11,10 @@ import {
   RegistroNoEncontradoError,
 } from "@/lib/server/control-de-obra/estructura-contractual";
 import {
+  guardarAvanceSemanal,
+  cambiarEstatusAprobacionAvance,
+} from "@/lib/server/control-de-obra/avance";
+import {
   SinPermisoError,
   ProyectoNoEncontradoError,
   ValidacionError,
@@ -53,7 +57,7 @@ export async function crearPartidaAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/estructura`);
+  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
   return undefined;
 }
 
@@ -75,7 +79,7 @@ export async function crearConceptoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/estructura`);
+  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
   return undefined;
 }
 
@@ -96,8 +100,53 @@ export async function crearContratoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/estructura`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
   return undefined;
+}
+
+export type AvanceFormState = { error?: string; guardados?: number } | undefined;
+
+const PREFIJO_CANTIDAD = "cantidad_";
+
+export async function guardarAvanceAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: AvanceFormState,
+  formData: FormData
+): Promise<AvanceFormState> {
+  const usuario = await requireSession();
+
+  const filas = [...formData.entries()]
+    .filter(([nombre]) => nombre.startsWith(PREFIJO_CANTIDAD))
+    .map(([nombre, valor]) => ({
+      conceptoId: nombre.slice(PREFIJO_CANTIDAD.length),
+      cantidadEjecutada: valor,
+    }));
+
+  let resultado;
+  try {
+    resultado = await guardarAvanceSemanal(usuario, proyectoId, { semanaId, filas });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+
+  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath("/control-de-obra");
+  return { guardados: resultado.guardados };
+}
+
+export async function cambiarEstatusAprobacionAvanceAction(
+  proyectoId: string,
+  conceptoId: string,
+  semanaId: string,
+  nuevoEstatus: "APROBADO" | "RECHAZADO"
+) {
+  const usuario = await requireSession();
+  await cambiarEstatusAprobacionAvance(usuario, conceptoId, semanaId, nuevoEstatus);
+  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath("/control-de-obra");
 }
 
 export async function asignarConceptoAction(
@@ -116,6 +165,6 @@ export async function asignarConceptoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/estructura`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
   return undefined;
 }

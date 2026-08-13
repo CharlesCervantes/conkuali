@@ -33,37 +33,96 @@ export async function obtenerEstructuraContractual(
   await obtenerProyecto(usuario, proyectoId);
 
   const [partidas, contratos] = await Promise.all([
-    db.partida.findMany({
-      where: { proyectoId },
-      orderBy: { orden: "asc" },
-      include: {
-        conceptos: {
-          orderBy: { orden: "asc" },
-          include: {
-            asignaciones: {
-              include: {
-                contratoContratista: {
-                  include: {
-                    beneficiarioProyecto: { include: { beneficiario: true } },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    }),
-    db.contratoContratista.findMany({
-      where: { beneficiarioProyecto: { proyectoId } },
-      orderBy: { createdAt: "asc" },
-      include: {
-        beneficiarioProyecto: { include: { beneficiario: true } },
-        conceptos: { include: { concepto: true } },
-      },
-    }),
+    partidasConConceptos(proyectoId),
+    contratosConConceptos(proyectoId),
   ]);
 
   return { partidas, contratos };
+}
+
+// Solo lo que necesita la pestaña "Partidas de obra": qué se ejecuta y
+// cuánto — sin quién lo ejecuta ni a qué precio (eso vive en Contratistas).
+export async function obtenerPartidasProyecto(
+  usuario: UsuarioSesion,
+  proyectoId: string
+) {
+  await obtenerProyecto(usuario, proyectoId);
+  return partidasConConceptos(proyectoId);
+}
+
+// Lo que necesita la pestaña "Contratistas": los contratos con sus conceptos
+// asignados, más las partidas/conceptos (sin datos de asignación) para poder
+// ofrecer el selector "asignar concepto existente".
+export async function obtenerContratistasProyecto(
+  usuario: UsuarioSesion,
+  proyectoId: string
+) {
+  await obtenerProyecto(usuario, proyectoId);
+
+  const [partidas, contratos] = await Promise.all([
+    partidasConConceptos(proyectoId),
+    contratosConConceptos(proyectoId),
+  ]);
+
+  return { partidas, contratos };
+}
+
+// Exportado: lo reutiliza también lib/server/control-de-obra/avance.ts (misma
+// consulta, evita duplicarla).
+export function partidasConConceptos(proyectoId: string) {
+  return db.partida.findMany({
+    where: { proyectoId },
+    orderBy: { orden: "asc" },
+    include: { conceptos: { orderBy: { orden: "asc" } } },
+  });
+}
+
+function contratosConConceptos(proyectoId: string) {
+  return db.contratoContratista.findMany({
+    where: { beneficiarioProyecto: { proyectoId } },
+    orderBy: { createdAt: "asc" },
+    include: {
+      beneficiarioProyecto: { include: { beneficiario: true } },
+      conceptos: { include: { concepto: true } },
+    },
+  });
+}
+
+export type ResolucionContratista = {
+  contratistasAsignados: number;
+  // Solo tiene valor cuando contratistasAsignados === 1 — con más de un
+  // contratista no hay forma inequívoca de saber qué precio aplica, y no se
+  // inventa un promedio (ver sección 49.8 de la documentación de negocio).
+  precioUnitarioContratista: number | null;
+};
+
+// Cuántos ContratoConcepto (contratistas) tiene cada Concepto del proyecto, y
+// su precio unitario cuando es uno solo. Lo usan tanto Contratistas (avance
+// atribuible) como Avance de obra (P.U./monto por concepto).
+export async function resolverContratistaPorConcepto(
+  proyectoId: string
+): Promise<Map<string, ResolucionContratista>> {
+  const asignaciones = await db.contratoConcepto.findMany({
+    where: { concepto: { partida: { proyectoId } } },
+    select: { conceptoId: true, precioUnitarioContratista: true },
+  });
+
+  const conteo = new Map<string, { count: number; precio: number | null }>();
+  for (const a of asignaciones) {
+    const actual = conteo.get(a.conceptoId) ?? { count: 0, precio: null };
+    actual.count += 1;
+    actual.precio = actual.count === 1 ? Number(a.precioUnitarioContratista) : null;
+    conteo.set(a.conceptoId, actual);
+  }
+
+  const resultado = new Map<string, ResolucionContratista>();
+  for (const [conceptoId, v] of conteo) {
+    resultado.set(conceptoId, {
+      contratistasAsignados: v.count,
+      precioUnitarioContratista: v.count === 1 ? v.precio : null,
+    });
+  }
+  return resultado;
 }
 
 export async function listarContratistasDisponibles(usuario: UsuarioSesion) {

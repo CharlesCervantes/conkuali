@@ -19,14 +19,8 @@ export function FormNuevoConcepto({
   );
 
   return (
-    <form action={formAction} className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-      <Input name="codigo" placeholder="Código (opcional)" />
-      <Input
-        name="descripcion"
-        required
-        placeholder="Descripción"
-        className="col-span-2"
-      />
+    <form action={formAction} className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr_1fr]">
+      <Input name="descripcion" required placeholder="Descripción" />
       <Input name="unidad" required placeholder="Unidad (m², ml…)" />
       <Input
         name="cantidadContratada"
@@ -34,11 +28,11 @@ export function FormNuevoConcepto({
         type="number"
         step="0.001"
         min="0"
-        placeholder="Cantidad"
+        placeholder="Cantidad total"
       />
-      <div className="col-span-2 sm:col-span-5 flex items-center gap-3">
+      <div className="sm:col-span-3 flex items-center gap-3">
         <Button type="submit" disabled={pending} className="shrink-0">
-          {pending ? "Agregando…" : "+ Agregar concepto"}
+          {pending ? "Guardando…" : "Guardar concepto"}
         </Button>
         {state?.error && <p className="text-sm text-red-700">{state.error}</p>}
       </div>

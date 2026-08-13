@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/cn";
+import { EnlaceProtegido } from "./enlace-protegido";
 
 export function TabNav({ tabs }: { tabs: { href: string; label: string }[] }) {
   const pathname = usePathname();
@@ -12,7 +12,7 @@ export function TabNav({ tabs }: { tabs: { href: string; label: string }[] }) {
       {tabs.map((tab) => {
         const activo = pathname === tab.href;
         return (
-          <Link
+          <EnlaceProtegido
             key={tab.href}
             href={tab.href}
             className={cn(
@@ -23,7 +23,7 @@ export function TabNav({ tabs }: { tabs: { href: string; label: string }[] }) {
             )}
           >
             {tab.label}
-          </Link>
+          </EnlaceProtegido>
         );
       })}
     </nav>

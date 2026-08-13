@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { requireSession } from "@/lib/server/auth/dal";
 import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import { Card } from "@/components/ui/card";
@@ -16,9 +17,15 @@ export default async function NuevoProyectoPage() {
   }
 
   return (
-    <div className="max-w-xl space-y-6">
+    <div className="max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-[var(--foreground)]">
+        <Link
+          href="/control-de-obra"
+          className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          ← Control de Obra
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
           Nuevo proyecto
         </h1>
         <p className="mt-1 text-sm text-[var(--muted)]">Control de Obra</p>

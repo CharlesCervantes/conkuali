@@ -42,14 +42,38 @@ function rangoSemana(fecha: Date): {
 // Los renglones semanales se generan automáticamente (01-administracion-pagos-semanales.md)
 // — aquí solo se garantiza que exista el registro de Semana, no los movimientos
 // (esos dependen de que exista una participación beneficiario-proyecto, Etapa 3+).
-export async function obtenerOCrearSemanaActual(empresaId: string) {
-  const { numero, anio, fechaInicio, fechaFin } = rangoSemana(new Date());
+// Recibe cualquier fecha de referencia (no solo "hoy") para poder navegar a
+// semanas anteriores o siguientes reutilizando el mismo cálculo de rango.
+export async function obtenerOCrearSemana(empresaId: string, fechaReferencia: Date) {
+  const { numero, anio, fechaInicio, fechaFin } = rangoSemana(fechaReferencia);
 
   return db.semana.upsert({
     where: { empresaId_numero_anio: { empresaId, numero, anio } },
     update: {},
     create: { empresaId, numero, anio, fechaInicio, fechaFin },
   });
+}
+
+export async function obtenerOCrearSemanaActual(empresaId: string) {
+  return obtenerOCrearSemana(empresaId, new Date());
+}
+
+// Para llevar la fecha de referencia en la URL (?fecha=YYYY-MM-DD) sin sufrir
+// el corrimiento de un día que da `new Date("YYYY-MM-DD")` en zonas UTC-.
+export function fechaAParametro(fecha: Date): string {
+  const y = fecha.getFullYear();
+  const m = String(fecha.getMonth() + 1).padStart(2, "0");
+  const d = String(fecha.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+export function parametroAFecha(parametro: string | undefined): Date {
+  const partes = parametro?.split("-").map(Number);
+  if (!partes || partes.length !== 3 || partes.some(Number.isNaN)) {
+    return new Date();
+  }
+  const [y, m, d] = partes;
+  return new Date(y, m - 1, d);
 }
 
 const MESES = [

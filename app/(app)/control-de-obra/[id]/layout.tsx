@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
 import {
@@ -7,6 +6,8 @@ import {
 } from "@/lib/server/control-de-obra/proyectos";
 import { EstatusProyectoBadge } from "@/components/control-de-obra/estatus-proyecto-badge";
 import { TabNav } from "@/components/control-de-obra/tab-nav";
+import { EnlaceProtegido } from "@/components/control-de-obra/enlace-protegido";
+import { DirtyAvanceProvider } from "@/components/control-de-obra/dirty-avance-context";
 
 export default async function ProyectoLayout({
   children,
@@ -24,33 +25,34 @@ export default async function ProyectoLayout({
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <Link
-          href="/control-de-obra"
-          className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
-        >
-          ← Control de Obra
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <h1 className="text-2xl font-semibold text-[var(--foreground)]">
-            {proyecto.nombre}
-          </h1>
-          <EstatusProyectoBadge estatus={proyecto.estatus} />
+    <DirtyAvanceProvider>
+      <div className="space-y-6">
+        <div>
+          <EnlaceProtegido
+            href="/control-de-obra"
+            className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            ← Control de Obra
+          </EnlaceProtegido>
+          <div className="mt-2 flex items-center gap-3">
+            <h1 className="text-2xl font-semibold text-[var(--foreground)]">
+              {proyecto.nombre}
+            </h1>
+            <EstatusProyectoBadge estatus={proyecto.estatus} />
+          </div>
         </div>
+
+        <TabNav
+          tabs={[
+            { href: `/control-de-obra/${id}`, label: "Resumen" },
+            { href: `/control-de-obra/${id}/partidas`, label: "Partidas de obra" },
+            { href: `/control-de-obra/${id}/contratistas`, label: "Contratistas" },
+            { href: `/control-de-obra/${id}/avance`, label: "Avance de obra" },
+          ]}
+        />
+
+        {children}
       </div>
-
-      <TabNav
-        tabs={[
-          { href: `/control-de-obra/${id}`, label: "Resumen" },
-          {
-            href: `/control-de-obra/${id}/estructura`,
-            label: "Estructura contractual",
-          },
-        ]}
-      />
-
-      {children}
-    </div>
+    </DirtyAvanceProvider>
   );
 }
