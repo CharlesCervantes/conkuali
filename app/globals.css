@@ -1,26 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f7f7f8;
+  --surface: #ffffff;
+  --foreground: #17181c;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+
+  /* Acento de marca — sobreescrito en tiempo de ejecución por empresa
+     (ver app/(app)/layout.tsx) vía variable de tema, nunca hardcodeado. */
+  --brand: #4338ca;
+  --brand-foreground: #ffffff;
+
+  /* Curvas de animación — únicas del proyecto, no se inventan valores nuevos. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
   --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Entrada sutil para tarjetas/paneles al montar — sin JS, sin useEffect. */
+.enter {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 400ms var(--ease-out),
+    transform 400ms var(--ease-out);
+
+  @starting-style {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
