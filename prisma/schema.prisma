@@ -1,0 +1,405 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Usuarios / Login
+// Ver /docs/arquitectura/00-decisiones-fundamentales.md y
+// /docs/negocio/00-indice.md para las reglas de negocio detrás de este esquema.
+// ---------------------------------------------------------------------------
+
+enum RolUsuario {
+  MASTER // rol de plataforma, fuera de cualquier Empresa (empresaId = null)
+  DIRECTOR
+  ADMINISTRADOR
+  SUPERVISOR
+}
+
+enum AccionAuditoria {
+  CREAR
+  EDITAR
+  CONFIRMAR
+  RECHAZAR
+  CAMBIAR_ESTATUS
+  ACTIVAR
+  DESACTIVAR
+}
+
+model Empresa {
+  id              String   @id @default(cuid())
+  nombre          String
+  colorPrimario   String   @default("#0f172a")
+  colorSecundario String   @default("#64748b")
+  logoUrl         String?
+  activa          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  plan            Plan?    @relation(fields: [planId], references: [id])
+  planId          String?
+
+  dominiosCorreo  DominioCorreo[]
+  usuarios        Usuario[]
+  registros       RegistroAuditoria[]
+  proyectos       Proyecto[]
+  beneficiarios   Beneficiario[]
+  semanas         Semana[]
+
+  @@map("empresas")
+}
+
+// Dato secundario/opcional: solo empresas con dominio de correo propio lo usan,
+// como ayuda para asignar automáticamente la empresa al invitar un usuario nuevo
+// bajo ese dominio. La relación Usuario -> Empresa nunca se infiere de aquí.
+model DominioCorreo {
+  id        String   @id @default(cuid())
+  dominio   String   @unique
+  empresa   Empresa  @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId String
+  createdAt DateTime @default(now())
+
+  @@map("dominios_correo")
+}
+
+model Plan {
+  id        String   @id @default(cuid())
+  nombre    String   @unique
+  createdAt DateTime @default(now())
+
+  empresas  Empresa[]
+  modulos   PlanModulo[]
+
+  @@map("planes")
+}
+
+// Catálogo de módulos del sistema (ej. "reporte_general", "control_prestamos").
+model Modulo {
+  id     String @id @default(cuid())
+  clave  String @unique
+  nombre String
+
+  planes PlanModulo[]
+
+  @@map("modulos")
+}
+
+model PlanModulo {
+  plan     Plan   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  planId   String
+  modulo   Modulo @relation(fields: [moduloId], references: [id], onDelete: Cascade)
+  moduloId String
+
+  @@id([planId, moduloId])
+  @@map("plan_modulos")
+}
+
+model Usuario {
+  id           String     @id @default(cuid())
+  nombre       String
+  email        String     @unique
+  passwordHash String
+  rol          RolUsuario
+  activo       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  // null únicamente para rol MASTER (usuario de plataforma, sin empresa).
+  empresa      Empresa?   @relation(fields: [empresaId], references: [id])
+  empresaId    String?
+
+  sesiones     Sesion[]
+  registros    RegistroAuditoria[]
+
+  aditivasSolicitadas    Aditiva[]              @relation("AditivasSolicitadas")
+  aditivasAutorizadas    Aditiva[]              @relation("AditivasAutorizadas")
+  movimientosEnviados    MovimientoSemanal[]    @relation("MovimientosEnviados")
+  movimientosAprobados   MovimientoSemanal[]    @relation("MovimientosAprobados")
+  movimientosFondoPuente MovimientoSemanal[]    @relation("FondoPuente")
+  comentarios            ComentarioMovimiento[]
+
+  @@map("usuarios")
+}
+
+model Sesion {
+  id        String   @id @default(cuid())
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
+  usuarioId String
+  // Se guarda el hash del token, nunca el token en claro (igual que un password).
+  tokenHash String   @unique
+  expiraEn  DateTime
+  creadaEn  DateTime @default(now())
+
+  @@map("sesiones")
+}
+
+// Bitácora general del sistema (principio no negociable: toda acción relevante
+// se registra y nunca se elimina). Reutilizable por cualquier módulo futuro.
+model RegistroAuditoria {
+  id            String          @id @default(cuid())
+  empresa       Empresa?        @relation(fields: [empresaId], references: [id])
+  empresaId     String?
+  usuario       Usuario?        @relation(fields: [usuarioId], references: [id])
+  usuarioId     String?
+  entidad       String
+  entidadId     String
+  accion        AccionAuditoria
+  valorAnterior Json?
+  valorNuevo    Json?
+  createdAt     DateTime        @default(now())
+
+  @@index([entidad, entidadId])
+  @@map("registros_auditoria")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Reporte General
+// Ver /docs/negocio/03-modulo-reporte-general.md para las reglas de negocio
+// detrás de este esquema (revisado y aprobado en sesión con Charles).
+// ---------------------------------------------------------------------------
+
+enum TipoBeneficiario {
+  CONTRATISTA
+  PROVEEDOR
+  ADMINISTRACION
+}
+
+enum TipoProyecto {
+  FORMAL // obra formal
+  MOMENTANEA // obra momentánea, reporte simplificado del supervisor
+  OFICINA // partición de gastos administrativos generales, no es una obra real
+}
+
+enum EstatusProyecto {
+  ACTIVO
+  PAUSADO
+  CERRADO
+  CANCELADO
+}
+
+// Flujo de autorización del movimiento — independiente del estado de pago.
+enum EstatusAprobacion {
+  PENDIENTE_VALIDACION // capturado por Supervisor, aún no oficial
+  APROBADO // capturado por Administrador/Director, o validado por Administrador
+  RECHAZADO
+  POSPUESTO // no se pagó esta semana, continúa la siguiente
+  CANCELADO
+}
+
+// Estado financiero/color del Reporte General (02-control-de-obra.md).
+// Solo tiene sentido una vez que estatusAprobacion = APROBADO.
+enum EstatusPago {
+  SIN_MOVIMIENTO // Neutral
+  PENDIENTE_PAGO // Rojo
+  PAGADO_PUENTE // Naranja — cubierto con fondos de Sergio o de la empresa
+  LIQUIDADO // Verde
+}
+
+enum EstatusAditiva {
+  PENDIENTE
+  AUTORIZADA
+  RECHAZADA
+}
+
+enum EstatusSemana {
+  ABIERTA
+  CERRADA
+}
+
+model Proyecto {
+  id          String          @id @default(cuid())
+  empresa     Empresa         @relation(fields: [empresaId], references: [id])
+  empresaId   String
+  nombre      String
+  tipo        TipoProyecto    @default(FORMAL)
+  estatus     EstatusProyecto @default(ACTIVO)
+  fechaInicio DateTime?
+  fechaCierre DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  beneficiarios BeneficiarioProyecto[]
+
+  @@index([empresaId])
+  @@map("proyectos")
+}
+
+// Identidad única de a quién se le puede pagar, sin importar en cuántos
+// proyectos participe (ver BeneficiarioProyecto para lo específico a cada
+// obra). No tiene relación con Usuario — son conceptos independientes aunque
+// correspondan a la misma persona real (ej. Charles inicia sesión como
+// Usuario, pero cobra sueldo como Beneficiario).
+model Beneficiario {
+  id        String           @id @default(cuid())
+  empresa   Empresa          @relation(fields: [empresaId], references: [id])
+  empresaId String
+  tipo      TipoBeneficiario
+  nombre    String
+  activo    Boolean          @default(true)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  proveedor              Proveedor?
+  personalAdministrativo PersonalAdministrativo?
+  proyectos              BeneficiarioProyecto[]
+
+  @@index([empresaId, tipo])
+  @@map("beneficiarios")
+}
+
+// Datos propios del proveedor — no cambian de una obra a otra.
+model Proveedor {
+  beneficiario   Beneficiario @relation(fields: [beneficiarioId], references: [id], onDelete: Cascade)
+  beneficiarioId String       @id
+  giro           String?
+  vendedor       String?
+  telefono       String?
+  credito        String? // solo informativo, no afecta cálculos
+  cuentaBancaria String? // solo informativo, no afecta cálculos
+
+  @@map("proveedores")
+}
+
+// Datos biográficos/personales — lo laboral (puesto, sueldo) vive en
+// BeneficiarioProyecto porque puede variar según la obra asignada.
+model PersonalAdministrativo {
+  beneficiario    Beneficiario @relation(fields: [beneficiarioId], references: [id], onDelete: Cascade)
+  beneficiarioId  String       @id
+  nss             String?
+  fechaNacimiento DateTime?
+
+  @@map("personal_administrativo")
+}
+
+// La participación de un Beneficiario en un Proyecto — aquí vive todo lo que
+// depende de la combinación beneficiario+obra (contrato de un contratista,
+// puesto/sueldo de alguien de administración). Un mismo beneficiario tiene
+// una fila por cada obra en la que participa, cada una con su propio saldo.
+model BeneficiarioProyecto {
+  id             String       @id @default(cuid())
+  beneficiario   Beneficiario @relation(fields: [beneficiarioId], references: [id])
+  beneficiarioId String
+  proyecto       Proyecto     @relation(fields: [proyectoId], references: [id])
+  proyectoId     String
+  activo         Boolean      @default(true)
+
+  // Contratista (aplica cuando beneficiario.tipo = CONTRATISTA)
+  concepto      String?
+  montoContrato Decimal? @db.Decimal(14, 2)
+
+  // Administración (aplica cuando beneficiario.tipo = ADMINISTRACION)
+  puesto         String?
+  sueldo         Decimal? @db.Decimal(14, 2)
+  sueldoVariable Boolean?
+  fechaIngreso   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  aditivas    Aditiva[]
+  movimientos MovimientoSemanal[]
+
+  @@unique([beneficiarioId, proyectoId])
+  @@index([proyectoId])
+  @@map("beneficiario_proyectos")
+}
+
+// Trabajo fuera del alcance contratado original. Solo las AUTORIZADAs suman
+// al monto contractual vigente (Contrato + Aditivas autorizadas = vigente;
+// Saldo = vigente − pagado). Flujo: la solicita un Supervisor, la autoriza
+// un Director (01-administracion-pagos-semanales.md).
+model Aditiva {
+  id                     String               @id @default(cuid())
+  beneficiarioProyecto   BeneficiarioProyecto @relation(fields: [beneficiarioProyectoId], references: [id])
+  beneficiarioProyectoId String
+  monto                  Decimal              @db.Decimal(14, 2)
+  descripcion            String
+  estatus                EstatusAditiva       @default(PENDIENTE)
+  solicitadaPor          Usuario              @relation("AditivasSolicitadas", fields: [solicitadaPorId], references: [id])
+  solicitadaPorId        String
+  autorizadaPor          Usuario?             @relation("AditivasAutorizadas", fields: [autorizadaPorId], references: [id])
+  autorizadaPorId        String?
+  fechaSolicitud         DateTime             @default(now())
+  fechaAutorizacion      DateTime?
+
+  @@index([beneficiarioProyectoId])
+  @@map("aditivas")
+}
+
+// Compartida por todas las obras de la empresa — el ciclo semanal de pagos
+// es a nivel compañía, no por proyecto.
+model Semana {
+  id          String        @id @default(cuid())
+  empresa     Empresa       @relation(fields: [empresaId], references: [id])
+  empresaId   String
+  numero      Int
+  anio        Int
+  fechaInicio DateTime
+  fechaFin    DateTime
+  estado      EstatusSemana @default(ABIERTA)
+
+  movimientos MovimientoSemanal[]
+
+  @@unique([empresaId, numero, anio])
+  @@map("semanas")
+}
+
+// El registro central del módulo: cuánto se le debe/pagó a un beneficiario,
+// en un proyecto, en una semana. Único por beneficiarioProyecto+semana para
+// que "registrar pago" nunca duplique — siempre actualiza el existente.
+model MovimientoSemanal {
+  id                     String               @id @default(cuid())
+  beneficiarioProyecto   BeneficiarioProyecto @relation(fields: [beneficiarioProyectoId], references: [id])
+  beneficiarioProyectoId String
+  semana                 Semana               @relation(fields: [semanaId], references: [id])
+  semanaId               String
+
+  montoEntreSemana Decimal @default(0) @db.Decimal(14, 2)
+  montoFinSemana   Decimal @default(0) @db.Decimal(14, 2)
+
+  estatusAprobacion EstatusAprobacion @default(PENDIENTE_VALIDACION)
+  estatusPago       EstatusPago       @default(SIN_MOVIMIENTO)
+
+  // Bandera para el futuro módulo de Préstamos/Reposiciones — se conserva
+  // aunque el movimiento después llegue a LIQUIDADO.
+  cubiertoPorFondoPuente Boolean  @default(false)
+  fondoPuenteUsuario     Usuario? @relation("FondoPuente", fields: [fondoPuenteUsuarioId], references: [id])
+  fondoPuenteUsuarioId   String?
+
+  enviadoPor    Usuario  @relation("MovimientosEnviados", fields: [enviadoPorId], references: [id])
+  enviadoPorId  String
+  aprobadoPor   Usuario? @relation("MovimientosAprobados", fields: [aprobadoPorId], references: [id])
+  aprobadoPorId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  comentarios ComentarioMovimiento[]
+
+  @@unique([beneficiarioProyectoId, semanaId])
+  @@index([semanaId])
+  @@map("movimientos_semanales")
+}
+
+// Hilo de notas libres, separado del monto (no una celda de Excel).
+model ComentarioMovimiento {
+  id           String            @id @default(cuid())
+  movimiento   MovimientoSemanal @relation(fields: [movimientoId], references: [id], onDelete: Cascade)
+  movimientoId String
+  usuario      Usuario           @relation(fields: [usuarioId], references: [id])
+  usuarioId    String
+  texto        String
+  createdAt    DateTime          @default(now())
+
+  @@index([movimientoId])
+  @@map("comentarios_movimiento")
+}

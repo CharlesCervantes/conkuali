@@ -1,0 +1,71 @@
+import "server-only";
+import { db } from "@/lib/server/db";
+import { hashPassword, verifyPassword } from "@/lib/server/password";
+import { createSession, deleteSession } from "@/lib/server/session";
+
+export class CredencialesInvalidasError extends Error {
+  constructor() {
+    super("Correo o contraseña incorrectos.");
+    this.name = "CredencialesInvalidasError";
+  }
+}
+
+export class UsuarioInactivoError extends Error {
+  constructor() {
+    super("Este usuario está desactivado.");
+    this.name = "UsuarioInactivoError";
+  }
+}
+
+// Hash válido (mismo formato que hashPassword) pero sin contraseña real detrás.
+// Se usa para que verificar un correo inexistente tome el mismo tiempo que
+// verificar uno que sí existe, y así no revelar por temporización qué correos
+// están registrados.
+const HASH_SENUELO = "a".repeat(32) + ":" + "b".repeat(128);
+
+export async function autenticar(email: string, password: string) {
+  const usuario = await db.usuario.findUnique({
+    where: { email: email.trim().toLowerCase() },
+  });
+
+  const passwordValido = await verifyPassword(
+    password,
+    usuario?.passwordHash ?? HASH_SENUELO
+  );
+
+  if (!usuario || !passwordValido) {
+    throw new CredencialesInvalidasError();
+  }
+
+  if (!usuario.activo) {
+    throw new UsuarioInactivoError();
+  }
+
+  await createSession(usuario.id);
+
+  return { id: usuario.id, nombre: usuario.nombre, rol: usuario.rol };
+}
+
+export async function cerrarSesion() {
+  await deleteSession();
+}
+
+export async function crearUsuario(datos: {
+  nombre: string;
+  email: string;
+  password: string;
+  rol: "MASTER" | "DIRECTOR" | "ADMINISTRADOR" | "SUPERVISOR";
+  empresaId: string | null;
+}) {
+  const passwordHash = await hashPassword(datos.password);
+
+  return db.usuario.create({
+    data: {
+      nombre: datos.nombre,
+      email: datos.email.trim().toLowerCase(),
+      passwordHash,
+      rol: datos.rol,
+      empresaId: datos.empresaId,
+    },
+  });
+}
