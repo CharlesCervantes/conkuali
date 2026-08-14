@@ -76,23 +76,51 @@ async function sumaEjecutadaPorConcepto(
 // Lectura — pestaña Avance de obra (una semana específica)
 // ---------------------------------------------------------------------------
 
-export type ConceptoConAvance = Awaited<
+type ConceptoBase = Awaited<
   ReturnType<typeof partidasConConceptos>
->[number]["conceptos"][number] &
+>[number]["conceptos"][number];
+
+// Campos Decimal de Concepto (presupuesto de Contrato General) — se
+// convierten explícitamente a number antes de devolverse, porque esta forma
+// cruza hacia FormAvanceSemanal ("use client") y las instancias de
+// Prisma.Decimal no son serializables de Server a Client Component. No
+// afecta lo que se guarda en Postgres/Prisma, solo esta lectura.
+type CamposDecimalConcepto =
+  | "cantidadContratada"
+  | "precioUnitarioContratista"
+  | "precioUnitarioMateriales"
+  | "precioUnitarioIndirectos"
+  | "precioUnitarioHerramienta"
+  | "porcentajeUtilidad"
+  | "porcentajeAdministracion"
+  | "precioUnitarioClienteOverride";
+
+export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
   AvanceCalculado & {
+    cantidadContratada: number;
+    precioUnitarioContratista: number | null;
+    precioUnitarioMateriales: number | null;
+    precioUnitarioIndirectos: number | null;
+    precioUnitarioHerramienta: number | null;
+    porcentajeUtilidad: number | null;
+    porcentajeAdministracion: number | null;
+    precioUnitarioClienteOverride: number | null;
     anterior: number;
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
     estatusAprobacion: EstatusAprobacionAvance | null;
     // P.U. CONTRATADO (resuelto vía ContratoConcepto) — distinto del
     // presupuesto `Concepto.precioUnitarioContratista` (Etapa B, Contrato
-    // General) que ya viene incluido en el spread de arriba. null si el
-    // concepto no tiene contratista asignado o si tiene varios (no
-    // atribuible, sección 49.8). Visible a los 4 roles (sección 49.9,
-    // sustituye el gate por puedeAdministrarProyectos que tenía esta
-    // pantalla antes).
+    // General) que ya viene incluido arriba. null si el concepto no tiene
+    // contratista asignado o si tiene varios (no atribuible, sección 49.8).
+    // Visible a los 4 roles (sección 49.9, sustituye el gate por
+    // puedeAdministrarProyectos que tenía esta pantalla antes).
     precioUnitarioContratistaContratado: number | null;
   };
+
+function numOrNull(valor: { toNumber(): number } | null): number | null {
+  return valor === null ? null : valor.toNumber();
+}
 
 export async function obtenerAvanceSemanal(
   usuario: UsuarioSesion,
@@ -131,6 +159,14 @@ export async function obtenerAvanceSemanal(
       const acumulado = anterior + (estatusSemana === "APROBADO" ? estaSemana : 0);
       return {
         ...concepto,
+        cantidadContratada: Number(concepto.cantidadContratada),
+        precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
+        precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
+        precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
+        precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
+        porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
+        porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
+        precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,
