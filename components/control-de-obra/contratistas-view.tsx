@@ -74,7 +74,7 @@ export function ContratistasView({
             className="enter overflow-hidden"
             style={{ transitionDelay: `${Math.min(i, 6) * 40}ms` }}
           >
-            <details open>
+            <details>
               <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
                 <div>
                   <span className="text-sm font-semibold text-[var(--foreground)]">

@@ -126,7 +126,7 @@ function PartidaAvance({
       className="enter overflow-hidden"
       style={{ transitionDelay: `${Math.min(indiceEntrada, 6) * 30}ms` }}
     >
-      <details open={conMovimiento > 0}>
+      <details>
         <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
           <span className="text-sm font-semibold text-[var(--foreground)]">
             {partida.nombre}
