@@ -38,6 +38,11 @@ const DatosProyectoSchema = z.object({
   notas: z.string().trim().optional().nullable(),
   fechaInicio: z.coerce.date().optional().nullable(),
   fechaEstimadaTermino: z.coerce.date().optional().nullable(),
+  // Contrato General (sección 49.9) — independiente de `tipo`. null = sin
+  // definir todavía, nunca se infiere.
+  esquemaContractual: z.enum(["PRECIO_ALZADO", "ADMINISTRACION"]).optional().nullable(),
+  porcentajeUtilidadDefault: z.coerce.number().nonnegative().optional().nullable(),
+  porcentajeAdministracionDefault: z.coerce.number().nonnegative().optional().nullable(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;

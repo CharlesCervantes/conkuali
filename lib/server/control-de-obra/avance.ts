@@ -84,11 +84,14 @@ export type ConceptoConAvance = Awaited<
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
     estatusAprobacion: EstatusAprobacionAvance | null;
-    // null si el concepto no tiene contratista asignado, si tiene varios (no
-    // atribuible) o si quien consulta no tiene visibilidad financiera
-    // (Supervisor) — nunca se llena en el servicio en ese caso, no solo se
-    // oculta en la interfaz.
-    precioUnitarioContratista: number | null;
+    // P.U. CONTRATADO (resuelto vía ContratoConcepto) — distinto del
+    // presupuesto `Concepto.precioUnitarioContratista` (Etapa B, Contrato
+    // General) que ya viene incluido en el spread de arriba. null si el
+    // concepto no tiene contratista asignado o si tiene varios (no
+    // atribuible, sección 49.8). Visible a los 4 roles (sección 49.9,
+    // sustituye el gate por puedeAdministrarProyectos que tenía esta
+    // pantalla antes).
+    precioUnitarioContratistaContratado: number | null;
   };
 
 export async function obtenerAvanceSemanal(
@@ -97,7 +100,6 @@ export async function obtenerAvanceSemanal(
   semana: { id: string; fechaInicio: Date }
 ) {
   await obtenerProyecto(usuario, proyectoId);
-  const puedeVerPrecios = puedeAdministrarProyectos(usuario);
 
   const partidas = await partidasConConceptos(proyectoId);
   const conceptoIds = partidas.flatMap((p) => p.conceptos.map((c) => c.id));
@@ -107,9 +109,7 @@ export async function obtenerAvanceSemanal(
     db.avanceConcepto.findMany({
       where: { conceptoId: { in: conceptoIds }, semanaId: semana.id },
     }),
-    puedeVerPrecios
-      ? resolverContratistaPorConcepto(proyectoId)
-      : Promise.resolve(new Map()),
+    resolverContratistaPorConcepto(proyectoId),
   ]);
   const estaSemanaPorConcepto = new Map(
     filasEstaSemana.map((f) => [f.conceptoId, Number(f.cantidadEjecutada)])
@@ -134,7 +134,7 @@ export async function obtenerAvanceSemanal(
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,
-        precioUnitarioContratista:
+        precioUnitarioContratistaContratado:
           resolucionContratista.get(concepto.id)?.precioUnitarioContratista ?? null,
         ...calcularAvance(Number(concepto.cantidadContratada), acumulado),
       };

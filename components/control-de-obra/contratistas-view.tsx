@@ -28,33 +28,31 @@ export function ContratistasView({
   avancePorConcepto: Map<string, AvanceCalculado>;
   puedeAdministrar: boolean;
 }) {
-  // Reutiliza los conceptos ya creados en Partidas de obra — no se duplican
-  // aquí, solo se relacionan con un contratista y un precio. Agrupados por
-  // partida (optgroup) para que quede claro que lo seleccionable es el
+  // Un concepto solo puede pertenecer a un contratista (la base de datos ya
+  // lo impone con un único índice sobre conceptoId — sección 49.9). Este set
+  // es solo para filtrar el selector de "Asignar concepto" a lo disponible;
+  // no hace falta ninguna otra consulta, `contratos` ya trae todo.
+  const conceptoIdsAsignados = new Set(
+    contratos.flatMap((contrato) => contrato.conceptos.map((c) => c.conceptoId))
+  );
+
+  // Reutiliza los conceptos ya creados en Contrato General — no se duplican
+  // aquí, solo se relacionan con un contratista. Cantidad y P.U. se heredan
+  // del Contrato General al asignar, ya no se vuelven a pedir aquí. Agrupados
+  // por partida (optgroup) para que quede claro que lo seleccionable es el
   // concepto, no la partida.
   const conceptosPorPartida = partidas
-    .filter((partida) => partida.conceptos.length > 0)
     .map((partida) => ({
       partidaNombre: partida.nombre,
-      conceptos: partida.conceptos.map((concepto) => ({
-        id: concepto.id,
-        etiqueta: `${concepto.descripcion} (${concepto.unidad})`,
-      })),
-    }));
+      conceptos: partida.conceptos
+        .filter((concepto) => !conceptoIdsAsignados.has(concepto.id))
+        .map((concepto) => ({
+          id: concepto.id,
+          etiqueta: `${concepto.descripcion} (${concepto.unidad})`,
+        })),
+    }))
+    .filter((grupo) => grupo.conceptos.length > 0);
   const hayConceptosDisponibles = conceptosPorPartida.length > 0;
-
-  // Cuántos contratos distintos tienen asignado cada concepto en TODO el
-  // proyecto — si es más de uno, el avance físico de ese concepto no se
-  // puede atribuir a ningún contratista en particular (ver sección 49).
-  const contratosPorConcepto = new Map<string, number>();
-  for (const contrato of contratos) {
-    for (const asignacion of contrato.conceptos) {
-      contratosPorConcepto.set(
-        asignacion.conceptoId,
-        (contratosPorConcepto.get(asignacion.conceptoId) ?? 0) + 1
-      );
-    }
-  }
 
   return (
     <div className="space-y-3">
@@ -117,8 +115,6 @@ export function ContratistasView({
                     </Thead>
                     <tbody>
                       {contrato.conceptos.map((asignacion) => {
-                        const compartido =
-                          (contratosPorConcepto.get(asignacion.conceptoId) ?? 0) > 1;
                         const avance = avancePorConcepto.get(asignacion.conceptoId);
 
                         return (
@@ -144,14 +140,6 @@ export function ContratistasView({
                             {!avance ? (
                               <Td colSpan={3} className="text-xs text-[var(--muted)]">
                                 —
-                              </Td>
-                            ) : compartido ? (
-                              <Td
-                                colSpan={3}
-                                className="text-xs text-[var(--muted)] italic"
-                              >
-                                — · Concepto compartido · avance no atribuible por
-                                contratista
                               </Td>
                             ) : (
                               <>

@@ -41,6 +41,11 @@ function datosDesdeFormData(formData: FormData) {
     notas: opcional(formData.get("notas")),
     fechaInicio: opcional(formData.get("fechaInicio")),
     fechaEstimadaTermino: opcional(formData.get("fechaEstimadaTermino")),
+    esquemaContractual: opcional(formData.get("esquemaContractual")),
+    porcentajeUtilidadDefault: opcional(formData.get("porcentajeUtilidadDefault")),
+    porcentajeAdministracionDefault: opcional(
+      formData.get("porcentajeAdministracionDefault")
+    ),
   };
 }
 

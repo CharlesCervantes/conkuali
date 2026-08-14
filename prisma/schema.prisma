@@ -218,6 +218,15 @@ enum EstatusSemana {
   CERRADA
 }
 
+// Precio Alzado: costo (contratista+materiales+indirectos+herramienta) + %
+// utilidad → precio cliente. Administración: no usa indirectos/herramienta,
+// aplica % administración sobre el costo real. Ver
+// docs/negocio/04-modulo-control-de-obra.md sección 49.9.
+enum EsquemaContractual {
+  PRECIO_ALZADO
+  ADMINISTRACION
+}
+
 model Proyecto {
   id          String          @id @default(cuid())
   empresa     Empresa         @relation(fields: [empresaId], references: [id])
@@ -239,6 +248,15 @@ model Proyecto {
   descripcion          String?
   notas                String?
   fechaEstimadaTermino DateTime?
+
+  // Contrato General (sección 49.9) — null = todavía sin definir. No se
+  // infiere para proyectos existentes; Administrador/Director lo asigna a
+  // propósito. Solo uno de los dos porcentajes default aplica, según el
+  // esquema — se guardan separados (nunca un campo genérico) para que su
+  // significado nunca dependa de una lectura implícita del esquema.
+  esquemaContractual            EsquemaContractual?
+  porcentajeUtilidadDefault      Decimal?            @db.Decimal(5, 2)
+  porcentajeAdministracionDefault Decimal?           @db.Decimal(5, 2)
 
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
@@ -382,6 +400,15 @@ model MovimientoSemanal {
   semana                 Semana               @relation(fields: [semanaId], references: [id])
   semanaId               String
 
+  // Opcional (sección 49.9): a qué contrato específico corresponde este pago,
+  // cuando el contratista tiene más de uno en la misma obra. null = el
+  // movimiento sigue asociado solo a BeneficiarioProyecto, como hoy — no se
+  // asume "un contratista = un contrato por proyecto". Prepara el terreno
+  // para Pagado acumulado/Saldo/Estado de cuenta por contrato (futuro,
+  // todavía no implementado).
+  contratoContratista   ContratoContratista? @relation(fields: [contratoContratistaId], references: [id])
+  contratoContratistaId String?
+
   montoEntreSemana Decimal @default(0) @db.Decimal(14, 2)
   montoFinSemana   Decimal @default(0) @db.Decimal(14, 2)
 
@@ -462,8 +489,31 @@ model Concepto {
   orden              Int             @default(0)
   notas              String?
   estatus            ConceptoEstatus @default(ACTIVO)
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+
+  // Contrato General — presupuesto por componente de costo (sección 49.9).
+  // Todo opcional: un concepto puede existir sin costeo todavía. Indirectos y
+  // Herramienta solo tienen sentido si Proyecto.esquemaContractual =
+  // PRECIO_ALZADO, pero el campo no se oculta a nivel de schema — la validación
+  // de qué aplica vive en el servicio, según el esquema del proyecto.
+  precioUnitarioContratista Decimal? @db.Decimal(14, 2)
+  precioUnitarioMateriales  Decimal? @db.Decimal(14, 2)
+  precioUnitarioIndirectos  Decimal? @db.Decimal(14, 2)
+  precioUnitarioHerramienta Decimal? @db.Decimal(14, 2)
+
+  // Override del % default del proyecto — separados (nunca un campo
+  // genérico) por la misma razón que en Proyecto. null = usa el default.
+  porcentajeUtilidad       Decimal? @db.Decimal(5, 2)
+  porcentajeAdministracion Decimal? @db.Decimal(5, 2)
+
+  // Precio comercial final — decisión de Administrador/Director, no se puede
+  // derivar de nada, por eso SÍ se guarda (a diferencia del precio
+  // recomendado, que siempre se calcula en lectura desde los campos de
+  // arriba). Precio final al cliente = precioUnitarioClienteOverride ??
+  // precioCalculado.
+  precioUnitarioClienteOverride Decimal? @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   asignaciones ContratoConcepto[]
   avances      AvanceConcepto[]
@@ -487,24 +537,33 @@ model ContratoContratista {
   createdAt              DateTime             @default(now())
   updatedAt              DateTime             @updatedAt
 
-  conceptos ContratoConcepto[]
+  conceptos   ContratoConcepto[]
+  movimientos MovimientoSemanal[]
 
   @@index([beneficiarioProyectoId])
   @@map("contratos_contratista")
 }
 
+// Un concepto solo puede pertenecer a UN contratista — nunca se reparte
+// (decisión de sesión, agosto 2026, sustituye la posibilidad de repartir un
+// concepto entre varios contratistas planteada antes; ver sección 49.9).
+// `conceptoId` es único por sí solo (no compuesto) para que la base de datos
+// misma impida la doble asignación, no solo la validación del servicio.
+// cantidad/precioUnitarioContratista se heredan de Concepto al momento de
+// asignar y quedan congelados — no se vuelven a capturar a mano ni se
+// resincronizan si el presupuesto del Contrato General cambia después.
 model ContratoConcepto {
   id                        String              @id @default(cuid())
   contratoContratista       ContratoContratista @relation(fields: [contratoContratistaId], references: [id])
   contratoContratistaId     String
   concepto                  Concepto            @relation(fields: [conceptoId], references: [id])
-  conceptoId                String
+  conceptoId                String              @unique
   cantidad                  Decimal             @db.Decimal(14, 3)
   precioUnitarioContratista Decimal             @db.Decimal(14, 2)
   createdAt                 DateTime            @default(now())
   updatedAt                 DateTime            @updatedAt
 
-  @@unique([contratoContratistaId, conceptoId])
+  @@index([contratoContratistaId])
   @@map("contrato_conceptos")
 }
 

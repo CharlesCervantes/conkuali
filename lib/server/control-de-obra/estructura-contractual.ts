@@ -4,7 +4,7 @@ import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
 import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
-import type { ConceptoEstatus } from "@/lib/generated/prisma/enums";
+import type { ConceptoEstatus, EsquemaContractual } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 
 export class RegistroNoEncontradoError extends Error {
@@ -198,7 +198,6 @@ export async function editarPartida(
 // ---------------------------------------------------------------------------
 
 const DatosConceptoSchema = z.object({
-  codigo: z.string().trim().optional().nullable(),
   descripcion: z.string().trim().min(1, "La descripción es obligatoria."),
   unidad: z.string().trim().min(1, "La unidad es obligatoria."),
   cantidadContratada: z.coerce
@@ -206,7 +205,45 @@ const DatosConceptoSchema = z.object({
     .positive("La cantidad debe ser mayor a cero."),
   orden: z.coerce.number().int().default(0),
   notas: z.string().trim().optional().nullable(),
+  // Contrato General (sección 49.9) — todos opcionales, un concepto puede
+  // existir sin costeo todavía.
+  precioUnitarioContratista: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioMateriales: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioIndirectos: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
+  // Contrato General Privado — override del % default del proyecto, y del
+  // precio final calculado.
+  porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
+  porcentajeAdministracion: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
 });
+
+// El esquema del proyecto manda sobre lo que el cliente haya enviado: en
+// Administración, Indirectos/Herramienta/%Utilidad no aplican y se fuerzan a
+// null aunque alguien los mande — "el modelo debe saber que no aplican", no
+// basta con ocultarlos en la interfaz (decisión de sesión, sección 49.9). En
+// Precio Alzado, %Administración no aplica.
+function normalizarCostosPorEsquema<
+  T extends {
+    precioUnitarioIndirectos?: number | null;
+    precioUnitarioHerramienta?: number | null;
+    porcentajeUtilidad?: number | null;
+    porcentajeAdministracion?: number | null;
+  },
+>(datos: T, esquema: EsquemaContractual | null): T {
+  if (esquema === "ADMINISTRACION") {
+    return {
+      ...datos,
+      precioUnitarioIndirectos: null,
+      precioUnitarioHerramienta: null,
+      porcentajeUtilidad: null,
+    };
+  }
+  if (esquema === "PRECIO_ALZADO") {
+    return { ...datos, porcentajeAdministracion: null };
+  }
+  return datos;
+}
 
 export async function crearConcepto(
   usuario: UsuarioSesion,
@@ -216,10 +253,14 @@ export async function crearConcepto(
   const empresaId = requerirAdmin(usuario);
   const partida = await db.partida.findFirst({
     where: { id: partidaId, proyecto: { empresaId } },
+    include: { proyecto: { select: { esquemaContractual: true } } },
   });
   if (!partida) throw new RegistroNoEncontradoError("La partida");
 
-  const datos = DatosConceptoSchema.parse(datosCrudos);
+  const datos = normalizarCostosPorEsquema(
+    DatosConceptoSchema.parse(datosCrudos),
+    partida.proyecto.esquemaContractual
+  );
   const concepto = await db.concepto.create({ data: { ...datos, partidaId } });
 
   await registrarAuditoria({
@@ -242,10 +283,14 @@ export async function editarConcepto(
   const empresaId = requerirAdmin(usuario);
   const anterior = await db.concepto.findFirst({
     where: { id, partida: { proyecto: { empresaId } } },
+    include: { partida: { include: { proyecto: { select: { esquemaContractual: true } } } } },
   });
   if (!anterior) throw new RegistroNoEncontradoError("El concepto");
 
-  const datos = DatosConceptoSchema.parse(datosCrudos);
+  const datos = normalizarCostosPorEsquema(
+    DatosConceptoSchema.parse(datosCrudos),
+    anterior.partida.proyecto.esquemaContractual
+  );
   const concepto = await db.concepto.update({ where: { id }, data: datos });
 
   await registrarAuditoria({
@@ -427,12 +472,15 @@ export async function editarContratoContratista(
 
 const DatosAsignacionSchema = z.object({
   conceptoId: z.string().trim().min(1),
-  cantidad: z.coerce.number().positive("La cantidad debe ser mayor a cero."),
-  precioUnitarioContratista: z.coerce
-    .number()
-    .positive("El precio unitario debe ser mayor a cero."),
 });
 
+// Asigna un concepto ya existente del Contrato General a un contratista.
+// Cantidad y P.U. se HEREDAN del concepto (nunca se vuelven a capturar a
+// mano) y quedan congelados en el momento de asignar — si después cambia el
+// presupuesto del Contrato General, no afecta lo ya formalizado. Un concepto
+// solo puede pertenecer a un contratista a la vez, nunca se reparte
+// (decisión de sesión, agosto 2026, sección 49.9) — por eso esta operación es
+// crear, no editar: no hay nada que un usuario pueda modificar aquí después.
 export async function asignarConcepto(
   usuario: UsuarioSesion,
   contratoContratistaId: string,
@@ -459,31 +507,29 @@ export async function asignarConcepto(
   });
   if (!concepto) throw new RegistroNoEncontradoError("El concepto");
 
-  const anterior = await db.contratoConcepto.findUnique({
-    where: {
-      contratoContratistaId_conceptoId: {
-        contratoContratistaId,
-        conceptoId: datos.conceptoId,
-      },
-    },
-  });
+  if (concepto.precioUnitarioContratista === null) {
+    throw new ValidacionError(
+      `"${concepto.descripcion}" todavía no tiene P.U. de contratista definido en Contrato General.`
+    );
+  }
 
-  const asignacion = await db.contratoConcepto.upsert({
-    where: {
-      contratoContratistaId_conceptoId: {
-        contratoContratistaId,
-        conceptoId: datos.conceptoId,
-      },
-    },
-    update: {
-      cantidad: datos.cantidad,
-      precioUnitarioContratista: datos.precioUnitarioContratista,
-    },
-    create: {
+  const yaAsignado = await db.contratoConcepto.findUnique({
+    where: { conceptoId: datos.conceptoId },
+  });
+  if (yaAsignado) {
+    throw new ValidacionError(
+      yaAsignado.contratoContratistaId === contratoContratistaId
+        ? `"${concepto.descripcion}" ya está asignado a este contrato.`
+        : `"${concepto.descripcion}" ya está asignado a otro contratista.`
+    );
+  }
+
+  const asignacion = await db.contratoConcepto.create({
+    data: {
       contratoContratistaId,
       conceptoId: datos.conceptoId,
-      cantidad: datos.cantidad,
-      precioUnitarioContratista: datos.precioUnitarioContratista,
+      cantidad: concepto.cantidadContratada,
+      precioUnitarioContratista: concepto.precioUnitarioContratista,
     },
   });
 
@@ -492,8 +538,7 @@ export async function asignarConcepto(
     usuarioId: usuario.id,
     entidad: "ContratoConcepto",
     entidadId: asignacion.id,
-    accion: anterior ? "EDITAR" : "CREAR",
-    valorAnterior: anterior,
+    accion: "CREAR",
     valorNuevo: asignacion,
   });
 

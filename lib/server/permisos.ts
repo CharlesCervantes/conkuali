@@ -45,3 +45,15 @@ export function puedeReportarAvance(usuario: UsuarioSesion): boolean {
     usuario.rol === "MASTER"
   );
 }
+
+/**
+ * Contrato General Privado (Indirectos, Herramienta, % utilidad/administración,
+ * precio final al cliente, márgenes comerciales) — mismo rol-set que
+ * puedeAdministrarProyectos, con nombre propio para dejar explícito qué
+ * protege esta verificación (04-modulo-control-de-obra.md, sección 49.9).
+ * Supervisor SÍ ve el Contrato General operativo (presupuesto de contratista
+ * y materiales, cantidades, avance) — lo que no ve es esto.
+ */
+export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean {
+  return puedeAdministrarProyectos(usuario);
+}

@@ -70,11 +70,17 @@ export async function crearConceptoAction(
   const usuario = await requireSession();
   try {
     await crearConcepto(usuario, partidaId, {
-      codigo: opcional(formData.get("codigo")),
       descripcion: formData.get("descripcion"),
       unidad: formData.get("unidad"),
       cantidadContratada: formData.get("cantidadContratada"),
       notas: opcional(formData.get("notas")),
+      precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
+      precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
+      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
+      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
+      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
+      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
+      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
     });
   } catch (error) {
     return { error: mensajeError(error) };
@@ -159,8 +165,6 @@ export async function asignarConceptoAction(
   try {
     await asignarConcepto(usuario, contratoId, {
       conceptoId: formData.get("conceptoId"),
-      cantidad: formData.get("cantidad"),
-      precioUnitarioContratista: formData.get("precioUnitarioContratista"),
     });
   } catch (error) {
     return { error: mensajeError(error) };

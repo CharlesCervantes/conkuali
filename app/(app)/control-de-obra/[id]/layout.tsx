@@ -45,7 +45,7 @@ export default async function ProyectoLayout({
         <TabNav
           tabs={[
             { href: `/control-de-obra/${id}`, label: "Resumen" },
-            { href: `/control-de-obra/${id}/partidas`, label: "Partidas de obra" },
+            { href: `/control-de-obra/${id}/partidas`, label: "Contrato General" },
             { href: `/control-de-obra/${id}/contratistas`, label: "Contratistas" },
             { href: `/control-de-obra/${id}/avance`, label: "Avance de obra" },
           ]}

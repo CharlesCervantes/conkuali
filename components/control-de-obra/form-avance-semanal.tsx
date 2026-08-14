@@ -33,13 +33,11 @@ export function FormAvanceSemanal({
   proyectoId,
   semanaId,
   partidas,
-  puedeVerPrecios,
   puedeAprobar,
 }: {
   proyectoId: string;
   semanaId: string;
   partidas: Partidas;
-  puedeVerPrecios: boolean;
   puedeAprobar: boolean;
 }) {
   return (
@@ -57,7 +55,6 @@ export function FormAvanceSemanal({
           proyectoId={proyectoId}
           semanaId={semanaId}
           partida={partida}
-          puedeVerPrecios={puedeVerPrecios}
           puedeAprobar={puedeAprobar}
           indiceEntrada={i}
         />
@@ -70,14 +67,12 @@ function PartidaAvance({
   proyectoId,
   semanaId,
   partida,
-  puedeVerPrecios,
   puedeAprobar,
   indiceEntrada,
 }: {
   proyectoId: string;
   semanaId: string;
   partida: Partidas[number];
-  puedeVerPrecios: boolean;
   puedeAprobar: boolean;
   indiceEntrada: number;
 }) {
@@ -156,16 +151,11 @@ function PartidaAvance({
                     <Th rowSpan={2} className="align-bottom">Concepto</Th>
                     <Th rowSpan={2} className="align-bottom">Unidad</Th>
                     <Th rowSpan={2} className="text-right align-bottom">Total contratado</Th>
-                    {puedeVerPrecios && (
-                      <Th rowSpan={2} className="text-right align-bottom">
-                        P.U. Contratista
-                      </Th>
-                    )}
+                    <Th rowSpan={2} className="text-right align-bottom">
+                      P.U. Contratista
+                    </Th>
                     <Th rowSpan={2} className="text-right align-bottom">Anterior</Th>
-                    <Th
-                      colSpan={puedeVerPrecios ? 2 : 1}
-                      className="text-center bg-[var(--brand)]/[0.04]"
-                    >
+                    <Th colSpan={2} className="text-center bg-[var(--brand)]/[0.04]">
                       Esta semana
                     </Th>
                     <Th rowSpan={2} className="text-right align-bottom">Acumulado</Th>
@@ -175,9 +165,7 @@ function PartidaAvance({
                   </Tr>
                   <Tr>
                     <Th className="text-right bg-[var(--brand)]/[0.04]">Cantidad</Th>
-                    {puedeVerPrecios && (
-                      <Th className="text-right bg-[var(--brand)]/[0.04]">Monto</Th>
-                    )}
+                    <Th className="text-right bg-[var(--brand)]/[0.04]">Monto</Th>
                   </Tr>
                 </Thead>
                 <tbody>
@@ -189,7 +177,6 @@ function PartidaAvance({
                       concepto={concepto}
                       valor={valores[concepto.id] ?? ""}
                       onCambiar={(v) => actualizarValor(concepto.id, v)}
-                      puedeVerPrecios={puedeVerPrecios}
                       puedeAprobar={puedeAprobar}
                     />
                   ))}
@@ -242,7 +229,6 @@ function FilaConcepto({
   concepto,
   valor,
   onCambiar,
-  puedeVerPrecios,
   puedeAprobar,
 }: {
   proyectoId: string;
@@ -250,7 +236,6 @@ function FilaConcepto({
   concepto: ConceptoConAvance;
   valor: string;
   onCambiar: (nuevaCantidad: string) => void;
-  puedeVerPrecios: boolean;
   puedeAprobar: boolean;
 }) {
   const cantidadActual = new Prisma.Decimal(valor || 0);
@@ -263,8 +248,8 @@ function FilaConcepto({
     : 0;
   const excede = acumulado.gt(total);
 
-  const precio = concepto.precioUnitarioContratista;
-  const tienePrecio = puedeVerPrecios && precio !== null;
+  const precio = concepto.precioUnitarioContratistaContratado;
+  const tienePrecio = precio !== null;
 
   // El input de Monto tiene su propio texto — si se derivara de `valor` en
   // cada render (cantidad × precio), el redondeo a 3 decimales de la
@@ -317,11 +302,9 @@ function FilaConcepto({
       <Td className="font-medium">{concepto.descripcion}</Td>
       <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
       <Td className="text-right tabular-nums">{formatCantidad(concepto.cantidadTotal)}</Td>
-      {puedeVerPrecios && (
-        <Td className="text-right tabular-nums text-[var(--muted)]">
-          {precio !== null ? formatMoney(precio) : "—"}
-        </Td>
-      )}
+      <Td className="text-right tabular-nums text-[var(--muted)]">
+        {precio !== null ? formatMoney(precio) : "—"}
+      </Td>
       <Td className="text-right tabular-nums text-[var(--muted)]">
         {formatCantidad(concepto.anterior)}
       </Td>
@@ -342,35 +325,33 @@ function FilaConcepto({
           )}
         />
       </Td>
-      {puedeVerPrecios && (
-        <Td className="bg-[var(--brand)]/[0.02]">
-          {tienePrecio ? (
-            <input
-              type="text"
-              inputMode="decimal"
-              value={
-                montoEnfocado
-                  ? textoMonto
-                  : textoMonto === ""
-                    ? ""
-                    : formatMoney(textoMonto)
-              }
-              onFocus={() => setMontoEnfocado(true)}
-              onBlur={() => setMontoEnfocado(false)}
-              onChange={(e) => alCambiarMonto(e.target.value)}
-              placeholder="$0.00"
-              className={cn(
-                "w-28 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
-                excede
-                  ? "border-red-300 focus:border-red-400"
-                  : "border-[var(--border)] focus:border-[var(--brand)]"
-              )}
-            />
-          ) : (
-            <span className="block text-right text-sm text-[var(--muted)]">—</span>
-          )}
-        </Td>
-      )}
+      <Td className="bg-[var(--brand)]/[0.02]">
+        {tienePrecio ? (
+          <input
+            type="text"
+            inputMode="decimal"
+            value={
+              montoEnfocado
+                ? textoMonto
+                : textoMonto === ""
+                  ? ""
+                  : formatMoney(textoMonto)
+            }
+            onFocus={() => setMontoEnfocado(true)}
+            onBlur={() => setMontoEnfocado(false)}
+            onChange={(e) => alCambiarMonto(e.target.value)}
+            placeholder="$0.00"
+            className={cn(
+              "w-28 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
+              excede
+                ? "border-red-300 focus:border-red-400"
+                : "border-[var(--border)] focus:border-[var(--brand)]"
+            )}
+          />
+        ) : (
+          <span className="block text-right text-sm text-[var(--muted)]">—</span>
+        )}
+      </Td>
       <Td className="text-right font-medium tabular-nums">{formatCantidad(acumulado)}</Td>
       <Td
         className={cn(

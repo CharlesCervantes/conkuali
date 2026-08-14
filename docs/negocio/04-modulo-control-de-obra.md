@@ -126,6 +126,12 @@ Puede:
 
 NO debe tener acceso a precios financieros privados.
 
+> **Nota de arquitectura técnica (ver sección 49.9):** esta línea se
+> precisa en la sesión de agosto 2026 — el Supervisor sí ve el presupuesto
+> operativo del Contrato General (Contratista, Materiales, cantidades,
+> avance), pero no el Contrato General Privado (Indirectos, Herramienta, %
+> utilidad/administración, precio final al cliente, márgenes comerciales).
+
 ---
 
 ## Administrador — actualmente Charles
@@ -1592,4 +1598,93 @@ Decisiones tomadas:
   automáticamente.
 - La lógica de `Semana` (antes en `lib/server/reporte-general/semanas.ts`) se
   reubicó a `lib/server/semanas.ts` — es una entidad de la Empresa, compartida
+  por Reporte General y Control de Obra, no propia de ningún módulo.
+
+## 49.9 Contrato General / Contrato General Privado — decisión de sesión, agosto 2026 (Etapa A: schema base)
+
+Esta sección **sustituye** el modelo de "tres precios normal/privado" descrito
+en las secciones 19-27 y 49.3. Ya no se trata de tres precios equivalentes con
+distinta visibilidad — son **componentes de costo distintos**
+(contratista/materiales/indirectos/herramienta) más un % de utilidad o
+administración, y la línea Normal/Privado corta por campo específico, no por
+"todo o nada". También sustituye la frase de la sección 4 *"[Supervisor] NO
+debe tener acceso a precios financieros privados"* — el Supervisor sí ve el
+presupuesto operativo del Contrato General (ver más abajo qué campos exactos).
+
+### Dos esquemas contractuales por proyecto
+
+`Proyecto.esquemaContractual` (`PRECIO_ALZADO | ADMINISTRACION`, nullable —
+**no se infiere** para proyectos existentes, Administrador/Director lo asigna
+a propósito):
+
+- **Precio Alzado**: costo base = Contratista + Materiales + Indirectos +
+  Herramienta; precio cliente = costo base × (1 + % utilidad).
+- **Administración**: no usa Indirectos ni Herramienta; precio cliente = costo
+  real (Contratista + Materiales + otros gastos) × (1 + % administración). El
+  cliente sí puede ver el % de administración en este esquema (no así la
+  utilidad de Precio Alzado).
+
+Los campos de Indirectos/Herramienta existen en el schema para ambos esquemas
+(no se ocultan a nivel de columna) — qué aplica según el esquema se valida en
+el servicio, no en la base de datos.
+
+### Contrato General vs. Contrato General Privado
+
+No son dos contratos ni dos fuentes de verdad — es la misma estructura
+(`Partida` → `Concepto`) con visibilidad distinta por campo:
+
+- **Contrato General** (Supervisor, Administrador, Director, Master):
+  descripción, unidad, cantidad, presupuesto de Contratista, presupuesto de
+  Materiales, subtotal por partida, avance físico.
+- **Contrato General Privado** (solo Administrador/Director/Master — mismo
+  rol-set que `puedeAdministrarProyectos()`, sin permiso nuevo): Indirectos,
+  Herramienta, % utilidad/administración, precio unitario final al cliente,
+  márgenes comerciales.
+
+### Precio recomendado vs. precio comercial
+
+`Concepto.precioUnitarioClienteOverride` (nullable) es la única cifra
+comercial que se **guarda** — es una decisión de Administrador/Director que no
+se puede derivar de nada. El precio recomendado (costo base × 1+%) nunca se
+guarda, se calcula siempre en lectura. Regla:
+
+```
+precioUnitarioCliente = concepto.precioUnitarioClienteOverride ?? precioCalculado
+```
+
+Cuando existe override, ambos valores (recomendado y comercial) deben poder
+verse simultáneamente — nunca solo el resultado final, para poder analizar
+margen después.
+
+### Porcentajes — siempre campos separados, nunca uno genérico
+
+`Proyecto.porcentajeUtilidadDefault` / `Proyecto.porcentajeAdministracionDefault`,
+y a nivel `Concepto`: `porcentajeUtilidad` / `porcentajeAdministracion`
+(override; `null` = usa el default del proyecto). Se mantienen separados a
+propósito — un campo único cuyo significado dependiera de
+`esquemaContractual` fue descartado explícitamente para que el dato nunca sea
+ambiguo por sí mismo.
+
+### Pagos por contrato específico (preparación, no implementado)
+
+`MovimientoSemanal.contratoContratistaId` (nullable) permite, cuando
+corresponda, ligar un pago a un `ContratoContratista` específico — sin asumir
+"un contratista = un contrato por proyecto". Mientras sea `null`, el
+movimiento sigue funcionando exactamente igual que hoy (asociado solo a
+`BeneficiarioProyecto`). Esto prepara —sin implementar todavía— Pagado
+acumulado/Saldo/comparación avance-vs-pagado/Estado de cuenta por contrato.
+
+### Qué NO se hizo en esta etapa (a propósito)
+
+- No se movió la relación de `Aditiva` hacia `ContratoContratista` (sigue
+  ligada a `BeneficiarioProyecto`, ver 49.1) — toca cálculos que ya usa
+  Reporte General, se hará en una etapa separada.
+- No existe todavía `EstimacionContratista` (cabecera+detalle, sección 12 del
+  rediseño) ni Estado de Cuenta por contratista.
+- No hay todavía captura de gasto real de materiales (sección 13) — el módulo
+  de requisiciones/compras/gastos no existe aún; `precioUnitarioMateriales`
+  por ahora es solo presupuesto.
+- Ninguna UI se modificó en esta etapa — solo schema (migración
+  `20260814041200_contrato_general_base`, totalmente aditiva, sin defaults
+  que alteren proyectos/conceptos existentes).
   por Reporte General y Control de Obra, no propia de ningún módulo.
