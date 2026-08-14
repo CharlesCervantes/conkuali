@@ -31,3 +31,17 @@ export function puedeAdministrarProyectos(usuario: UsuarioSesion): boolean {
     usuario.rol === "MASTER"
   );
 }
+
+/**
+ * Reportar avance físico semanal es explícito por rol (no "cualquier usuario
+ * activo") para que un rol nuevo en el futuro no reciba este permiso por
+ * defecto — debe agregarse aquí a propósito (decisión de sesión, agosto 2026).
+ */
+export function puedeReportarAvance(usuario: UsuarioSesion): boolean {
+  return (
+    usuario.rol === "SUPERVISOR" ||
+    usuario.rol === "ADMINISTRADOR" ||
+    usuario.rol === "DIRECTOR" ||
+    usuario.rol === "MASTER"
+  );
+}

@@ -1545,3 +1545,51 @@ administrarlo. `cliente` es texto libre por ahora (no hay todavía un catálogo
 contrato principal del proyecto con el cliente — **no** los contratos de
 contratistas, que se resuelven después con `ContratoContratista`. Ninguna de las
 entidades de las secciones 49.1–49.5 se crea en esta etapa.
+
+## 49.8 Avance físico (`AvanceConcepto`) — decisión de sesión, agosto 2026
+
+`AvanceConcepto` se agrega como entidad nueva, aditiva, sin tocar el modelo
+contractual existente:
+
+```text
+Concepto (ya existe)
+   ↓ 1:N
+AvanceConcepto (nuevo) — único por (conceptoId, semanaId)
+```
+
+Decisiones tomadas:
+
+- **El avance vive a nivel de `Concepto`, no de `ContratoConcepto`.** Es la
+  única fuente de verdad de la cantidad física ejecutada (sección 14). Cuando
+  un concepto está asignado a un solo contratista, su avance se muestra en la
+  tarjeta de ese contratista (pestaña Contratistas) sin ambigüedad. Cuando un
+  concepto está repartido entre varios `ContratoContratista`, el sistema **no
+  prorratea ni atribuye** el avance a ninguno — se muestra `—` con la nota
+  "Concepto compartido · avance no atribuible por contratista". Atribuir avance
+  por contratista de forma fina, si se necesita en el futuro, requeriría
+  capturar por `ContratoConcepto` en lugar de por `Concepto` — cambio que no se
+  hizo aquí a propósito.
+- **Nada calculado se guarda.** `AvanceConcepto.cantidadEjecutada` es lo
+  capturado esa semana únicamente. Acumulado, pendiente y % de avance se
+  derivan siempre en lectura sumando las filas de todas las semanas hasta la
+  consultada (ordenadas por `Semana.fechaInicio`, no por `numero`/`anio`, para
+  no romperse en cambios de año).
+- **`empresaId` explícito** en `AvanceConcepto` (por decisión de arquitectura,
+  aunque sea alcanzable transitivamente vía `concepto → partida → proyecto →
+  empresa` — a diferencia de `ContratoConcepto`, que no lo tiene).
+- **Excedente sobre lo contratado**: bloquea el guardado con un mensaje claro
+  (no hay todavía regla de aditivas/excedentes extraordinarios — sección 5 del
+  documento original). Se revisará cuando se diseñe el manejo de cantidades
+  extraordinarias.
+- **"Avance físico general" del proyecto** queda sin calcular — no existe
+  todavía una metodología válida para promediar % entre conceptos con
+  unidades distintas (m², piezas, ml) sin una base de ponderación económica, y
+  esta pantalla no maneja precios. El indicador queda preparado visualmente
+  ("— · Pendiente de definir metodología") hasta que se defina esa base.
+- **Permisos explícitos**: `puedeReportarAvance()` lista los 4 roles actuales
+  (Supervisor, Administrador, Director, Master) uno por uno, no "cualquier
+  usuario activo" — un rol nuevo en el futuro no hereda este permiso
+  automáticamente.
+- La lógica de `Semana` (antes en `lib/server/reporte-general/semanas.ts`) se
+  reubicó a `lib/server/semanas.ts` — es una entidad de la Empresa, compartida
+  por Reporte General y Control de Obra, no propia de ningún módulo.

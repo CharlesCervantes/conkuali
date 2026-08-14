@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireSession } from "@/lib/server/auth/dal";
 import { empresaTieneModulo, puedeAdministrarProyectos } from "@/lib/server/permisos";
 import { listarProyectos } from "@/lib/server/control-de-obra/proyectos";
+import { contarPendientesPorProyecto } from "@/lib/server/control-de-obra/avance";
 import type { EstatusProyecto, Proyecto } from "@/lib/generated/prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,11 @@ export default async function ControlDeObraPage() {
     (p) => p.estatus === "CERRADO" || p.estatus === "CANCELADO"
   );
   const puedeAdministrar = puedeAdministrarProyectos(usuario);
+  // Solo quien puede aprobar necesita ver el aviso — nadie más puede actuar
+  // sobre él (mismo criterio que P.U./Monto en Avance de obra).
+  const pendientesPorProyecto = puedeAdministrar
+    ? await contarPendientesPorProyecto(usuario.empresa.id)
+    : new Map<string, number>();
 
   return (
     <div className="space-y-6">
@@ -74,7 +80,7 @@ export default async function ControlDeObraPage() {
                 <Th>Tipo</Th>
                 <Th>Cliente</Th>
                 <Th>Estatus</Th>
-                {puedeAdministrar && <Th className="text-right">Acciones</Th>}
+                <Th className="text-right">Acciones</Th>
               </Tr>
             </Thead>
             <tbody>
@@ -83,6 +89,7 @@ export default async function ControlDeObraPage() {
                   key={p.id}
                   proyecto={p}
                   puedeAdministrar={puedeAdministrar}
+                  pendientesAprobar={pendientesPorProyecto.get(p.id) ?? 0}
                 />
               ))}
             </tbody>
@@ -111,7 +118,7 @@ export default async function ControlDeObraPage() {
                     <Th>Tipo</Th>
                     <Th>Cliente</Th>
                     <Th>Estatus</Th>
-                    {puedeAdministrar && <Th className="text-right">Acciones</Th>}
+                    <Th className="text-right">Acciones</Th>
                   </Tr>
                 </Thead>
                 <tbody>
@@ -120,6 +127,7 @@ export default async function ControlDeObraPage() {
                       key={p.id}
                       proyecto={p}
                       puedeAdministrar={puedeAdministrar}
+                      pendientesAprobar={pendientesPorProyecto.get(p.id) ?? 0}
                     />
                   ))}
                 </tbody>
@@ -135,22 +143,24 @@ export default async function ControlDeObraPage() {
 function FilaProyecto({
   proyecto,
   puedeAdministrar,
+  pendientesAprobar,
 }: {
   proyecto: Proyecto;
   puedeAdministrar: boolean;
+  pendientesAprobar: number;
 }) {
   return (
     <Tr>
       <Td className="font-medium">
-        {puedeAdministrar ? (
+        <div>{proyecto.nombre}</div>
+        {pendientesAprobar > 0 && (
           <Link
-            href={`/control-de-obra/${proyecto.id}/editar`}
-            className="hover:underline"
+            href={`/control-de-obra/${proyecto.id}/avance`}
+            className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors duration-150 ease-out hover:bg-amber-100"
           >
-            {proyecto.nombre}
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+            {pendientesAprobar} pendiente{pendientesAprobar === 1 ? "" : "s"} de aprobar
           </Link>
-        ) : (
-          proyecto.nombre
         )}
       </Td>
       <Td className="text-[var(--muted)]">
@@ -160,22 +170,43 @@ function FilaProyecto({
       <Td>
         <EstatusProyectoBadge estatus={proyecto.estatus} />
       </Td>
-      {puedeAdministrar && (
-        <Td>
-          <div className="flex justify-end gap-2">
-            {transicionesDisponibles(proyecto.estatus).map((t) => (
-              <form
-                key={t.estatus}
-                action={cambiarEstatusAction.bind(null, proyecto.id, t.estatus)}
-              >
-                <Button type="submit" variant="outline" className="px-2.5 py-1 text-xs">
-                  {t.etiqueta}
-                </Button>
-              </form>
-            ))}
-          </div>
-        </Td>
-      )}
+      <Td>
+        <div className="flex justify-end gap-2">
+          <Link href={`/control-de-obra/${proyecto.id}`}>
+            <Button variant="outline" className="px-3 py-1.5 text-xs">
+              Abrir
+            </Button>
+          </Link>
+          {puedeAdministrar && (
+            <details className="group relative">
+              <summary className="flex h-[30px] w-[30px] cursor-pointer list-none items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] text-[var(--muted)] transition-colors duration-150 ease-out select-none hover:bg-black/[0.03] hover:text-[var(--foreground)] [&::-webkit-details-marker]:hidden">
+                ⋯
+              </summary>
+              <div className="absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.16)]">
+                <Link
+                  href={`/control-de-obra/${proyecto.id}/editar`}
+                  className="block px-3.5 py-2 text-sm text-[var(--foreground)] transition-colors duration-150 ease-out hover:bg-black/[0.04]"
+                >
+                  Editar información
+                </Link>
+                {transicionesDisponibles(proyecto.estatus).map((t) => (
+                  <form
+                    key={t.estatus}
+                    action={cambiarEstatusAction.bind(null, proyecto.id, t.estatus)}
+                  >
+                    <button
+                      type="submit"
+                      className="block w-full px-3.5 py-2 text-left text-sm text-[var(--foreground)] transition-colors duration-150 ease-out hover:bg-black/[0.04]"
+                    >
+                      {t.etiqueta}
+                    </button>
+                  </form>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      </Td>
     </Tr>
   );
 }

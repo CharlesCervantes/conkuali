@@ -54,6 +54,7 @@ model Empresa {
   proyectos       Proyecto[]
   beneficiarios   Beneficiario[]
   semanas         Semana[]
+  avancesConcepto AvanceConcepto[]
 
   @@map("empresas")
 }
@@ -126,6 +127,8 @@ model Usuario {
   movimientosAprobados   MovimientoSemanal[]    @relation("MovimientosAprobados")
   movimientosFondoPuente MovimientoSemanal[]    @relation("FondoPuente")
   comentarios            ComentarioMovimiento[]
+  avancesRegistrados     AvanceConcepto[]        @relation("AvanceRegistrado")
+  avancesAprobados       AvanceConcepto[]        @relation("AvanceAprobado")
 
   @@map("usuarios")
 }
@@ -362,7 +365,8 @@ model Semana {
   fechaFin    DateTime
   estado      EstatusSemana @default(ABIERTA)
 
-  movimientos MovimientoSemanal[]
+  movimientos     MovimientoSemanal[]
+  avancesConcepto AvanceConcepto[]
 
   @@unique([empresaId, numero, anio])
   @@map("semanas")
@@ -462,6 +466,7 @@ model Concepto {
   updatedAt          DateTime        @updatedAt
 
   asignaciones ContratoConcepto[]
+  avances      AvanceConcepto[]
 
   @@index([partidaId])
   @@map("conceptos")
@@ -501,4 +506,56 @@ model ContratoConcepto {
 
   @@unique([contratoContratistaId, conceptoId])
   @@map("contrato_conceptos")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 4: avance físico
+// Ver /docs/negocio/04-modulo-control-de-obra.md sección 14 y 49.9. El avance
+// se registra por Concepto (una sola fuente de verdad para la cantidad
+// física), no por ContratoConcepto/contratista — cuando un concepto está
+// repartido entre varios contratistas, el avance no se atribuye a ninguno en
+// particular (decisión de sesión, agosto 2026). empresaId es explícito por
+// decisión de arquitectura, aunque sea alcanzable transitivamente vía
+// concepto → partida → proyecto → empresa.
+// ---------------------------------------------------------------------------
+
+enum EstatusAprobacionAvance {
+  PENDIENTE
+  APROBADO
+  RECHAZADO
+}
+
+model AvanceConcepto {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  concepto   Concepto @relation(fields: [conceptoId], references: [id])
+  conceptoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  // Lo capturado ESA semana únicamente — acumulado/pendiente/% siempre se
+  // derivan sumando estas filas en lectura, nunca se guardan calculados.
+  cantidadEjecutada Decimal @db.Decimal(14, 3)
+
+  // Solo lo APROBADO cuenta en Acumulado/Pendiente/%/indicadores en otras
+  // pantallas (Contratistas, resumen). Cualquier guardado (de cualquier rol,
+  // incluido quien aprueba) regresa el registro a PENDIENTE — aprobar es
+  // siempre una acción explícita separada de capturar/editar la cantidad.
+  estatusAprobacion EstatusAprobacionAvance @default(PENDIENTE)
+  aprobadoPor       Usuario?                @relation("AvanceAprobado", fields: [aprobadoPorId], references: [id])
+  aprobadoPorId     String?
+  fechaAprobacion   DateTime?
+
+  registradoPor   Usuario @relation("AvanceRegistrado", fields: [registradoPorId], references: [id])
+  registradoPorId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([conceptoId, semanaId])
+  @@index([empresaId])
+  @@index([semanaId])
+  @@index([estatusAprobacion])
+  @@map("avance_conceptos")
 }

@@ -22,7 +22,7 @@ export default async function AppLayout({
 
   return (
     <div
-      className="flex min-h-screen"
+      className="flex h-screen overflow-hidden"
       style={
         {
           "--brand": brand,
@@ -37,8 +37,10 @@ export default async function AppLayout({
         rolLabel={NOMBRE_ROL[usuario.rol] ?? usuario.rol}
         modulos={modulos}
       />
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-6 py-10 lg:px-10">{children}</div>
+      <main className="h-full flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[1680px] px-6 py-8 lg:px-10 xl:px-12">
+          {children}
+        </div>
       </main>
     </div>
   );

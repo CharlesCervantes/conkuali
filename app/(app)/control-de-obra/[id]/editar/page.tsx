@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
 import { puedeAdministrarProyectos } from "@/lib/server/permisos";
@@ -38,9 +39,15 @@ export default async function EditarProyectoPage({
   const accionConId = editarProyectoAction.bind(null, id);
 
   return (
-    <div className="max-w-xl space-y-6">
+    <div className="max-w-4xl space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-[var(--foreground)]">
+        <Link
+          href={`/control-de-obra/${id}`}
+          className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          ← {proyecto.nombre}
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold text-[var(--foreground)]">
           Editar proyecto
         </h1>
         <p className="mt-1 text-sm text-[var(--muted)]">{proyecto.nombre}</p>
