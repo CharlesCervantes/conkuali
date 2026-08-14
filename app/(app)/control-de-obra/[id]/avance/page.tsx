@@ -73,7 +73,6 @@ export default async function AvanceObraPage({
         proyectoId={id}
         semanaId={semana.id}
         partidas={partidas}
-        puedeVerPrecios={puedeAdministrarProyectos(usuario)}
         puedeAprobar={puedeAdministrarProyectos(usuario)}
       />
     </div>

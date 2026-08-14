@@ -1,21 +1,37 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
-import { obtenerPartidasProyecto } from "@/lib/server/control-de-obra/estructura-contractual";
-import { PartidasObraView } from "@/components/control-de-obra/partidas-obra-view";
+import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
+import {
+  obtenerPartidasProyecto,
+} from "@/lib/server/control-de-obra/estructura-contractual";
+import { obtenerProyecto } from "@/lib/server/control-de-obra/proyectos";
+import { ContratoGeneralView } from "@/components/control-de-obra/contrato-general-view";
 
-export default async function PartidasObraPage({
+export default async function ContratoGeneralPage({
   params,
 }: PageProps<"/control-de-obra/[id]/partidas">) {
   const usuario = await requireSession();
   const { id } = await params;
 
-  const partidas = await obtenerPartidasProyecto(usuario, id);
+  const [proyecto, partidas] = await Promise.all([
+    obtenerProyecto(usuario, id),
+    obtenerPartidasProyecto(usuario, id),
+  ]);
 
   return (
-    <PartidasObraView
+    <ContratoGeneralView
       proyectoId={id}
       partidas={partidas}
+      esquemaContractual={proyecto.esquemaContractual}
+      porcentajesDefault={{
+        utilidad: proyecto.porcentajeUtilidadDefault
+          ? Number(proyecto.porcentajeUtilidadDefault)
+          : null,
+        administracion: proyecto.porcentajeAdministracionDefault
+          ? Number(proyecto.porcentajeAdministracionDefault)
+          : null,
+      }}
       puedeAdministrar={puedeAdministrarProyectos(usuario)}
+      puedeVerPrivado={puedeVerContratoGeneralPrivado(usuario)}
     />
   );
 }

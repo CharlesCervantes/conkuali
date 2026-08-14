@@ -67,6 +67,10 @@ export default async function EditarProyectoPage({
             notas: proyecto.notas,
             fechaInicio: aFechaInput(proyecto.fechaInicio),
             fechaEstimadaTermino: aFechaInput(proyecto.fechaEstimadaTermino),
+            esquemaContractual: proyecto.esquemaContractual,
+            porcentajeUtilidadDefault: proyecto.porcentajeUtilidadDefault?.toString() ?? null,
+            porcentajeAdministracionDefault:
+              proyecto.porcentajeAdministracionDefault?.toString() ?? null,
           }}
         />
       </Card>
