@@ -5,6 +5,10 @@ import {
   type ImportesConceptoCalculados,
 } from "@/lib/control-de-obra/contrato-general";
 import { TablaPrivadaEditable, type ConceptoPrivado } from "./tabla-privada-editable";
+import {
+  TablaAdministracionEditable,
+  type ConceptoAdministracion,
+} from "./tabla-administracion-editable";
 import type { obtenerPartidasProyectoPrivado } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
@@ -27,12 +31,14 @@ export function ContratoGeneralPrivadoView({
   esquemaContractual: EsquemaContractual | null;
   porcentajesDefault: { utilidad: number | null; administracion: number | null };
 }) {
+  const esAdministracion = esquemaContractual === "ADMINISTRACION";
   const mostrarIndirectosHerramienta = esquemaContractual === "PRECIO_ALZADO";
 
-  // Nada de Decimal cruza hacia el componente cliente (TablaPrivadaEditable)
-  // — todo se convierte a number aquí, en el server component, igual que se
-  // corrigió antes en Avance de obra (los objetos Decimal de Prisma no son
-  // serializables de Server a Client Component).
+  // Nada de Decimal cruza hacia los componentes cliente (TablaPrivadaEditable
+  // / TablaAdministracionEditable) — todo se convierte a number aquí, en el
+  // server component, igual que se corrigió antes en Avance de obra (los
+  // objetos Decimal de Prisma no son serializables de Server a Client
+  // Component).
   const partidasConCalculo = partidas.map((partida) => {
     const conceptos: { concepto: ConceptoPrivado; importes: ImportesConceptoCalculados }[] =
       partida.conceptos.map((concepto) => {
@@ -49,6 +55,8 @@ export function ContratoGeneralPrivadoView({
           concepto: {
             id: concepto.id,
             descripcion: concepto.descripcion,
+            unidad: concepto.unidad,
+            cantidad: Number(concepto.cantidadContratada),
             ...costos,
           },
           importes: calcularImportesConcepto(
@@ -60,7 +68,9 @@ export function ContratoGeneralPrivadoView({
       });
 
     const totalPartida = conceptos.reduce((t, c) => t + c.importes.importeTotal, 0);
-    return { partida, conceptos, totalPartida };
+    const subtotalManoObra = conceptos.reduce((t, c) => t + c.importes.importeContratista, 0);
+    const montoAdm = conceptos.reduce((t, c) => t + c.importes.importeUtilidadOAdministracion, 0);
+    return { partida, conceptos, totalPartida, subtotalManoObra, montoAdm };
   });
 
   const totalContratoVenta = partidasConCalculo.reduce((t, p) => t + p.totalPartida, 0);
@@ -73,7 +83,7 @@ export function ContratoGeneralPrivadoView({
         </Card>
       )}
 
-      {partidasConCalculo.map(({ partida, conceptos, totalPartida }, i) => (
+      {partidasConCalculo.map(({ partida, conceptos, totalPartida, subtotalManoObra, montoAdm }, i) => (
         <Card
           key={partida.id}
           className="enter overflow-hidden"
@@ -84,28 +94,62 @@ export function ContratoGeneralPrivadoView({
               <span className="text-sm font-semibold text-[var(--foreground)]">
                 {partida.nombre}
               </span>
-              <span className="text-xs text-[var(--muted)]">
-                {partida.conceptos.length} concepto
-                {partida.conceptos.length === 1 ? "" : "s"}
-              </span>
+              {esAdministracion && conceptos.length > 0 ? (
+                <div className="flex items-center gap-4 text-xs text-[var(--muted)]">
+                  <span>
+                    Subtotal{" "}
+                    <span className="tabular-nums text-[var(--foreground)]">
+                      {formatMoney(subtotalManoObra)}
+                    </span>
+                  </span>
+                  <span>
+                    ADM{" "}
+                    <span className="tabular-nums text-[var(--foreground)]">
+                      {formatMoney(montoAdm)}
+                    </span>
+                  </span>
+                  <span className="font-semibold text-[var(--foreground)]">
+                    Total <span className="tabular-nums">{formatMoney(totalPartida)}</span>
+                  </span>
+                </div>
+              ) : (
+                <span className="text-xs text-[var(--muted)]">
+                  {partida.conceptos.length} concepto
+                  {partida.conceptos.length === 1 ? "" : "s"}
+                </span>
+              )}
             </summary>
 
             <div className="border-t border-[var(--border)] px-5 py-4 space-y-5">
-              {conceptos.length > 0 && (
-                <>
-                  <TablaPrivadaEditable
+              {conceptos.length > 0 &&
+                (esAdministracion ? (
+                  <TablaAdministracionEditable
                     proyectoId={proyectoId}
-                    conceptos={conceptos}
-                    esquemaContractual={esquemaContractual}
-                    mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
+                    filas={conceptos.map(({ concepto, importes }) => ({
+                      concepto: concepto as ConceptoAdministracion,
+                      importe: {
+                        subtotal: importes.importeContratista,
+                        montoAdm: importes.importeUtilidadOAdministracion,
+                        total: importes.importeTotal,
+                        porcentajeAplicado: importes.porcentajeAplicado,
+                      },
+                    }))}
                   />
-                  <ResumenPartida
-                    conceptos={conceptos}
-                    totalPartida={totalPartida}
-                    mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
-                  />
-                </>
-              )}
+                ) : (
+                  <>
+                    <TablaPrivadaEditable
+                      proyectoId={proyectoId}
+                      conceptos={conceptos}
+                      esquemaContractual={esquemaContractual}
+                      mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
+                    />
+                    <ResumenPartida
+                      conceptos={conceptos}
+                      totalPartida={totalPartida}
+                      mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
+                    />
+                  </>
+                ))}
             </div>
           </details>
         </Card>

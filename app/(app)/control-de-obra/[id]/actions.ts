@@ -165,6 +165,7 @@ export async function editarConceptoPrivadoAction(
   const usuario = await requireSession();
   try {
     await editarConceptoPrivado(usuario, conceptoId, {
+      precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
       precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
       precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
       porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),

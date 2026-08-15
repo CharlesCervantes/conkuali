@@ -17,6 +17,9 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 export type ConceptoPrivado = {
   id: string;
   descripcion: string;
+  unidad: string;
+  cantidad: number;
+  precioUnitarioContratista: number | null;
   precioUnitarioIndirectos: number | null;
   precioUnitarioHerramienta: number | null;
   porcentajeUtilidad: number | null;
@@ -145,6 +148,11 @@ function FormEditarConceptoPrivado({
     <form action={formAction} className="space-y-3">
       <p className="text-sm font-medium text-[var(--foreground)]">{concepto.descripcion}</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <CampoPrivado
+          label="P.U."
+          name="precioUnitarioContratista"
+          defaultValue={concepto.precioUnitarioContratista}
+        />
         {esPrecioAlzado && (
           <>
             <CampoPrivado
