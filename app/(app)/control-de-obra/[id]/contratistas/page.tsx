@@ -14,17 +14,12 @@ export default async function ContratistasPage({
   const { id } = await params;
   const puedeAdministrar = puedeAdministrarProyectos(usuario);
 
-  const [{ partidas, contratos }, contratistasDisponibles] = await Promise.all([
-    obtenerContratistasProyecto(usuario, id),
-    puedeAdministrar ? listarContratistasDisponibles(usuario) : Promise.resolve([]),
-  ]);
-
-  const todosLosConceptos = partidas.flatMap((p) => p.conceptos);
-  const avancePorConcepto = await obtenerAvanceAcumuladoPorConcepto(
-    usuario,
-    id,
-    todosLosConceptos
-  );
+  const [{ partidas, contratos }, contratistasDisponibles, avancePorConcepto] =
+    await Promise.all([
+      obtenerContratistasProyecto(usuario, id),
+      puedeAdministrar ? listarContratistasDisponibles(usuario) : Promise.resolve([]),
+      obtenerAvanceAcumuladoPorConcepto(usuario, id),
+    ]);
 
   return (
     <ContratistasView

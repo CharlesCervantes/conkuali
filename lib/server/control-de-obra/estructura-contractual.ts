@@ -127,13 +127,29 @@ export function partidasConConceptos(proyectoId: string) {
   });
 }
 
+// select explícito en vez de include profundo: Contratistas (única pantalla
+// que consume esto) solo pinta estos campos — traer el resto (timestamps,
+// notas, sueldo, etc.) es peso de red que nadie usa.
 function contratosConConceptos(proyectoId: string) {
   return db.contratoContratista.findMany({
     where: { beneficiarioProyecto: { proyectoId } },
     orderBy: { createdAt: "asc" },
-    include: {
-      beneficiarioProyecto: { include: { beneficiario: true } },
-      conceptos: { include: { concepto: true } },
+    select: {
+      id: true,
+      numeroContrato: true,
+      descripcion: true,
+      beneficiarioProyecto: {
+        select: { beneficiario: { select: { nombre: true } } },
+      },
+      conceptos: {
+        select: {
+          id: true,
+          conceptoId: true,
+          cantidad: true,
+          precioUnitarioContratista: true,
+          concepto: { select: { descripcion: true, unidad: true } },
+        },
+      },
     },
   });
 }

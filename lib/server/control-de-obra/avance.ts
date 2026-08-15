@@ -129,15 +129,20 @@ export async function obtenerAvanceSemanal(
 ) {
   await obtenerProyecto(usuario, proyectoId);
 
-  const partidas = await partidasConConceptos(proyectoId);
+  // resolverContratistaPorConcepto no depende de conceptoIds (filtra por
+  // proyectoId directamente) — va en la primera fase junto con partidas, no
+  // en la segunda, donde tendría que esperar sin necesidad.
+  const [partidas, resolucionContratista] = await Promise.all([
+    partidasConConceptos(proyectoId),
+    resolverContratistaPorConcepto(proyectoId),
+  ]);
   const conceptoIds = partidas.flatMap((p) => p.conceptos.map((c) => c.id));
 
-  const [anteriorPorConcepto, filasEstaSemana, resolucionContratista] = await Promise.all([
+  const [anteriorPorConcepto, filasEstaSemana] = await Promise.all([
     sumaEjecutadaPorConcepto(conceptoIds, semana.fechaInicio),
     db.avanceConcepto.findMany({
       where: { conceptoId: { in: conceptoIds }, semanaId: semana.id },
     }),
-    resolverContratistaPorConcepto(proyectoId),
   ]);
   const estaSemanaPorConcepto = new Map(
     filasEstaSemana.map((f) => [f.conceptoId, Number(f.cantidadEjecutada)])
@@ -184,11 +189,17 @@ export async function obtenerAvanceSemanal(
 
 export async function obtenerAvanceAcumuladoPorConcepto(
   usuario: UsuarioSesion,
-  proyectoId: string,
-  conceptos: { id: string; cantidadContratada: unknown }[]
+  proyectoId: string
 ): Promise<Map<string, AvanceCalculado>> {
   await obtenerProyecto(usuario, proyectoId);
 
+  // Se resuelve por proyectoId, no a partir de la lista de conceptos de
+  // `partidas` — así el caller no tiene que esperar a que esa consulta
+  // termine primero y puede pedir todo en un solo Promise.all.
+  const conceptos = await db.concepto.findMany({
+    where: { partida: { proyectoId } },
+    select: { id: true, cantidadContratada: true },
+  });
   const conceptoIds = conceptos.map((c) => c.id);
   const acumuladoPorConcepto = await sumaEjecutadaPorConcepto(conceptoIds);
 
