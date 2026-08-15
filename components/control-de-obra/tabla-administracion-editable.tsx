@@ -88,18 +88,17 @@ export function TablaAdministracionEditable({
                     onGuardado={() => setEditandoId(null)}
                   />
                 ) : (
-                  <div className="flex items-center justify-end gap-2">
-                    <span className={colorPU(puActual, concepto.precioUnitarioContratista)}>
-                      {puActual !== null ? formatMoney(puActual) : "—"}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setEditandoId(concepto.id)}
-                      className="text-xs font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
-                    >
-                      Editar
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditandoId(concepto.id)}
+                    title="Clic para editar"
+                    className={cn(
+                      "-my-1 rounded-md px-2 py-1 transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.08]",
+                      colorPU(puActual, concepto.precioUnitarioContratista)
+                    )}
+                  >
+                    {puActual !== null ? formatMoney(puActual) : "—"}
+                  </button>
                 )}
               </Td>
               <Td className="text-right font-medium tabular-nums">{formatMoney(importe.subtotal)}</Td>
