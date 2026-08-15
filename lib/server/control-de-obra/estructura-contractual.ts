@@ -69,13 +69,17 @@ export async function obtenerPartidasProyectoPrivado(
 function partidasConConceptosOperativo(proyectoId: string) {
   return db.partida.findMany({
     where: { proyectoId },
-    orderBy: { orden: "asc" },
+    // `orden` casi siempre es 0 (nada en la UI lo captura hoy) — sin un
+    // desempate estable, Postgres puede devolver los empates en distinto
+    // orden entre una consulta y otra (más notorio justo después de un
+    // UPDATE), lo que se veía como "el concepto se mueve de lugar solo".
+    orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
     select: {
       id: true,
       nombre: true,
       orden: true,
       conceptos: {
-        orderBy: { orden: "asc" },
+        orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
         select: {
           id: true,
           descripcion: true,
@@ -113,8 +117,8 @@ export async function obtenerContratistasProyecto(
 export function partidasConConceptos(proyectoId: string) {
   return db.partida.findMany({
     where: { proyectoId },
-    orderBy: { orden: "asc" },
-    include: { conceptos: { orderBy: { orden: "asc" } } },
+    orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
+    include: { conceptos: { orderBy: [{ orden: "asc" }, { createdAt: "asc" }] } },
   });
 }
 

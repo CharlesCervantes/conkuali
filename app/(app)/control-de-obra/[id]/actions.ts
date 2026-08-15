@@ -156,12 +156,19 @@ export async function cambiarEstatusAprobacionAvanceAction(
   revalidatePath("/control-de-obra");
 }
 
+// A diferencia de FormState (undefined en éxito), este estado sí distingue
+// éxito de "todavía no se ha enviado" — con undefined en los dos casos,
+// useActionState nunca detectaba que la acción había terminado bien (el
+// formulario de edición se quedaba abierto, dando la impresión de que hacía
+// falta guardar otra vez). Ver tabla-privada-editable.tsx / tabla-administracion-editable.tsx.
+export type EditarConceptoPrivadoFormState = { error?: string; guardado?: boolean } | undefined;
+
 export async function editarConceptoPrivadoAction(
   conceptoId: string,
   proyectoId: string,
-  _state: FormState,
+  _state: EditarConceptoPrivadoFormState,
   formData: FormData
-): Promise<FormState> {
+): Promise<EditarConceptoPrivadoFormState> {
   const usuario = await requireSession();
   try {
     await editarConceptoPrivado(usuario, conceptoId, {
@@ -176,7 +183,7 @@ export async function editarConceptoPrivadoAction(
     return { error: mensajeError(error) };
   }
   revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
-  return undefined;
+  return { guardado: true };
 }
 
 export async function asignarConceptoAction(

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/dinero";
 import {
   editarConceptoPrivadoAction,
-  type FormState,
+  type EditarConceptoPrivadoFormState,
 } from "@/app/(app)/control-de-obra/[id]/actions";
 import type { ImportesConceptoCalculados } from "@/lib/control-de-obra/contrato-general";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
@@ -131,14 +131,14 @@ function FormEditarConceptoPrivado({
   onGuardado: () => void;
 }) {
   const action = editarConceptoPrivadoAction.bind(null, concepto.id, proyectoId);
-  const [state, formAction, pending] = useActionState<FormState, FormData>(
-    action,
-    undefined
-  );
+  const [state, formAction, pending] = useActionState<
+    EditarConceptoPrivadoFormState,
+    FormData
+  >(action, undefined);
   const [stateAnterior, setStateAnterior] = useState(state);
   if (state !== stateAnterior) {
     setStateAnterior(state);
-    if (!state?.error) onGuardado();
+    if (state?.guardado) onGuardado();
   }
 
   const esPrecioAlzado = esquemaContractual === "PRECIO_ALZADO";

@@ -8,7 +8,7 @@ import { formatMoney } from "@/lib/dinero";
 import { cn } from "@/lib/cn";
 import {
   editarConceptoPrivadoAction,
-  type FormState,
+  type EditarConceptoPrivadoFormState,
 } from "@/app/(app)/control-de-obra/[id]/actions";
 
 // Plano y sin Decimal a propósito (igual que tabla-privada-editable.tsx).
@@ -29,6 +29,13 @@ export type ImporteFilaAdministracion = {
   porcentajeAplicado: number | null;
 };
 
+function colorPU(actual: number | null, original: number | null): string {
+  if (actual === null || original === null || actual === original) {
+    return "text-[var(--foreground)]";
+  }
+  return actual > original ? "text-emerald-600" : "text-red-600";
+}
+
 export function TablaAdministracionEditable({
   proyectoId,
   filas,
@@ -37,6 +44,15 @@ export function TablaAdministracionEditable({
   filas: { concepto: ConceptoAdministracion; importe: ImporteFilaAdministracion }[];
 }) {
   const [editandoId, setEditandoId] = useState<string | null>(null);
+
+  // Punto de referencia para el color (gris/verde/rojo): el P.U. que tenía
+  // cada concepto cuando esta tabla se cargó por primera vez en esta sesión
+  // — no se actualiza con cada guardado, así que el color se queda visible
+  // para saber cuáles ya se editaron (precisión de sesión, agosto 2026). Se
+  // reinicia con una recarga completa de la página.
+  const [baseline] = useState<Record<string, number | null>>(() =>
+    Object.fromEntries(filas.map((f) => [f.concepto.id, f.concepto.precioUnitarioContratista]))
+  );
 
   const totalAdm = filas.reduce((t, f) => t + f.importe.montoAdm, 0);
   const totalGeneral = filas.reduce((t, f) => t + f.importe.total, 0);
@@ -71,12 +87,13 @@ export function TablaAdministracionEditable({
                 <FormEditarPU
                   proyectoId={proyectoId}
                   concepto={concepto}
+                  original={baseline[concepto.id] ?? null}
                   onCancelar={() => setEditandoId(null)}
                   onGuardado={() => setEditandoId(null)}
                 />
               ) : (
                 <div className="flex items-center justify-end gap-2">
-                  <span>
+                  <span className={colorPU(concepto.precioUnitarioContratista, baseline[concepto.id] ?? null)}>
                     {concepto.precioUnitarioContratista !== null
                       ? formatMoney(concepto.precioUnitarioContratista)
                       : "—"}
@@ -118,40 +135,40 @@ export function TablaAdministracionEditable({
 // Los otros campos privados del concepto viajan como hidden para no
 // borrarlos: editarConceptoPrivado escribe lo que reciba, así que si este
 // formulario no los mandara, se perderían (precisión de sesión, agosto 2026).
+// Guarda en un solo paso: al terminar la Server Action con éxito, se cierra
+// el editor solo — no hace falta un segundo clic.
 function FormEditarPU({
   proyectoId,
   concepto,
+  original,
   onCancelar,
   onGuardado,
 }: {
   proyectoId: string;
   concepto: ConceptoAdministracion;
+  original: number | null;
   onCancelar: () => void;
   onGuardado: () => void;
 }) {
   const action = editarConceptoPrivadoAction.bind(null, concepto.id, proyectoId);
-  const [state, formAction, pending] = useActionState<FormState, FormData>(
-    action,
-    undefined
-  );
+  const [state, formAction, pending] = useActionState<
+    EditarConceptoPrivadoFormState,
+    FormData
+  >(action, undefined);
   const [stateAnterior, setStateAnterior] = useState(state);
   if (state !== stateAnterior) {
     setStateAnterior(state);
-    if (!state?.error) onGuardado();
+    if (state?.guardado) onGuardado();
   }
 
-  const original = concepto.precioUnitarioContratista;
-  const [texto, setTexto] = useState(original !== null ? String(original) : "");
+  const [texto, setTexto] = useState(
+    concepto.precioUnitarioContratista !== null ? String(concepto.precioUnitarioContratista) : ""
+  );
   const nuevo = texto === "" ? null : Number(texto);
-  // Comparación en vivo contra el valor que ya estaba guardado (el mismo que
-  // se ve en Contrato General) — gris si es igual, verde si lo subiste, rojo
-  // si lo bajaste. No es un segundo precio guardado en paralelo.
+  // Comparación en vivo contra el baseline de la sesión — gris si es igual,
+  // verde si lo subiste, rojo si lo bajaste.
   const color =
-    nuevo === null || original === null || nuevo === original || Number.isNaN(nuevo)
-      ? "text-[var(--foreground)]"
-      : nuevo > original
-        ? "text-emerald-600"
-        : "text-red-600";
+    nuevo === null || Number.isNaN(nuevo) ? "text-[var(--foreground)]" : colorPU(nuevo, original);
 
   return (
     <form action={formAction} className="flex flex-col items-end gap-1.5">
