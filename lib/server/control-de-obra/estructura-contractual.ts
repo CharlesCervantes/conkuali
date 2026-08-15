@@ -289,6 +289,10 @@ const DatosConceptoSchema = z.object({
   porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeAdministracion: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
+  // Copia editable propia de Contrato General Privado — no se captura al
+  // crear (nace igual al operativo, ver el campo en el schema de Prisma),
+  // pero sí se puede editar desde el modal completo.
+  precioUnitarioContratistaPrivado: z.coerce.number().nonnegative().optional().nullable(),
 });
 
 // El esquema del proyecto manda sobre lo que el cliente haya enviado: en
@@ -361,6 +365,14 @@ export async function crearConcepto(
   return concepto;
 }
 
+// Edición completa de un concepto — el modal "editar concepto" (Contrato
+// General y Contrato General Priv., solo Administrador/Director/Master) usa
+// esta única función para todos los campos, operativos y privados a la vez.
+// No se normaliza por esquema al editar (a diferencia de crearConcepto) —
+// hacerlo forzaría a null cualquier valor ya existente que no aplique al
+// esquema actual, y eso es exactamente lo que la precisión de sesión de
+// agosto 2026 prohíbe; los campos que no aplican simplemente no se muestran
+// en el formulario del modal.
 export async function editarConcepto(
   usuario: UsuarioSesion,
   id: string,
@@ -373,13 +385,6 @@ export async function editarConcepto(
   });
   if (!anterior) throw new RegistroNoEncontradoError("El concepto");
 
-  // No se normaliza por esquema aquí (a diferencia de crearConcepto) — hacerlo
-  // forzaría a null cualquier valor ya existente que no aplique al esquema
-  // actual, y eso es exactamente lo que la precisión de sesión de agosto 2026
-  // prohíbe. Esta función todavía no tiene ningún caller en la UI; la partición
-  // real por pestaña (qué campos son editables desde Contrato General vs.
-  // Contrato General Privado, cada uno con su propio esquema validado y sin
-  // tocar los campos del otro) se resuelve en la etapa de edición pendiente.
   const datos = DatosConceptoSchema.parse(datosCrudos);
   const concepto = await db.concepto.update({ where: { id }, data: datos });
 
@@ -394,6 +399,27 @@ export async function editarConcepto(
   });
 
   return concepto;
+}
+
+// Concepto completo (todos los campos, operativos y privados) + su
+// bitácora — lo que necesita el modal de edición. Mismo permiso que editar
+// (Administrador/Director/Master); no se separa lectura de escritura porque
+// el modal es de un único uso (ver el concepto = poder editarlo).
+export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId: string) {
+  const empresaId = requerirAdmin(usuario);
+  const concepto = await db.concepto.findFirst({
+    where: { id: conceptoId, partida: { proyecto: { empresaId } } },
+    include: { partida: { include: { proyecto: { select: { esquemaContractual: true } } } } },
+  });
+  if (!concepto) throw new RegistroNoEncontradoError("El concepto");
+
+  const bitacora = await db.registroAuditoria.findMany({
+    where: { entidad: "Concepto", entidadId: conceptoId },
+    orderBy: { createdAt: "desc" },
+    include: { usuario: { select: { nombre: true } } },
+  });
+
+  return { concepto, bitacora };
 }
 
 // ---------------------------------------------------------------------------

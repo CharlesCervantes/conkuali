@@ -5,6 +5,7 @@ import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/dinero";
+import { ModalEditarConcepto } from "./modal-editar-concepto";
 import {
   editarConceptoPrivadoAction,
   type EditarConceptoPrivadoFormState,
@@ -40,81 +41,97 @@ export function TablaPrivadaEditable({
   mostrarIndirectosHerramienta: boolean;
 }) {
   const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [conceptoModalId, setConceptoModalId] = useState<string | null>(null);
 
   return (
-    <Table>
-      <Thead>
-        <Tr>
-          <Th>Concepto</Th>
-          {mostrarIndirectosHerramienta && <Th className="text-right">Indirectos</Th>}
-          {mostrarIndirectosHerramienta && <Th className="text-right">Herramienta</Th>}
-          <Th className="text-right">%</Th>
-          <Th className="text-right">P.U. recomendado</Th>
-          <Th className="text-right">P.U. cliente</Th>
-          <Th className="text-right">Importe</Th>
-          <Th></Th>
-        </Tr>
-      </Thead>
-      <tbody>
-        {conceptos.map(({ concepto, importes }) =>
-          editandoId === concepto.id ? (
-            <Tr key={concepto.id}>
-              <Td colSpan={mostrarIndirectosHerramienta ? 7 : 5} className="bg-[var(--brand)]/[0.02]">
-                <FormEditarConceptoPrivado
-                  proyectoId={proyectoId}
-                  concepto={concepto}
-                  esquemaContractual={esquemaContractual}
-                  onCancelar={() => setEditandoId(null)}
-                  onGuardado={() => setEditandoId(null)}
-                />
-              </Td>
-            </Tr>
-          ) : (
-            <Tr key={concepto.id}>
-              <Td className="font-medium">{concepto.descripcion}</Td>
-              {mostrarIndirectosHerramienta && (
-                <Td className="text-right tabular-nums text-[var(--muted)]">
-                  {formatMoney(importes.costoIndirectos)}
+    <>
+      <Table>
+        <Thead>
+          <Tr>
+            <Th>Concepto</Th>
+            {mostrarIndirectosHerramienta && <Th className="text-right">Indirectos</Th>}
+            {mostrarIndirectosHerramienta && <Th className="text-right">Herramienta</Th>}
+            <Th className="text-right">%</Th>
+            <Th className="text-right">P.U. recomendado</Th>
+            <Th className="text-right">P.U. cliente</Th>
+            <Th className="text-right">Importe</Th>
+            <Th></Th>
+          </Tr>
+        </Thead>
+        <tbody>
+          {conceptos.map(({ concepto, importes }) =>
+            editandoId === concepto.id ? (
+              <Tr key={concepto.id}>
+                <Td colSpan={mostrarIndirectosHerramienta ? 7 : 5} className="bg-[var(--brand)]/[0.02]">
+                  <FormEditarConceptoPrivado
+                    proyectoId={proyectoId}
+                    concepto={concepto}
+                    esquemaContractual={esquemaContractual}
+                    onCancelar={() => setEditandoId(null)}
+                    onGuardado={() => setEditandoId(null)}
+                  />
                 </Td>
-              )}
-              {mostrarIndirectosHerramienta && (
-                <Td className="text-right tabular-nums text-[var(--muted)]">
-                  {formatMoney(importes.costoHerramienta)}
-                </Td>
-              )}
-              <Td className="text-right tabular-nums text-[var(--muted)]">
-                {importes.porcentajeAplicado !== null
-                  ? `${importes.porcentajeAplicado.toLocaleString("es-MX")}%`
-                  : "—"}
-              </Td>
-              <Td className="text-right tabular-nums text-[var(--muted)]">
-                {formatMoney(importes.precioUnitarioRecomendado)}
-              </Td>
-              <Td className="text-right tabular-nums">
-                <span className={importes.tieneOverride ? "font-semibold" : ""}>
-                  {formatMoney(importes.precioUnitarioCliente)}
-                </span>
-                {importes.tieneOverride && (
-                  <span className="ml-1.5 text-xs text-[var(--muted)]">(comercial)</span>
+              </Tr>
+            ) : (
+              <Tr
+                key={concepto.id}
+                onClick={() => setConceptoModalId(concepto.id)}
+                title="Clic para editar el concepto"
+                className="cursor-pointer transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.05]"
+              >
+                <Td className="font-medium">{concepto.descripcion}</Td>
+                {mostrarIndirectosHerramienta && (
+                  <Td className="text-right tabular-nums text-[var(--muted)]">
+                    {formatMoney(importes.costoIndirectos)}
+                  </Td>
                 )}
-              </Td>
-              <Td className="text-right font-medium tabular-nums">
-                {formatMoney(importes.importeTotal)}
-              </Td>
-              <Td className="text-right">
-                <button
-                  type="button"
-                  onClick={() => setEditandoId(concepto.id)}
-                  className="text-xs font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
-                >
-                  Editar
-                </button>
-              </Td>
-            </Tr>
-          )
-        )}
-      </tbody>
-    </Table>
+                {mostrarIndirectosHerramienta && (
+                  <Td className="text-right tabular-nums text-[var(--muted)]">
+                    {formatMoney(importes.costoHerramienta)}
+                  </Td>
+                )}
+                <Td className="text-right tabular-nums text-[var(--muted)]">
+                  {importes.porcentajeAplicado !== null
+                    ? `${importes.porcentajeAplicado.toLocaleString("es-MX")}%`
+                    : "—"}
+                </Td>
+                <Td className="text-right tabular-nums text-[var(--muted)]">
+                  {formatMoney(importes.precioUnitarioRecomendado)}
+                </Td>
+                <Td className="text-right tabular-nums">
+                  <span className={importes.tieneOverride ? "font-semibold" : ""}>
+                    {formatMoney(importes.precioUnitarioCliente)}
+                  </span>
+                  {importes.tieneOverride && (
+                    <span className="ml-1.5 text-xs text-[var(--muted)]">(comercial)</span>
+                  )}
+                </Td>
+                <Td className="text-right font-medium tabular-nums">
+                  {formatMoney(importes.importeTotal)}
+                </Td>
+                <Td className="text-right" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    type="button"
+                    onClick={() => setEditandoId(concepto.id)}
+                    className="text-xs font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
+                  >
+                    Editar
+                  </button>
+                </Td>
+              </Tr>
+            )
+          )}
+        </tbody>
+      </Table>
+
+      {conceptoModalId && (
+        <ModalEditarConcepto
+          proyectoId={proyectoId}
+          conceptoId={conceptoModalId}
+          onClose={() => setConceptoModalId(null)}
+        />
+      )}
+    </>
   );
 }
 

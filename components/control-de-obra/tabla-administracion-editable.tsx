@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/dinero";
 import { cn } from "@/lib/cn";
+import { ModalEditarConcepto } from "./modal-editar-concepto";
 import {
   editarConceptoPrivadoAction,
   type EditarConceptoPrivadoFormState,
@@ -48,6 +49,7 @@ export function TablaAdministracionEditable({
   filas: { concepto: ConceptoAdministracion; importe: ImporteFilaAdministracion }[];
 }) {
   const [editandoId, setEditandoId] = useState<string | null>(null);
+  const [conceptoModalId, setConceptoModalId] = useState<string | null>(null);
 
   const totalAdm = filas.reduce((t, f) => t + f.importe.montoAdm, 0);
   const totalGeneral = filas.reduce((t, f) => t + f.importe.total, 0);
@@ -59,68 +61,83 @@ export function TablaAdministracionEditable({
       : "% Administración";
 
   return (
-    <Table>
-      <Thead>
-        <Tr>
-          <Th>Concepto</Th>
-          <Th>Unidad</Th>
-          <Th className="text-right">Cantidad</Th>
-          <Th className="text-right">P.U.</Th>
-          <Th className="text-right">Subtotal</Th>
-        </Tr>
-      </Thead>
-      <tbody>
-        {filas.map(({ concepto, importe }) => {
-          const puActual = concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista;
-          return (
-            <Tr key={concepto.id}>
-              <Td className="font-medium">{concepto.descripcion}</Td>
-              <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
-              <Td className="text-right tabular-nums">
-                {concepto.cantidad.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
-              </Td>
-              <Td className="text-right tabular-nums">
-                {editandoId === concepto.id ? (
-                  <FormEditarPU
-                    proyectoId={proyectoId}
-                    concepto={concepto}
-                    onCancelar={() => setEditandoId(null)}
-                    onGuardado={() => setEditandoId(null)}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setEditandoId(concepto.id)}
-                    title="Clic para editar"
-                    className={cn(
-                      "-my-1 rounded-md px-2 py-1 transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.08]",
-                      colorPU(puActual, concepto.precioUnitarioContratista)
-                    )}
-                  >
-                    {puActual !== null ? formatMoney(puActual) : "—"}
-                  </button>
-                )}
-              </Td>
-              <Td className="text-right font-medium tabular-nums">{formatMoney(importe.subtotal)}</Td>
-            </Tr>
-          );
-        })}
-      </tbody>
-      <tfoot>
-        <Tr className="bg-black/[0.015]">
-          <Td colSpan={4} className="text-right text-sm text-[var(--muted)]">
-            {etiquetaAdm}
-          </Td>
-          <Td className="text-right tabular-nums">{formatMoney(totalAdm)}</Td>
-        </Tr>
-        <Tr className="bg-black/[0.03]">
-          <Td colSpan={4} className="text-right text-sm font-semibold text-[var(--foreground)]">
-            Gran total
-          </Td>
-          <Td className="text-right font-bold tabular-nums">{formatMoney(totalGeneral)}</Td>
-        </Tr>
-      </tfoot>
-    </Table>
+    <>
+      <Table>
+        <Thead>
+          <Tr>
+            <Th>Concepto</Th>
+            <Th>Unidad</Th>
+            <Th className="text-right">Cantidad</Th>
+            <Th className="text-right">P.U.</Th>
+            <Th className="text-right">Subtotal</Th>
+          </Tr>
+        </Thead>
+        <tbody>
+          {filas.map(({ concepto, importe }) => {
+            const puActual = concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista;
+            return (
+              <Tr
+                key={concepto.id}
+                onClick={() => setConceptoModalId(concepto.id)}
+                title="Clic para editar el concepto"
+                className="cursor-pointer transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.05]"
+              >
+                <Td className="font-medium">{concepto.descripcion}</Td>
+                <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
+                <Td className="text-right tabular-nums">
+                  {concepto.cantidad.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
+                </Td>
+                <Td className="text-right tabular-nums" onClick={(e) => e.stopPropagation()}>
+                  {editandoId === concepto.id ? (
+                    <FormEditarPU
+                      proyectoId={proyectoId}
+                      concepto={concepto}
+                      onCancelar={() => setEditandoId(null)}
+                      onGuardado={() => setEditandoId(null)}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setEditandoId(concepto.id)}
+                      title="Clic para editar"
+                      className={cn(
+                        "-my-1 rounded-md px-2 py-1 transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.08]",
+                        colorPU(puActual, concepto.precioUnitarioContratista)
+                      )}
+                    >
+                      {puActual !== null ? formatMoney(puActual) : "—"}
+                    </button>
+                  )}
+                </Td>
+                <Td className="text-right font-medium tabular-nums">{formatMoney(importe.subtotal)}</Td>
+              </Tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <Tr className="bg-black/[0.015]">
+            <Td colSpan={4} className="text-right text-sm text-[var(--muted)]">
+              {etiquetaAdm}
+            </Td>
+            <Td className="text-right tabular-nums">{formatMoney(totalAdm)}</Td>
+          </Tr>
+          <Tr className="bg-black/[0.03]">
+            <Td colSpan={4} className="text-right text-sm font-semibold text-[var(--foreground)]">
+              Gran total
+            </Td>
+            <Td className="text-right font-bold tabular-nums">{formatMoney(totalGeneral)}</Td>
+          </Tr>
+        </tfoot>
+      </Table>
+
+      {conceptoModalId && (
+        <ModalEditarConcepto
+          proyectoId={proyectoId}
+          conceptoId={conceptoModalId}
+          onClose={() => setConceptoModalId(null)}
+        />
+      )}
+    </>
   );
 }
 
@@ -162,7 +179,11 @@ function FormEditarPU({
       : colorPU(nuevo, concepto.precioUnitarioContratista);
 
   return (
-    <form action={formAction} className="flex flex-col items-end gap-1.5">
+    <form
+      action={formAction}
+      onClick={(e) => e.stopPropagation()}
+      className="flex flex-col items-end gap-1.5"
+    >
       <input
         type="hidden"
         name="precioUnitarioClienteOverride"

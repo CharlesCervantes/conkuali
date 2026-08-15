@@ -8,7 +8,9 @@ import {
   crearConcepto,
   crearContratoContratista,
   asignarConcepto,
+  editarConcepto,
   editarConceptoPrivado,
+  obtenerConceptoDetalle,
   RegistroNoEncontradoError,
 } from "@/lib/server/control-de-obra/estructura-contractual";
 import {
@@ -184,6 +186,112 @@ export async function editarConceptoPrivadoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
+  return { guardado: true };
+}
+
+// ---------------------------------------------------------------------------
+// Modal "editar concepto" — Contrato General y Contrato General Priv., solo
+// Administrador/Director/Master (mismo permiso que obtenerConceptoDetalle /
+// editarConcepto en el servicio).
+// ---------------------------------------------------------------------------
+
+function numOrNull(valor: { toString(): string } | null): number | null {
+  return valor === null ? null : Number(valor);
+}
+
+export type ConceptoDetalle = {
+  id: string;
+  descripcion: string;
+  unidad: string;
+  cantidadContratada: number;
+  notas: string | null;
+  precioUnitarioContratista: number | null;
+  precioUnitarioMateriales: number | null;
+  precioUnitarioIndirectos: number | null;
+  precioUnitarioHerramienta: number | null;
+  porcentajeUtilidad: number | null;
+  porcentajeAdministracion: number | null;
+  precioUnitarioClienteOverride: number | null;
+  precioUnitarioContratistaPrivado: number | null;
+  esquemaContractual: "PRECIO_ALZADO" | "ADMINISTRACION" | null;
+};
+
+export type BitacoraEntrada = {
+  id: string;
+  accion: string;
+  usuarioNombre: string | null;
+  createdAt: string;
+};
+
+// Se llama directamente desde el modal cliente (no vía <form>) — por eso
+// regresa { concepto, bitacora } o { error }, en vez del patrón FormState de
+// useActionState. Todos los campos Decimal se convierten a number aquí mismo
+// — no son serializables cruzando de Server Action a Client Component (igual
+// que Avance de obra).
+export async function obtenerConceptoDetalleAction(
+  conceptoId: string
+): Promise<{ concepto: ConceptoDetalle; bitacora: BitacoraEntrada[] } | { error: string }> {
+  const usuario = await requireSession();
+  try {
+    const { concepto, bitacora } = await obtenerConceptoDetalle(usuario, conceptoId);
+    return {
+      concepto: {
+        id: concepto.id,
+        descripcion: concepto.descripcion,
+        unidad: concepto.unidad,
+        cantidadContratada: Number(concepto.cantidadContratada),
+        notas: concepto.notas,
+        precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
+        precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
+        precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
+        precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
+        porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
+        porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
+        precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
+        precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
+        esquemaContractual: concepto.partida.proyecto.esquemaContractual,
+      },
+      bitacora: bitacora.map((b) => ({
+        id: b.id,
+        accion: b.accion,
+        usuarioNombre: b.usuario?.nombre ?? null,
+        createdAt: b.createdAt.toISOString(),
+      })),
+    };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export type EditarConceptoCompletoFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function editarConceptoCompletoAction(
+  conceptoId: string,
+  proyectoId: string,
+  _state: EditarConceptoCompletoFormState,
+  formData: FormData
+): Promise<EditarConceptoCompletoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarConcepto(usuario, conceptoId, {
+      descripcion: formData.get("descripcion"),
+      unidad: formData.get("unidad"),
+      cantidadContratada: formData.get("cantidadContratada"),
+      notas: opcional(formData.get("notas")),
+      precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
+      precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
+      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
+      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
+      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
+      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
+      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
+      precioUnitarioContratistaPrivado: opcional(formData.get("precioUnitarioContratistaPrivado")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
   revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
   return { guardado: true };
 }

@@ -1,8 +1,8 @@
 import { Card } from "@/components/ui/card";
-import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { FormNuevaPartida } from "./form-nueva-partida";
 import { FormNuevoConcepto } from "./form-nuevo-concepto";
 import { IconoPartida } from "./icono-partida";
+import { TablaOperativaEditable, type ConceptoOperativoPlano } from "./tabla-operativa-editable";
 import { formatMoney } from "@/lib/dinero";
 import type { obtenerPartidasProyecto } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
@@ -10,8 +10,22 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 type Partidas = Awaited<ReturnType<typeof obtenerPartidasProyecto>>;
 type Concepto = Partidas[number]["conceptos"][number];
 
-function cant(valor: number): string {
-  return valor.toLocaleString("es-MX", { maximumFractionDigits: 3 });
+// Nada de Decimal cruza hacia TablaOperativaEditable ("use client") — se
+// convierte a number aquí, en el server component (mismo motivo que Avance
+// de obra y Contrato General Privado).
+function aConceptoPlano(concepto: Concepto): ConceptoOperativoPlano {
+  return {
+    id: concepto.id,
+    descripcion: concepto.descripcion,
+    unidad: concepto.unidad,
+    cantidadContratada: Number(concepto.cantidadContratada),
+    precioUnitarioContratista:
+      concepto.precioUnitarioContratista !== null ? Number(concepto.precioUnitarioContratista) : null,
+    precioUnitarioMateriales:
+      concepto.precioUnitarioMateriales !== null ? Number(concepto.precioUnitarioMateriales) : null,
+    porcentajeAdministracion:
+      concepto.porcentajeAdministracion !== null ? Number(concepto.porcentajeAdministracion) : null,
+  };
 }
 
 // Subtotal operativo = cantidad × (P.U. + Materiales si Precio Alzado). Nunca
@@ -157,13 +171,15 @@ export function ContratoGeneralView({
 
               <div className="border-t border-[var(--border)] px-5 py-4 space-y-5">
                 {partida.conceptos.length > 0 && (
-                  <TablaOperativa
-                    conceptos={partida.conceptos}
+                  <TablaOperativaEditable
+                    proyectoId={proyectoId}
+                    conceptos={partida.conceptos.map(aConceptoPlano)}
                     esPrecioAlzado={esPrecioAlzado}
                     esAdministracion={esAdministracion}
                     porcentajeAdministracionDefault={porcentajeAdministracionDefault}
                     subtotal={subtotal}
                     montoAdm={montoAdm}
+                    puedeAdministrar={puedeAdministrar}
                   />
                 )}
 
@@ -258,97 +274,3 @@ function Metrica({ label, valor }: { label: string; valor: number }) {
   );
 }
 
-function TablaOperativa({
-  conceptos,
-  esPrecioAlzado,
-  esAdministracion,
-  porcentajeAdministracionDefault,
-  subtotal,
-  montoAdm,
-}: {
-  conceptos: Concepto[];
-  esPrecioAlzado: boolean;
-  esAdministracion: boolean;
-  porcentajeAdministracionDefault: number | null;
-  subtotal: number;
-  montoAdm: number;
-}) {
-  const porcentajes = new Set(
-    conceptos.map((c) => porcentajeAdministracionEfectivo(c, porcentajeAdministracionDefault))
-  );
-  const unicoPorcentaje = porcentajes.size === 1 ? [...porcentajes][0] : null;
-  const etiquetaAdm =
-    unicoPorcentaje !== null && unicoPorcentaje !== undefined
-      ? `% Administración (${unicoPorcentaje.toLocaleString("es-MX")}%)`
-      : "% Administración";
-
-  return (
-    <Table>
-      <Thead>
-        <Tr>
-          <Th>Concepto</Th>
-          <Th>Unidad</Th>
-          <Th className="text-right">Cantidad</Th>
-          <Th className="text-right">P.U.</Th>
-          {esPrecioAlzado && <Th className="text-right">P.U. materiales</Th>}
-          <Th className="text-right">Subtotal</Th>
-        </Tr>
-      </Thead>
-      <tbody>
-        {conceptos.map((concepto) => (
-          <Tr key={concepto.id}>
-            <Td className="font-medium">{concepto.descripcion}</Td>
-            <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
-            <Td className="text-right tabular-nums">{cant(Number(concepto.cantidadContratada))}</Td>
-            <Td className="text-right tabular-nums text-[var(--muted)]">
-              {concepto.precioUnitarioContratista !== null
-                ? formatMoney(concepto.precioUnitarioContratista)
-                : "—"}
-            </Td>
-            {esPrecioAlzado && (
-              <Td className="text-right tabular-nums text-[var(--muted)]">
-                {concepto.precioUnitarioMateriales !== null
-                  ? formatMoney(concepto.precioUnitarioMateriales)
-                  : "—"}
-              </Td>
-            )}
-            <Td className="text-right font-medium tabular-nums">
-              {formatMoney(subtotalOperativo(concepto, esPrecioAlzado))}
-            </Td>
-          </Tr>
-        ))}
-      </tbody>
-      <tfoot>
-        <Tr className="bg-black/[0.015]">
-          <Td
-            colSpan={esPrecioAlzado ? 5 : 4}
-            className="text-right text-sm font-medium text-[var(--muted)]"
-          >
-            {esPrecioAlzado
-              ? "Presupuesto de partida (contratista + materiales)"
-              : "Importe contratado (mano de obra)"}
-          </Td>
-          <Td className="text-right font-semibold tabular-nums">{formatMoney(subtotal)}</Td>
-        </Tr>
-        {esAdministracion && (
-          <>
-            <Tr className="bg-black/[0.015]">
-              <Td colSpan={4} className="text-right text-sm text-[var(--muted)]">
-                {etiquetaAdm}
-              </Td>
-              <Td className="text-right tabular-nums">{formatMoney(montoAdm)}</Td>
-            </Tr>
-            <Tr className="bg-black/[0.03]">
-              <Td colSpan={4} className="text-right text-sm font-semibold text-[var(--foreground)]">
-                Total
-              </Td>
-              <Td className="text-right font-bold tabular-nums">
-                {formatMoney(subtotal + montoAdm)}
-              </Td>
-            </Tr>
-          </>
-        )}
-      </tfoot>
-    </Table>
-  );
-}
