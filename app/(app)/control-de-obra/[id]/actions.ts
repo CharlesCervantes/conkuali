@@ -8,6 +8,7 @@ import {
   crearConcepto,
   crearContratoContratista,
   asignarConcepto,
+  editarConceptoPrivado,
   RegistroNoEncontradoError,
 } from "@/lib/server/control-de-obra/estructura-contractual";
 import {
@@ -153,6 +154,28 @@ export async function cambiarEstatusAprobacionAvanceAction(
   revalidatePath(`/control-de-obra/${proyectoId}/avance`);
   revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
   revalidatePath("/control-de-obra");
+}
+
+export async function editarConceptoPrivadoAction(
+  conceptoId: string,
+  proyectoId: string,
+  _state: FormState,
+  formData: FormData
+): Promise<FormState> {
+  const usuario = await requireSession();
+  try {
+    await editarConceptoPrivado(usuario, conceptoId, {
+      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
+      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
+      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
+      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
+      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
+  return undefined;
 }
 
 export async function asignarConceptoAction(

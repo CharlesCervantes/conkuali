@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
+import { puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import {
   obtenerProyecto,
   ProyectoNoEncontradoError,
@@ -46,6 +47,9 @@ export default async function ProyectoLayout({
           tabs={[
             { href: `/control-de-obra/${id}`, label: "Resumen" },
             { href: `/control-de-obra/${id}/partidas`, label: "Contrato General" },
+            ...(puedeVerContratoGeneralPrivado(usuario)
+              ? [{ href: `/control-de-obra/${id}/contrato-privado`, label: "Contrato General Priv." }]
+              : []),
             { href: `/control-de-obra/${id}/contratistas`, label: "Contratistas" },
             { href: `/control-de-obra/${id}/avance`, label: "Avance de obra" },
           ]}

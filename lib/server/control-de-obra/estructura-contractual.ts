@@ -40,14 +40,55 @@ export async function obtenerEstructuraContractual(
   return { partidas, contratos };
 }
 
-// Solo lo que necesita la pestaña "Partidas de obra": qué se ejecuta y
-// cuánto — sin quién lo ejecuta ni a qué precio (eso vive en Contratistas).
+// Solo lo que necesita la pestaña "Contrato General" (operativa, visible a
+// los 4 roles): descripción, unidad, cantidad, P.U., materiales — nunca
+// Indirectos/Herramienta/%/precio comercial. La protección de lo privado se
+// aplica aquí, en el select de la consulta — no solo ocultando columnas en el
+// componente (sección 49.6/49.9 de la documentación de negocio).
 export async function obtenerPartidasProyecto(
   usuario: UsuarioSesion,
   proyectoId: string
 ) {
   await obtenerProyecto(usuario, proyectoId);
+  return partidasConConceptosOperativo(proyectoId);
+}
+
+// Lo que necesita la pestaña "Contrato General Priv.": la estructura completa
+// (incluye los campos privados). Quién puede llamar a esto se valida en la
+// página (puedeVerContratoGeneralPrivado), no aquí — igual que
+// obtenerPartidasProyecto no valida por sí sola quién puede ver lo operativo,
+// porque eso ya es público para las 4 roles.
+export async function obtenerPartidasProyectoPrivado(
+  usuario: UsuarioSesion,
+  proyectoId: string
+) {
+  await obtenerProyecto(usuario, proyectoId);
   return partidasConConceptos(proyectoId);
+}
+
+function partidasConConceptosOperativo(proyectoId: string) {
+  return db.partida.findMany({
+    where: { proyectoId },
+    orderBy: { orden: "asc" },
+    select: {
+      id: true,
+      nombre: true,
+      orden: true,
+      conceptos: {
+        orderBy: { orden: "asc" },
+        select: {
+          id: true,
+          descripcion: true,
+          unidad: true,
+          cantidadContratada: true,
+          orden: true,
+          estatus: true,
+          precioUnitarioContratista: true,
+          precioUnitarioMateriales: true,
+        },
+      },
+    },
+  });
 }
 
 // Lo que necesita la pestaña "Contratistas": los contratos con sus conceptos
@@ -309,6 +350,76 @@ export async function editarConcepto(
   // tocar los campos del otro) se resuelve en la etapa de edición pendiente.
   const datos = DatosConceptoSchema.parse(datosCrudos);
   const concepto = await db.concepto.update({ where: { id }, data: datos });
+
+  await registrarAuditoria({
+    empresaId,
+    usuarioId: usuario.id,
+    entidad: "Concepto",
+    entidadId: concepto.id,
+    accion: "EDITAR",
+    valorAnterior: anterior,
+    valorNuevo: concepto,
+  });
+
+  return concepto;
+}
+
+// ---------------------------------------------------------------------------
+// Conceptos — capa privada (Contrato General Priv.)
+// ---------------------------------------------------------------------------
+
+const DatosConceptoPrivadoSchema = z.object({
+  precioUnitarioIndirectos: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
+  porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
+  porcentajeAdministracion: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
+});
+
+// Edita SOLO los campos privados de un concepto — nunca descripción, unidad,
+// cantidad ni P.U. de contratista (eso es Contrato General operativo, y es
+// además el valor que se congela al asignar un contratista — sección 4/19 del
+// rediseño: Contrato General Privado no debe ser una segunda fuente para
+// modificarlo). El mismo rol-set que puedeVerContratoGeneralPrivado
+// (requerirAdmin ya lo verifica hoy — ver esa función).
+//
+// Solo se escribe lo que aplica al esquema actual del proyecto — un campo que
+// no aplica ni siquiera se incluye en el `data` del update, así que un valor
+// legado que ya existiera (de un cambio de esquema anterior a esta regla, por
+// ejemplo) no se toca ni se destruye (precisión de sesión, agosto 2026).
+export async function editarConceptoPrivado(
+  usuario: UsuarioSesion,
+  id: string,
+  datosCrudos: unknown
+) {
+  const empresaId = requerirAdmin(usuario);
+  const anterior = await db.concepto.findFirst({
+    where: { id, partida: { proyecto: { empresaId } } },
+    include: { partida: { include: { proyecto: { select: { esquemaContractual: true } } } } },
+  });
+  if (!anterior) throw new RegistroNoEncontradoError("El concepto");
+
+  const datos = DatosConceptoPrivadoSchema.parse(datosCrudos);
+  const esquema = anterior.partida.proyecto.esquemaContractual;
+
+  const data: {
+    precioUnitarioClienteOverride: number | null;
+    precioUnitarioIndirectos?: number | null;
+    precioUnitarioHerramienta?: number | null;
+    porcentajeUtilidad?: number | null;
+    porcentajeAdministracion?: number | null;
+  } = {
+    precioUnitarioClienteOverride: datos.precioUnitarioClienteOverride ?? null,
+  };
+  if (esquema === "PRECIO_ALZADO") {
+    data.precioUnitarioIndirectos = datos.precioUnitarioIndirectos ?? null;
+    data.precioUnitarioHerramienta = datos.precioUnitarioHerramienta ?? null;
+    data.porcentajeUtilidad = datos.porcentajeUtilidad ?? null;
+  } else if (esquema === "ADMINISTRACION") {
+    data.porcentajeAdministracion = datos.porcentajeAdministracion ?? null;
+  }
+
+  const concepto = await db.concepto.update({ where: { id }, data });
 
   await registrarAuditoria({
     empresaId,
