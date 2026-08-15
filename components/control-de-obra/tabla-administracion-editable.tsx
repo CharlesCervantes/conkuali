@@ -23,7 +23,6 @@ export type ConceptoAdministracion = {
   cantidadContratadaPrivado: number | null;
   precioUnitarioContratista: number | null;
   precioUnitarioContratistaPrivado: number | null;
-  precioUnitarioClienteOverride: number | null;
   porcentajeAdministracion: number | null;
 };
 
@@ -188,11 +187,6 @@ function FormEditarPU({
       onClick={(e) => e.stopPropagation()}
       className="flex flex-col items-end gap-1.5"
     >
-      <input
-        type="hidden"
-        name="precioUnitarioClienteOverride"
-        value={concepto.precioUnitarioClienteOverride ?? ""}
-      />
       <input
         type="hidden"
         name="porcentajeAdministracion"

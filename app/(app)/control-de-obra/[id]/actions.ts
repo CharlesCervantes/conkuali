@@ -81,11 +81,6 @@ export async function crearConceptoAction(
       notas: opcional(formData.get("notas")),
       precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
       precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
-      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
-      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
-      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
-      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
-      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
     });
   } catch (error) {
     return { error: mensajeError(error) };
@@ -184,7 +179,6 @@ export async function editarConceptoPrivadoAction(
       precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
       porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
       porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
-      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
     });
   } catch (error) {
     return { error: mensajeError(error) };
@@ -221,7 +215,6 @@ export type ConceptoDetalle = {
   precioUnitarioHerramienta: number | null;
   porcentajeUtilidad: number | null;
   porcentajeAdministracion: number | null;
-  precioUnitarioClienteOverride: number | null;
   precioUnitarioContratistaPrivado: number | null;
   descripcionPrivado: string | null;
   unidadPrivado: string | null;
@@ -261,7 +254,6 @@ export async function obtenerConceptoDetalleAction(
         precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
         porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
-        precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
         descripcionPrivado: concepto.descripcionPrivado,
         unidadPrivado: concepto.unidadPrivado,

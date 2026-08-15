@@ -376,15 +376,6 @@ function FormularioPrivado({
               placeholder="Usa el default si se deja vacío"
             />
           )}
-          <Campo
-            label="Precio comercial final"
-            name="precioUnitarioClienteOverride"
-            type="number"
-            step="0.01"
-            min="0"
-            defaultValue={concepto.precioUnitarioClienteOverride ?? undefined}
-            placeholder="Opcional — si no, se usa el recomendado"
-          />
         </div>
 
         <div className="flex items-center gap-3">

@@ -533,13 +533,6 @@ model Concepto {
   porcentajeUtilidad       Decimal? @db.Decimal(5, 2)
   porcentajeAdministracion Decimal? @db.Decimal(5, 2)
 
-  // Precio comercial final — decisión de Administrador/Director, no se puede
-  // derivar de nada, por eso SÍ se guarda (a diferencia del precio
-  // recomendado, que siempre se calcula en lectura desde los campos de
-  // arriba). Precio final al cliente = precioUnitarioClienteOverride ??
-  // precioCalculado.
-  precioUnitarioClienteOverride Decimal? @db.Decimal(14, 2)
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

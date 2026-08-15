@@ -92,8 +92,7 @@ type CamposDecimalConcepto =
   | "precioUnitarioIndirectos"
   | "precioUnitarioHerramienta"
   | "porcentajeUtilidad"
-  | "porcentajeAdministracion"
-  | "precioUnitarioClienteOverride";
+  | "porcentajeAdministracion";
 
 export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
   AvanceCalculado & {
@@ -104,7 +103,6 @@ export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
     precioUnitarioHerramienta: number | null;
     porcentajeUtilidad: number | null;
     porcentajeAdministracion: number | null;
-    precioUnitarioClienteOverride: number | null;
     anterior: number;
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
@@ -171,7 +169,6 @@ export async function obtenerAvanceSemanal(
         precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
         porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
-        precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,

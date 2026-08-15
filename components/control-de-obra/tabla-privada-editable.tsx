@@ -29,7 +29,6 @@ export type ConceptoPrivado = {
   precioUnitarioHerramienta: number | null;
   porcentajeUtilidad: number | null;
   porcentajeAdministracion: number | null;
-  precioUnitarioClienteOverride: number | null;
 };
 
 export function TablaPrivadaEditable({
@@ -56,7 +55,6 @@ export function TablaPrivadaEditable({
             {mostrarIndirectosHerramienta && <Th className="text-right">Herramienta</Th>}
             <Th className="text-right">%</Th>
             <Th className="text-right">P.U. recomendado</Th>
-            <Th className="text-right">P.U. cliente</Th>
             <Th className="text-right">Importe</Th>
             <Th></Th>
           </Tr>
@@ -65,7 +63,7 @@ export function TablaPrivadaEditable({
           {conceptos.map(({ concepto, importes }) =>
             editandoId === concepto.id ? (
               <Tr key={concepto.id}>
-                <Td colSpan={mostrarIndirectosHerramienta ? 7 : 5} className="bg-[var(--brand)]/[0.02]">
+                <Td colSpan={mostrarIndirectosHerramienta ? 6 : 4} className="bg-[var(--brand)]/[0.02]">
                   <FormEditarConceptoPrivado
                     proyectoId={proyectoId}
                     concepto={concepto}
@@ -100,14 +98,6 @@ export function TablaPrivadaEditable({
                 </Td>
                 <Td className="text-right tabular-nums text-[var(--muted)]">
                   {formatMoney(importes.precioUnitarioRecomendado)}
-                </Td>
-                <Td className="text-right tabular-nums">
-                  <span className={importes.tieneOverride ? "font-semibold" : ""}>
-                    {formatMoney(importes.precioUnitarioCliente)}
-                  </span>
-                  {importes.tieneOverride && (
-                    <span className="ml-1.5 text-xs text-[var(--muted)]">(comercial)</span>
-                  )}
                 </Td>
                 <Td className="text-right font-medium tabular-nums">
                   {formatMoney(importes.importeTotal)}
@@ -210,12 +200,6 @@ function FormEditarConceptoPrivado({
             placeholder="Usa el default si se deja vacío"
           />
         )}
-        <CampoPrivado
-          label="Precio comercial final"
-          name="precioUnitarioClienteOverride"
-          defaultValue={concepto.precioUnitarioClienteOverride}
-          placeholder="Opcional — si no, se usa el recomendado"
-        />
       </div>
 
       <div className="flex items-center gap-3">

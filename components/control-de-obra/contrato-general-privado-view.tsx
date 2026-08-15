@@ -52,7 +52,6 @@ export function ContratoGeneralPrivadoView({
           precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
           porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
           porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
-          precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         };
         // Descripción/unidad/cantidad de Privado: nacen iguales a las de
         // Contrato General (null = todavía no se editaron aquí) y quedan

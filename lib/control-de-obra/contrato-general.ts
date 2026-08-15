@@ -2,7 +2,7 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
 // Nada de esto se guarda calculado — siempre se deriva en lectura a partir de
 // los componentes de costo del Concepto (docs/negocio/04-modulo-control-de-obra.md,
-// sección 49.9). El único valor comercial que sí se persiste es el override.
+// sección 49.9).
 
 export type CostosConcepto = {
   precioUnitarioContratista: number | null;
@@ -16,7 +16,6 @@ export type CostosConcepto = {
   precioUnitarioHerramienta: number | null;
   porcentajeUtilidad: number | null;
   porcentajeAdministracion: number | null;
-  precioUnitarioClienteOverride: number | null;
 };
 
 export type PorcentajesDefaultProyecto = {
@@ -36,8 +35,6 @@ export type PrecioConceptoCalculado = {
   porcentajeAplicado: number | null;
   montoPorcentaje: number;
   precioUnitarioRecomendado: number;
-  precioUnitarioCliente: number; // override ?? recomendado
-  tieneOverride: boolean;
 };
 
 export type ImportesConceptoCalculados = PrecioConceptoCalculado & {
@@ -47,7 +44,7 @@ export type ImportesConceptoCalculados = PrecioConceptoCalculado & {
   importeIndirectos: number;
   importeHerramienta: number;
   importeUtilidadOAdministracion: number;
-  importeTotal: number; // cantidad × precioUnitarioCliente
+  importeTotal: number; // cantidad × precioUnitarioRecomendado
   subtotalOperativo: number; // cantidad × (contratista + materiales) — lo que ve Supervisor
 };
 
@@ -69,7 +66,7 @@ export function calcularImportesConcepto(
     importeIndirectos: precios.costoIndirectos * cantidad,
     importeHerramienta: precios.costoHerramienta * cantidad,
     importeUtilidadOAdministracion: precios.montoPorcentaje * cantidad,
-    importeTotal: precios.precioUnitarioCliente * cantidad,
+    importeTotal: precios.precioUnitarioRecomendado * cantidad,
     subtotalOperativo: (precios.costoContratista + precios.costoMateriales) * cantidad,
   };
 }
@@ -102,8 +99,6 @@ export function calcularPrecioConcepto(
 
   const montoPorcentaje = costoBase * ((porcentajeAplicado ?? 0) / 100);
   const precioUnitarioRecomendado = costoBase + montoPorcentaje;
-  const tieneOverride = concepto.precioUnitarioClienteOverride !== null;
-  const precioUnitarioCliente = concepto.precioUnitarioClienteOverride ?? precioUnitarioRecomendado;
 
   return {
     costoContratista,
@@ -114,7 +109,5 @@ export function calcularPrecioConcepto(
     porcentajeAplicado,
     montoPorcentaje,
     precioUnitarioRecomendado,
-    precioUnitarioCliente,
-    tieneOverride,
   };
 }

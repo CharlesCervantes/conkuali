@@ -419,7 +419,6 @@ const DatosConceptoPrivadoSchema = z.object({
   precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeAdministracion: z.coerce.number().nonnegative().optional().nullable(),
-  precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
 });
 
 // Edita los campos privados de un concepto — descripción, unidad, cantidad y
@@ -461,7 +460,6 @@ export async function editarConceptoPrivado(
     unidadPrivado: string | null;
     cantidadContratadaPrivado: number | null;
     precioUnitarioContratistaPrivado: number | null;
-    precioUnitarioClienteOverride: number | null;
     precioUnitarioIndirectos?: number | null;
     precioUnitarioHerramienta?: number | null;
     porcentajeUtilidad?: number | null;
@@ -471,7 +469,6 @@ export async function editarConceptoPrivado(
     unidadPrivado: datos.unidadPrivado ?? null,
     cantidadContratadaPrivado: datos.cantidadContratadaPrivado ?? null,
     precioUnitarioContratistaPrivado: datos.precioUnitarioContratistaPrivado ?? null,
-    precioUnitarioClienteOverride: datos.precioUnitarioClienteOverride ?? null,
   };
   if (esquema === "PRECIO_ALZADO") {
     data.precioUnitarioIndirectos = datos.precioUnitarioIndirectos ?? null;
