@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { formatMoney } from "@/lib/dinero";
 import {
@@ -9,6 +10,7 @@ import {
   TablaAdministracionEditable,
   type ConceptoAdministracion,
 } from "./tabla-administracion-editable";
+import { IconoPartida } from "./icono-partida";
 import type { obtenerPartidasProyectoPrivado } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
@@ -75,6 +77,20 @@ export function ContratoGeneralPrivadoView({
   });
 
   const totalContratoVenta = partidasConCalculo.reduce((t, p) => t + p.totalPartida, 0);
+  const todosLosConceptos = partidasConCalculo.flatMap((p) => p.conceptos);
+  const totales = todosLosConceptos.reduce(
+    (t, c) => ({
+      contratistas: t.contratistas + c.importes.importeContratista,
+      materiales: t.materiales + c.importes.importeMateriales,
+      indirectos: t.indirectos + c.importes.importeIndirectos,
+      herramienta: t.herramienta + c.importes.importeHerramienta,
+      porcentaje: t.porcentaje + c.importes.importeUtilidadOAdministracion,
+    }),
+    { contratistas: 0, materiales: 0, indirectos: 0, herramienta: 0, porcentaje: 0 }
+  );
+  const porcentajeProyecto = esAdministracion
+    ? porcentajesDefault.administracion
+    : porcentajesDefault.utilidad;
 
   return (
     <div className="space-y-3">
@@ -82,6 +98,17 @@ export function ContratoGeneralPrivadoView({
         <Card className="p-6 text-sm text-[var(--muted)]">
           Todavía no hay partidas en este proyecto.
         </Card>
+      )}
+
+      {partidas.length > 0 && (
+        <ResumenContratoPrivado
+          proyectoId={proyectoId}
+          esAdministracion={esAdministracion}
+          mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
+          totales={totales}
+          totalContratoVenta={totalContratoVenta}
+          porcentajeProyecto={porcentajeProyecto}
+        />
       )}
 
       {partidasConCalculo.map(({ partida, conceptos, totalPartida, subtotalManoObra, montoAdm }, i) => (
@@ -92,8 +119,11 @@ export function ContratoGeneralPrivadoView({
         >
           <details>
             <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-              <span className="text-sm font-semibold text-[var(--foreground)]">
-                {partida.nombre}
+              <span className="flex items-center gap-3">
+                <IconoPartida icono={partida.icono} color={partida.color} />
+                <span className="text-sm font-semibold text-[var(--foreground)]">
+                  {partida.nombre}
+                </span>
               </span>
               {esAdministracion && conceptos.length > 0 ? (
                 <div className="flex items-center gap-4 text-xs text-[var(--muted)]">
@@ -155,17 +185,88 @@ export function ContratoGeneralPrivadoView({
           </details>
         </Card>
       ))}
+    </div>
+  );
+}
 
-      {partidas.length > 0 && (
-        <Card className="enter flex items-center justify-between px-5 py-4">
-          <span className="text-sm font-semibold text-[var(--foreground)]">
-            TOTAL CONTRATO
-          </span>
-          <span className="text-base font-semibold tabular-nums text-[var(--foreground)]">
+// Único lugar con el desglose comercial completo (Indirectos/Herramienta si
+// Precio Alzado, % Utilidad o % Administración, Total con precio comercial)
+// — esto es exactamente lo que separa Contrato General Privado de Contrato
+// General (sección 49.9). "Editar %" enlaza a Editar proyecto, que ya
+// permite cambiar el % default; no se duplica esa edición aquí.
+function ResumenContratoPrivado({
+  proyectoId,
+  esAdministracion,
+  mostrarIndirectosHerramienta,
+  totales,
+  totalContratoVenta,
+  porcentajeProyecto,
+}: {
+  proyectoId: string;
+  esAdministracion: boolean;
+  mostrarIndirectosHerramienta: boolean;
+  totales: {
+    contratistas: number;
+    materiales: number;
+    indirectos: number;
+    herramienta: number;
+    porcentaje: number;
+  };
+  totalContratoVenta: number;
+  porcentajeProyecto: number | null;
+}) {
+  const etiquetaPorcentaje = esAdministracion ? "% Administración" : "% Utilidad";
+
+  return (
+    <Card className="enter p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+            Resumen del contrato — Privado
+          </p>
+          <p className="mt-1 text-2xl font-semibold tabular-nums text-[var(--foreground)]">
             {formatMoney(totalContratoVenta)}
-          </span>
-        </Card>
-      )}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs text-[var(--muted)]">
+            {etiquetaPorcentaje}
+            {porcentajeProyecto !== null && ` (default)`}
+          </p>
+          <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
+            {porcentajeProyecto !== null ? `${porcentajeProyecto.toLocaleString("es-MX")}%` : "—"}
+          </p>
+          <Link
+            href={`/control-de-obra/${proyectoId}/editar`}
+            className="text-xs font-medium text-[var(--brand)] hover:underline"
+          >
+            Editar %
+          </Link>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-x-8 gap-y-3 border-t border-[var(--border)] pt-4">
+        <Metrica label="Contratistas" valor={totales.contratistas} />
+        <Metrica label="Materiales" valor={totales.materiales} />
+        {mostrarIndirectosHerramienta && (
+          <>
+            <Metrica label="Indirectos" valor={totales.indirectos} />
+            <Metrica label="Herramienta" valor={totales.herramienta} />
+          </>
+        )}
+        <Metrica label={etiquetaPorcentaje} valor={totales.porcentaje} />
+      </div>
+    </Card>
+  );
+}
+
+function Metrica({ label, valor }: { label: string; valor: number }) {
+  return (
+    <div>
+      <p className="text-xs text-[var(--muted)]">{label}</p>
+      <p className="text-base font-semibold tabular-nums text-[var(--foreground)]">
+        {formatMoney(valor)}
+      </p>
     </div>
   );
 }

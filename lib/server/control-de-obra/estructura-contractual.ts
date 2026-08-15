@@ -6,6 +6,7 @@ import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { ConceptoEstatus, EsquemaContractual } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
+import { CLAVES_ICONOS_PARTIDA, CLAVES_COLORES_PARTIDA } from "@/lib/control-de-obra/iconos-partida";
 
 export class RegistroNoEncontradoError extends Error {
   constructor(entidad: string) {
@@ -78,6 +79,8 @@ function partidasConConceptosOperativo(proyectoId: string) {
       id: true,
       nombre: true,
       orden: true,
+      icono: true,
+      color: true,
       conceptos: {
         orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
         select: {
@@ -203,9 +206,13 @@ export async function listarContratistasDisponibles(usuario: UsuarioSesion) {
 // Partidas
 // ---------------------------------------------------------------------------
 
+// icono/color se validan contra el catálogo curado — nunca un string libre
+// (evita que alguien mande cualquier valor directo a la API).
 const DatosPartidaSchema = z.object({
   nombre: z.string().trim().min(1, "El nombre de la partida es obligatorio."),
   orden: z.coerce.number().int().default(0),
+  icono: z.enum(CLAVES_ICONOS_PARTIDA as [string, ...string[]]).optional().nullable(),
+  color: z.enum(CLAVES_COLORES_PARTIDA as [string, ...string[]]).optional().nullable(),
 });
 
 export async function crearPartida(

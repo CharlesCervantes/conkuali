@@ -54,6 +54,8 @@ export async function crearPartidaAction(
     await crearPartida(usuario, proyectoId, {
       nombre: formData.get("nombre"),
       orden: formData.get("orden") || 0,
+      icono: opcional(formData.get("icono")),
+      color: opcional(formData.get("color")),
     });
   } catch (error) {
     return { error: mensajeError(error) };

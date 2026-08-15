@@ -2,6 +2,7 @@ import { Card } from "@/components/ui/card";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { FormNuevaPartida } from "./form-nueva-partida";
 import { FormNuevoConcepto } from "./form-nuevo-concepto";
+import { IconoPartida } from "./icono-partida";
 import { formatMoney } from "@/lib/dinero";
 import type { obtenerPartidasProyecto } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
@@ -66,12 +67,40 @@ export function ContratoGeneralView({
   const esPrecioAlzado = esquemaContractual === "PRECIO_ALZADO";
   const esAdministracion = esquemaContractual === "ADMINISTRACION";
 
+  const todosLosConceptos = partidas.flatMap((p) => p.conceptos);
+  const totalContratistas = todosLosConceptos.reduce(
+    (t, c) => t + Number(c.cantidadContratada) * (c.precioUnitarioContratista ? Number(c.precioUnitarioContratista) : 0),
+    0
+  );
+  const totalMateriales = esPrecioAlzado
+    ? todosLosConceptos.reduce(
+        (t, c) => t + Number(c.cantidadContratada) * (c.precioUnitarioMateriales ? Number(c.precioUnitarioMateriales) : 0),
+        0
+      )
+    : 0;
+  const subtotalGeneral = totalContratistas + totalMateriales;
+  const montoAdmGeneral = esAdministracion
+    ? todosLosConceptos.reduce((t, c) => t + montoAdministracion(c, porcentajeAdministracionDefault), 0)
+    : 0;
+
   return (
     <div className="space-y-3">
       {partidas.length === 0 && (
         <Card className="p-6 text-sm text-[var(--muted)]">
           Todavía no hay partidas en este proyecto.
         </Card>
+      )}
+
+      {partidas.length > 0 && (
+        <ResumenContrato
+          esPrecioAlzado={esPrecioAlzado}
+          esAdministracion={esAdministracion}
+          totalContratistas={totalContratistas}
+          totalMateriales={totalMateriales}
+          subtotalGeneral={subtotalGeneral}
+          montoAdmGeneral={montoAdmGeneral}
+          porcentajeAdministracionDefault={porcentajeAdministracionDefault}
+        />
       )}
 
       {partidas.map((partida, i) => {
@@ -94,8 +123,11 @@ export function ContratoGeneralView({
           >
             <details>
               <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-                <span className="text-sm font-semibold text-[var(--foreground)]">
-                  {partida.nombre}
+                <span className="flex items-center gap-3">
+                  <IconoPartida icono={partida.icono} color={partida.color} />
+                  <span className="text-sm font-semibold text-[var(--foreground)]">
+                    {partida.nombre}
+                  </span>
                 </span>
                 {esAdministracion && partida.conceptos.length > 0 ? (
                   <div className="flex items-center gap-4 text-xs text-[var(--muted)]">
@@ -160,6 +192,68 @@ export function ContratoGeneralView({
           <FormNuevaPartida proyectoId={proyectoId} />
         </Card>
       )}
+    </div>
+  );
+}
+
+// Solo componentes operativos (Contratistas/Materiales) — nunca % Utilidad,
+// P.U. Cliente ni Indirectos/Herramienta (eso es Contrato General Privado).
+// % Administración es la única excepción porque no es privado (ver arriba).
+function ResumenContrato({
+  esPrecioAlzado,
+  esAdministracion,
+  totalContratistas,
+  totalMateriales,
+  subtotalGeneral,
+  montoAdmGeneral,
+  porcentajeAdministracionDefault,
+}: {
+  esPrecioAlzado: boolean;
+  esAdministracion: boolean;
+  totalContratistas: number;
+  totalMateriales: number;
+  subtotalGeneral: number;
+  montoAdmGeneral: number;
+  porcentajeAdministracionDefault: number | null;
+}) {
+  return (
+    <Card className="enter p-5">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+        Resumen del contrato
+      </p>
+      <div className="mt-3 flex flex-wrap gap-x-8 gap-y-3">
+        <Metrica label="Contratistas" valor={totalContratistas} />
+        {esPrecioAlzado && <Metrica label="Materiales" valor={totalMateriales} />}
+        {esAdministracion && (
+          <Metrica
+            label={
+              porcentajeAdministracionDefault !== null
+                ? `% Administración (${porcentajeAdministracionDefault.toLocaleString("es-MX")}%)`
+                : "% Administración"
+            }
+            valor={montoAdmGeneral}
+          />
+        )}
+      </div>
+      <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-3">
+        <span className="text-sm font-medium text-[var(--muted)]">
+          {esAdministracion ? "Total (mano de obra + administración)" : "Subtotal directo (Contratistas + Materiales)"}
+        </span>
+        <span className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
+          {formatMoney(esAdministracion ? subtotalGeneral + montoAdmGeneral : subtotalGeneral)}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+function Metrica({ label, valor }: { label: string; valor: number }) {
+  return (
+    <div>
+      <p className="text-xs text-[var(--muted)]">{label}</p>
+      <p className="text-base font-semibold tabular-nums text-[var(--foreground)]">
+        {formatMoney(valor)}
+      </p>
     </div>
   );
 }

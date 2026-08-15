@@ -469,8 +469,17 @@ model Partida {
   proyectoId String
   nombre     String
   orden      Int      @default(0)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+
+  // Presentación visual — opcional, puramente decorativo. `icono` es una
+  // clave de un catálogo curado (no cualquier string libre), validada en el
+  // servicio contra lib/control-de-obra/iconos-partida.ts; `color` es un
+  // token del mismo catálogo. null = sin icono asignado (comportamiento
+  // actual, no afecta nada del modelo contractual).
+  icono String?
+  color String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   conceptos Concepto[]
 
