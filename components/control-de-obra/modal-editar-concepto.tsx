@@ -7,10 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
   obtenerConceptoDetalleAction,
-  editarConceptoCompletoAction,
+  editarConceptoEstructuralAction,
+  editarConceptoPrivadoAction,
   type ConceptoDetalle,
   type BitacoraEntrada,
-  type EditarConceptoCompletoFormState,
+  type EditarConceptoEstructuralFormState,
+  type EditarConceptoPrivadoFormState,
 } from "@/app/(app)/control-de-obra/[id]/actions";
 
 const ETIQUETA_ACCION: Record<string, string> = {
@@ -33,13 +35,18 @@ function formatFecha(iso: string): string {
   });
 }
 
+// Dos modos reales, cada uno con su propia acción de guardado — abrir desde
+// Contrato General nunca debe mostrar ni poder tocar nada de Privado, y
+// viceversa (decisión de sesión, agosto 2026).
 export function ModalEditarConcepto({
   proyectoId,
   conceptoId,
+  modo,
   onClose,
 }: {
   proyectoId: string;
   conceptoId: string;
+  modo: "operativo" | "privado";
   onClose: () => void;
 }) {
   const [estado, setEstado] = useState<
@@ -95,21 +102,75 @@ export function ModalEditarConcepto({
             </Button>
           </>
         )}
-        {estado.tipo === "listo" && (
-          <FormularioConcepto
-            proyectoId={proyectoId}
-            concepto={estado.concepto}
-            bitacora={estado.bitacora}
-            onClose={onClose}
-          />
-        )}
+        {estado.tipo === "listo" &&
+          (modo === "operativo" ? (
+            <FormularioOperativo
+              proyectoId={proyectoId}
+              concepto={estado.concepto}
+              bitacora={estado.bitacora}
+              onClose={onClose}
+            />
+          ) : (
+            <FormularioPrivado
+              proyectoId={proyectoId}
+              concepto={estado.concepto}
+              bitacora={estado.bitacora}
+              onClose={onClose}
+            />
+          ))}
       </Card>
     </div>,
     document.body
   );
 }
 
-function FormularioConcepto({
+function Encabezado({ titulo, partidaNombre, onClose }: { titulo: string; partidaNombre: string; onClose: () => void }) {
+  return (
+    <div className="mb-6 flex items-start justify-between gap-4">
+      <div>
+        <h2 className="text-lg font-semibold text-[var(--foreground)]">{titulo}</h2>
+        <p className="mt-0.5 text-xs font-medium text-[var(--muted)]">
+          Partida: <span className="text-[var(--foreground)]">{partidaNombre}</span>
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="text-sm text-[var(--muted)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function Bitacora({ bitacora }: { bitacora: BitacoraEntrada[] }) {
+  return (
+    <div className="mt-6 border-t border-[var(--border)] pt-4">
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+        Bitácora
+      </p>
+      {bitacora.length === 0 ? (
+        <p className="text-sm text-[var(--muted)]">Sin eventos registrados.</p>
+      ) : (
+        <ul className="space-y-2">
+          {bitacora.map((entrada) => (
+            <li key={entrada.id} className="text-xs text-[var(--muted)]">
+              <span className="font-medium text-[var(--foreground)]">
+                {entrada.usuarioNombre ?? "Usuario eliminado"}
+              </span>{" "}
+              — {ETIQUETA_ACCION[entrada.accion] ?? entrada.accion} · {formatFecha(entrada.createdAt)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Modo operativo (Contrato General) — SOLO descripción, unidad, cantidad,
+// P.U., P.U. materiales y notas. Nunca muestra ni envía nada de Privado.
+function FormularioOperativo({
   proyectoId,
   concepto,
   bitacora,
@@ -120,9 +181,9 @@ function FormularioConcepto({
   bitacora: BitacoraEntrada[];
   onClose: () => void;
 }) {
-  const action = editarConceptoCompletoAction.bind(null, concepto.id, proyectoId);
+  const action = editarConceptoEstructuralAction.bind(null, concepto.id, proyectoId);
   const [state, formAction, pending] = useActionState<
-    EditarConceptoCompletoFormState,
+    EditarConceptoEstructuralFormState,
     FormData
   >(action, undefined);
   const [stateAnterior, setStateAnterior] = useState(state);
@@ -132,26 +193,12 @@ function FormularioConcepto({
   }
 
   const esPrecioAlzado = concepto.esquemaContractual === "PRECIO_ALZADO";
-  const esAdministracion = concepto.esquemaContractual === "ADMINISTRACION";
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <h2 className="text-lg font-semibold text-[var(--foreground)]">Editar concepto</h2>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-sm text-[var(--muted)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
-        >
-          ✕
-        </button>
-      </div>
+    <div>
+      <Encabezado titulo="Editar concepto — Contrato General" partidaNombre={concepto.partidaNombre} onClose={onClose} />
 
       <form action={formAction} className="space-y-4">
-        <p className="text-xs font-medium text-[var(--muted)]">
-          Partida: <span className="text-[var(--foreground)]">{concepto.partidaNombre}</span>
-        </p>
-
         <Campo label="Descripción" name="descripcion" defaultValue={concepto.descripcion} required />
 
         <div className="grid grid-cols-2 gap-3">
@@ -167,96 +214,25 @@ function FormularioConcepto({
           />
         </div>
 
-        <div className="border-t border-[var(--border)] pt-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Contrato General
-          </p>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-3">
+          <Campo
+            label="P.U."
+            name="precioUnitarioContratista"
+            type="number"
+            step="0.01"
+            min="0"
+            defaultValue={concepto.precioUnitarioContratista ?? undefined}
+          />
+          {esPrecioAlzado && (
             <Campo
-              label="P.U."
-              name="precioUnitarioContratista"
+              label="P.U. materiales"
+              name="precioUnitarioMateriales"
               type="number"
               step="0.01"
               min="0"
-              defaultValue={concepto.precioUnitarioContratista ?? undefined}
+              defaultValue={concepto.precioUnitarioMateriales ?? undefined}
             />
-            {esPrecioAlzado && (
-              <Campo
-                label="P.U. materiales"
-                name="precioUnitarioMateriales"
-                type="number"
-                step="0.01"
-                min="0"
-                defaultValue={concepto.precioUnitarioMateriales ?? undefined}
-              />
-            )}
-          </div>
-        </div>
-
-        <div className="border-t border-[var(--border)] pt-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Contrato General Privado
-          </p>
-          <div className="grid grid-cols-2 gap-3">
-            <Campo
-              label="P.U. (Contrato General Priv.)"
-              name="precioUnitarioContratistaPrivado"
-              type="number"
-              step="0.01"
-              min="0"
-              defaultValue={concepto.precioUnitarioContratistaPrivado ?? undefined}
-              placeholder="Igual al de Contrato General si se deja vacío"
-            />
-            {esPrecioAlzado && (
-              <>
-                <Campo
-                  label="P.U. indirectos"
-                  name="precioUnitarioIndirectos"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={concepto.precioUnitarioIndirectos ?? undefined}
-                />
-                <Campo
-                  label="P.U. herramienta"
-                  name="precioUnitarioHerramienta"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={concepto.precioUnitarioHerramienta ?? undefined}
-                />
-                <Campo
-                  label="% utilidad"
-                  name="porcentajeUtilidad"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  defaultValue={concepto.porcentajeUtilidad ?? undefined}
-                  placeholder="Usa el default si se deja vacío"
-                />
-              </>
-            )}
-            {esAdministracion && (
-              <Campo
-                label="% administración"
-                name="porcentajeAdministracion"
-                type="number"
-                step="0.01"
-                min="0"
-                defaultValue={concepto.porcentajeAdministracion ?? undefined}
-                placeholder="Usa el default si se deja vacío"
-              />
-            )}
-            <Campo
-              label="Precio comercial final"
-              name="precioUnitarioClienteOverride"
-              type="number"
-              step="0.01"
-              min="0"
-              defaultValue={concepto.precioUnitarioClienteOverride ?? undefined}
-              placeholder="Opcional — si no, se usa el recomendado"
-            />
-          </div>
+          )}
         </div>
 
         <div>
@@ -286,26 +262,147 @@ function FormularioConcepto({
         </div>
       </form>
 
-      <div className="border-t border-[var(--border)] pt-4">
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-          Bitácora
-        </p>
-        {bitacora.length === 0 ? (
-          <p className="text-sm text-[var(--muted)]">Sin eventos registrados.</p>
-        ) : (
-          <ul className="space-y-2">
-            {bitacora.map((entrada) => (
-              <li key={entrada.id} className="text-xs text-[var(--muted)]">
-                <span className="font-medium text-[var(--foreground)]">
-                  {entrada.usuarioNombre ?? "Usuario eliminado"}
-                </span>{" "}
-                — {ETIQUETA_ACCION[entrada.accion] ?? entrada.accion} ·{" "}
-                {formatFecha(entrada.createdAt)}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <Bitacora bitacora={bitacora} />
+    </div>
+  );
+}
+
+// Modo privado (Contrato General Priv.) — descripción/unidad/cantidad/P.U.
+// propios de esta capa (nacen iguales a los de Contrato General, luego son
+// independientes), más Indirectos/Herramienta/%/override. Nunca envía nada
+// de Contrato General operativo.
+function FormularioPrivado({
+  proyectoId,
+  concepto,
+  bitacora,
+  onClose,
+}: {
+  proyectoId: string;
+  concepto: ConceptoDetalle;
+  bitacora: BitacoraEntrada[];
+  onClose: () => void;
+}) {
+  const action = editarConceptoPrivadoAction.bind(null, concepto.id, proyectoId);
+  const [state, formAction, pending] = useActionState<
+    EditarConceptoPrivadoFormState,
+    FormData
+  >(action, undefined);
+  const [stateAnterior, setStateAnterior] = useState(state);
+  if (state !== stateAnterior) {
+    setStateAnterior(state);
+    if (state?.guardado) onClose();
+  }
+
+  const esPrecioAlzado = concepto.esquemaContractual === "PRECIO_ALZADO";
+  const esAdministracion = concepto.esquemaContractual === "ADMINISTRACION";
+
+  return (
+    <div>
+      <Encabezado titulo="Editar concepto — Contrato General Priv." partidaNombre={concepto.partidaNombre} onClose={onClose} />
+
+      <form action={formAction} className="space-y-4">
+        <Campo
+          label="Descripción"
+          name="descripcionPrivado"
+          defaultValue={concepto.descripcionPrivado ?? concepto.descripcion}
+          placeholder="Igual a Contrato General si se deja vacío"
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Campo
+            label="Unidad"
+            name="unidadPrivado"
+            defaultValue={concepto.unidadPrivado ?? concepto.unidad}
+            placeholder="Igual a Contrato General si se deja vacío"
+          />
+          <Campo
+            label="Cantidad"
+            name="cantidadContratadaPrivado"
+            type="number"
+            step="0.001"
+            min="0"
+            defaultValue={concepto.cantidadContratadaPrivado ?? concepto.cantidadContratada}
+            placeholder="Igual a Contrato General si se deja vacío"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Campo
+            label="P.U."
+            name="precioUnitarioContratistaPrivado"
+            type="number"
+            step="0.01"
+            min="0"
+            defaultValue={concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista ?? undefined}
+            placeholder="Igual a Contrato General si se deja vacío"
+          />
+          {esPrecioAlzado && (
+            <>
+              <Campo
+                label="P.U. indirectos"
+                name="precioUnitarioIndirectos"
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue={concepto.precioUnitarioIndirectos ?? undefined}
+              />
+              <Campo
+                label="P.U. herramienta"
+                name="precioUnitarioHerramienta"
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue={concepto.precioUnitarioHerramienta ?? undefined}
+              />
+              <Campo
+                label="% utilidad"
+                name="porcentajeUtilidad"
+                type="number"
+                step="0.01"
+                min="0"
+                defaultValue={concepto.porcentajeUtilidad ?? undefined}
+                placeholder="Usa el default si se deja vacío"
+              />
+            </>
+          )}
+          {esAdministracion && (
+            <Campo
+              label="% administración"
+              name="porcentajeAdministracion"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue={concepto.porcentajeAdministracion ?? undefined}
+              placeholder="Usa el default si se deja vacío"
+            />
+          )}
+          <Campo
+            label="Precio comercial final"
+            name="precioUnitarioClienteOverride"
+            type="number"
+            step="0.01"
+            min="0"
+            defaultValue={concepto.precioUnitarioClienteOverride ?? undefined}
+            placeholder="Opcional — si no, se usa el recomendado"
+          />
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Guardando…" : "Guardar cambios"}
+          </Button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm text-[var(--muted)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+          >
+            Cancelar
+          </button>
+          {state?.error && <p className="text-sm text-red-700">{state.error}</p>}
+        </div>
+      </form>
+
+      <Bitacora bitacora={bitacora} />
     </div>
   );
 }

@@ -270,6 +270,11 @@ export async function editarPartida(
 // Conceptos
 // ---------------------------------------------------------------------------
 
+// Solo campos operativos/estructurales (Contrato General) — Indirectos,
+// Herramienta, %Utilidad, %Administración, override y las copias *Privado
+// son exclusivos de Contrato General Privado (DatosConceptoPrivadoSchema),
+// nunca se capturan aquí ni al crear ni al editar (decisión de sesión,
+// agosto 2026 — separación real por pestaña).
 const DatosConceptoSchema = z.object({
   descripcion: z.string().trim().min(1, "La descripción es obligatoria."),
   unidad: z.string().trim().min(1, "La unidad es obligatoria."),
@@ -278,59 +283,33 @@ const DatosConceptoSchema = z.object({
     .positive("La cantidad debe ser mayor a cero."),
   orden: z.coerce.number().int().default(0),
   notas: z.string().trim().optional().nullable(),
-  // Contrato General (sección 49.9) — todos opcionales, un concepto puede
-  // existir sin costeo todavía.
   precioUnitarioContratista: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioMateriales: z.coerce.number().nonnegative().optional().nullable(),
-  precioUnitarioIndirectos: z.coerce.number().nonnegative().optional().nullable(),
-  precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
-  // Contrato General Privado — override del % default del proyecto, y del
-  // precio final calculado.
-  porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
-  porcentajeAdministracion: z.coerce.number().nonnegative().optional().nullable(),
-  precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
-  // Copia editable propia de Contrato General Privado — no se captura al
-  // crear (nace igual al operativo, ver el campo en el schema de Prisma),
-  // pero sí se puede editar desde el modal completo.
-  precioUnitarioContratistaPrivado: z.coerce.number().nonnegative().optional().nullable(),
 });
 
-// El esquema del proyecto manda sobre lo que el cliente haya enviado: en
-// Administración, Materiales/Indirectos/Herramienta/%Utilidad no aplican como
-// presupuesto contractual y se fuerzan a null aunque alguien los mande — "el
-// modelo debe saber que no aplican", no basta con ocultarlos en la interfaz
-// (decisión de sesión, sección 49.9). En Precio Alzado, %Administración no
-// aplica.
-//
-// Solo se usa al CREAR un concepto — nunca al editar uno existente. Un campo
-// que no aplica al esquema "no se captura, no se presenta y no participa en
-// cálculos", pero eso no autoriza a sobreescribir con null un valor que ya
-// existiera en base de datos por otra vía (precisión de sesión, agosto 2026):
-// al crear no hay nada que destruir, así que forzar null aquí es seguro; al
-// editar sí podría haberlo, por eso editarConcepto NO llama a esta función —
-// la separación real de qué campos son editables desde dónde (Contrato
-// General vs. Contrato General Privado, cada uno con su propio esquema
-// validado) se resuelve en la etapa de edición todavía pendiente.
-function normalizarCostosParaCreacion<
-  T extends {
-    precioUnitarioMateriales?: number | null;
-    precioUnitarioIndirectos?: number | null;
-    precioUnitarioHerramienta?: number | null;
-    porcentajeUtilidad?: number | null;
-    porcentajeAdministracion?: number | null;
-  },
->(datos: T, esquema: EsquemaContractual | null): T {
+const DatosConceptoEstructuralSchema = z.object({
+  descripcion: z.string().trim().min(1, "La descripción es obligatoria."),
+  unidad: z.string().trim().min(1, "La unidad es obligatoria."),
+  cantidadContratada: z.coerce
+    .number()
+    .positive("La cantidad debe ser mayor a cero."),
+  notas: z.string().trim().optional().nullable(),
+  precioUnitarioContratista: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioMateriales: z.coerce.number().nonnegative().optional().nullable(),
+});
+
+// Materiales presupuestado solo aplica a Precio Alzado — se fuerza a null aun
+// si alguien lo manda al crear (decisión de sesión, sección 49.9). Solo se
+// usa al CREAR: al crear no hay nada que destruir, así que forzar null aquí
+// es seguro; editarConceptoEstructural NO llama a esta función porque si ya
+// existiera un valor legado, forzarlo a null lo destruiría (precisión de
+// sesión, agosto 2026).
+function normalizarCostosParaCreacion<T extends { precioUnitarioMateriales?: number | null }>(
+  datos: T,
+  esquema: EsquemaContractual | null
+): T {
   if (esquema === "ADMINISTRACION") {
-    return {
-      ...datos,
-      precioUnitarioMateriales: null,
-      precioUnitarioIndirectos: null,
-      precioUnitarioHerramienta: null,
-      porcentajeUtilidad: null,
-    };
-  }
-  if (esquema === "PRECIO_ALZADO") {
-    return { ...datos, porcentajeAdministracion: null };
+    return { ...datos, precioUnitarioMateriales: null };
   }
   return datos;
 }
@@ -365,15 +344,16 @@ export async function crearConcepto(
   return concepto;
 }
 
-// Edición completa de un concepto — el modal "editar concepto" (Contrato
-// General y Contrato General Priv., solo Administrador/Director/Master) usa
-// esta única función para todos los campos, operativos y privados a la vez.
-// No se normaliza por esquema al editar (a diferencia de crearConcepto) —
-// hacerlo forzaría a null cualquier valor ya existente que no aplique al
-// esquema actual, y eso es exactamente lo que la precisión de sesión de
-// agosto 2026 prohíbe; los campos que no aplican simplemente no se muestran
-// en el formulario del modal.
-export async function editarConcepto(
+// Edita SOLO lo operativo/estructural de un concepto — el modal abierto
+// desde Contrato General usa esta función. Nunca toca ningún campo *Privado
+// ni Indirectos/Herramienta/%/override: esos son exclusivos del modal
+// abierto desde Contrato General Privado (editarConceptoPrivado). Antes
+// existía una única "editarConcepto" que tocaba todo desde cualquiera de los
+// dos modales — se separó porque abrir el modal desde Contrato General
+// mostraba (y podía modificar) información de Contrato General Privado, lo
+// cual está mal (decisión de sesión, agosto 2026: separación real por
+// pestaña, también para editar, no solo para ver).
+export async function editarConceptoEstructural(
   usuario: UsuarioSesion,
   id: string,
   datosCrudos: unknown
@@ -381,11 +361,10 @@ export async function editarConcepto(
   const empresaId = requerirAdmin(usuario);
   const anterior = await db.concepto.findFirst({
     where: { id, partida: { proyecto: { empresaId } } },
-    include: { partida: { include: { proyecto: { select: { esquemaContractual: true } } } } },
   });
   if (!anterior) throw new RegistroNoEncontradoError("El concepto");
 
-  const datos = DatosConceptoSchema.parse(datosCrudos);
+  const datos = DatosConceptoEstructuralSchema.parse(datosCrudos);
   const concepto = await db.concepto.update({ where: { id }, data: datos });
 
   await registrarAuditoria({
@@ -427,6 +406,14 @@ export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId:
 // ---------------------------------------------------------------------------
 
 const DatosConceptoPrivadoSchema = z.object({
+  // Copias estructurales propias de Contrato General Privado — nacen iguales
+  // a las de Contrato General (null = usa la de Contrato General) y quedan
+  // independientes en cuanto se editan aquí (decisión de sesión, agosto
+  // 2026 — mismo patrón que precioUnitarioContratistaPrivado, extendido a lo
+  // estructural a propósito).
+  descripcionPrivado: z.string().trim().min(1).optional().nullable(),
+  unidadPrivado: z.string().trim().min(1).optional().nullable(),
+  cantidadContratadaPrivado: z.coerce.number().positive().optional().nullable(),
   precioUnitarioContratistaPrivado: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioIndirectos: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
@@ -465,10 +452,14 @@ export async function editarConceptoPrivado(
   const datos = DatosConceptoPrivadoSchema.parse(datosCrudos);
   const esquema = anterior.partida.proyecto.esquemaContractual;
 
-  // El P.U. privado aplica a los dos esquemas (sección D de la propuesta) —
-  // se escribe siempre, no solo cuando se manda un valor, para poder también
-  // borrarlo (volver a "igual que Contrato General") desde este formulario.
+  // El P.U. y lo estructural privado aplican a los dos esquemas (sección D de
+  // la propuesta) — se escriben siempre, no solo cuando se manda un valor,
+  // para poder también borrarlos (volver a "igual que Contrato General")
+  // desde este formulario.
   const data: {
+    descripcionPrivado: string | null;
+    unidadPrivado: string | null;
+    cantidadContratadaPrivado: number | null;
     precioUnitarioContratistaPrivado: number | null;
     precioUnitarioClienteOverride: number | null;
     precioUnitarioIndirectos?: number | null;
@@ -476,6 +467,9 @@ export async function editarConceptoPrivado(
     porcentajeUtilidad?: number | null;
     porcentajeAdministracion?: number | null;
   } = {
+    descripcionPrivado: datos.descripcionPrivado ?? null,
+    unidadPrivado: datos.unidadPrivado ?? null,
+    cantidadContratadaPrivado: datos.cantidadContratadaPrivado ?? null,
     precioUnitarioContratistaPrivado: datos.precioUnitarioContratistaPrivado ?? null,
     precioUnitarioClienteOverride: datos.precioUnitarioClienteOverride ?? null,
   };

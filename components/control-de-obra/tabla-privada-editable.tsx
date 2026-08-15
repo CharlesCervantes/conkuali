@@ -20,6 +20,9 @@ export type ConceptoPrivado = {
   descripcion: string;
   unidad: string;
   cantidad: number;
+  descripcionPrivado: string | null;
+  unidadPrivado: string | null;
+  cantidadContratadaPrivado: number | null;
   precioUnitarioContratista: number | null;
   precioUnitarioContratistaPrivado: number | null;
   precioUnitarioIndirectos: number | null;
@@ -128,6 +131,7 @@ export function TablaPrivadaEditable({
         <ModalEditarConcepto
           proyectoId={proyectoId}
           conceptoId={conceptoModalId}
+          modo="privado"
           onClose={() => setConceptoModalId(null)}
         />
       )}
@@ -164,6 +168,13 @@ function FormEditarConceptoPrivado({
 
   return (
     <form action={formAction} className="space-y-3">
+      <input type="hidden" name="descripcionPrivado" value={concepto.descripcionPrivado ?? ""} />
+      <input type="hidden" name="unidadPrivado" value={concepto.unidadPrivado ?? ""} />
+      <input
+        type="hidden"
+        name="cantidadContratadaPrivado"
+        value={concepto.cantidadContratadaPrivado ?? ""}
+      />
       <p className="text-sm font-medium text-[var(--foreground)]">{concepto.descripcion}</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <CampoPrivado

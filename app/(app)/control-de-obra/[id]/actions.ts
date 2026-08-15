@@ -8,7 +8,7 @@ import {
   crearConcepto,
   crearContratoContratista,
   asignarConcepto,
-  editarConcepto,
+  editarConceptoEstructural,
   editarConceptoPrivado,
   obtenerConceptoDetalle,
   RegistroNoEncontradoError,
@@ -176,6 +176,9 @@ export async function editarConceptoPrivadoAction(
   const usuario = await requireSession();
   try {
     await editarConceptoPrivado(usuario, conceptoId, {
+      descripcionPrivado: opcional(formData.get("descripcionPrivado")),
+      unidadPrivado: opcional(formData.get("unidadPrivado")),
+      cantidadContratadaPrivado: opcional(formData.get("cantidadContratadaPrivado")),
       precioUnitarioContratistaPrivado: opcional(formData.get("precioUnitarioContratistaPrivado")),
       precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
       precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
@@ -191,9 +194,14 @@ export async function editarConceptoPrivadoAction(
 }
 
 // ---------------------------------------------------------------------------
-// Modal "editar concepto" — Contrato General y Contrato General Priv., solo
-// Administrador/Director/Master (mismo permiso que obtenerConceptoDetalle /
-// editarConcepto en el servicio).
+// Modal "editar concepto" — dos modos reales, cada uno con su propia acción
+// de guardado: "operativo" (abierto desde Contrato General, solo
+// editarConceptoEstructural) y "privado" (abierto desde Contrato General
+// Priv., solo editarConceptoPrivado). El modal NUNCA mezcla los dos — abrir
+// desde Contrato General no debe mostrar ni poder tocar nada de Privado
+// (decisión de sesión, agosto 2026). obtenerConceptoDetalleAction sí regresa
+// todos los campos (los necesitan las dos vistas para mostrar contexto de
+// solo lectura), pero cada modo solo envía a guardar lo que le corresponde.
 // ---------------------------------------------------------------------------
 
 function numOrNull(valor: { toString(): string } | null): number | null {
@@ -215,6 +223,9 @@ export type ConceptoDetalle = {
   porcentajeAdministracion: number | null;
   precioUnitarioClienteOverride: number | null;
   precioUnitarioContratistaPrivado: number | null;
+  descripcionPrivado: string | null;
+  unidadPrivado: string | null;
+  cantidadContratadaPrivado: number | null;
   esquemaContractual: "PRECIO_ALZADO" | "ADMINISTRACION" | null;
 };
 
@@ -252,6 +263,9 @@ export async function obtenerConceptoDetalleAction(
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
         precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
+        descripcionPrivado: concepto.descripcionPrivado,
+        unidadPrivado: concepto.unidadPrivado,
+        cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
         esquemaContractual: concepto.partida.proyecto.esquemaContractual,
       },
       bitacora: bitacora.map((b) => ({
@@ -266,29 +280,26 @@ export async function obtenerConceptoDetalleAction(
   }
 }
 
-export type EditarConceptoCompletoFormState = { error?: string; guardado?: boolean } | undefined;
+export type EditarConceptoEstructuralFormState = { error?: string; guardado?: boolean } | undefined;
 
-export async function editarConceptoCompletoAction(
+// Modo "operativo" del modal — SOLO campos de Contrato General. Nunca toca
+// ningún campo *Privado, Indirectos, Herramienta, %, ni override (eso es
+// editarConceptoPrivadoAction, usado por el modo "privado").
+export async function editarConceptoEstructuralAction(
   conceptoId: string,
   proyectoId: string,
-  _state: EditarConceptoCompletoFormState,
+  _state: EditarConceptoEstructuralFormState,
   formData: FormData
-): Promise<EditarConceptoCompletoFormState> {
+): Promise<EditarConceptoEstructuralFormState> {
   const usuario = await requireSession();
   try {
-    await editarConcepto(usuario, conceptoId, {
+    await editarConceptoEstructural(usuario, conceptoId, {
       descripcion: formData.get("descripcion"),
       unidad: formData.get("unidad"),
       cantidadContratada: formData.get("cantidadContratada"),
       notas: opcional(formData.get("notas")),
       precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
       precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
-      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
-      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
-      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
-      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
-      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
-      precioUnitarioContratistaPrivado: opcional(formData.get("precioUnitarioContratistaPrivado")),
     });
   } catch (error) {
     return { error: mensajeError(error) };

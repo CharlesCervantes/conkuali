@@ -147,6 +147,7 @@ export function TablaOperativaEditable({
         <ModalEditarConcepto
           proyectoId={proyectoId}
           conceptoId={conceptoEditandoId}
+          modo="operativo"
           onClose={() => setConceptoEditandoId(null)}
         />
       )}

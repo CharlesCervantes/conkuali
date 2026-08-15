@@ -54,16 +54,29 @@ export function ContratoGeneralPrivadoView({
           porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
           precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
         };
+        // Descripción/unidad/cantidad de Privado: nacen iguales a las de
+        // Contrato General (null = todavía no se editaron aquí) y quedan
+        // independientes en cuanto se editan — mismo patrón que el P.U.
+        // privado (decisión de sesión, agosto 2026).
+        const cantidadPrivada =
+          concepto.cantidadContratadaPrivado !== null ? Number(concepto.cantidadContratadaPrivado) : null;
+        const descripcionActual = concepto.descripcionPrivado ?? concepto.descripcion;
+        const unidadActual = concepto.unidadPrivado ?? concepto.unidad;
+        const cantidadActual = cantidadPrivada ?? Number(concepto.cantidadContratada);
+
         return {
           concepto: {
             id: concepto.id,
-            descripcion: concepto.descripcion,
-            unidad: concepto.unidad,
-            cantidad: Number(concepto.cantidadContratada),
+            descripcion: descripcionActual,
+            unidad: unidadActual,
+            cantidad: cantidadActual,
+            descripcionPrivado: concepto.descripcionPrivado,
+            unidadPrivado: concepto.unidadPrivado,
+            cantidadContratadaPrivado: cantidadPrivada,
             ...costos,
           },
           importes: calcularImportesConcepto(
-            { ...costos, cantidadContratada: Number(concepto.cantidadContratada) },
+            { ...costos, cantidadContratada: cantidadActual },
             esquemaContractual,
             porcentajesDefault
           ),

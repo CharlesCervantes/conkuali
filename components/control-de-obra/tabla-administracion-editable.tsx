@@ -18,6 +18,9 @@ export type ConceptoAdministracion = {
   descripcion: string;
   unidad: string;
   cantidad: number;
+  descripcionPrivado: string | null;
+  unidadPrivado: string | null;
+  cantidadContratadaPrivado: number | null;
   precioUnitarioContratista: number | null;
   precioUnitarioContratistaPrivado: number | null;
   precioUnitarioClienteOverride: number | null;
@@ -134,6 +137,7 @@ export function TablaAdministracionEditable({
         <ModalEditarConcepto
           proyectoId={proyectoId}
           conceptoId={conceptoModalId}
+          modo="privado"
           onClose={() => setConceptoModalId(null)}
         />
       )}
@@ -193,6 +197,13 @@ function FormEditarPU({
         type="hidden"
         name="porcentajeAdministracion"
         value={concepto.porcentajeAdministracion ?? ""}
+      />
+      <input type="hidden" name="descripcionPrivado" value={concepto.descripcionPrivado ?? ""} />
+      <input type="hidden" name="unidadPrivado" value={concepto.unidadPrivado ?? ""} />
+      <input
+        type="hidden"
+        name="cantidadContratadaPrivado"
+        value={concepto.cantidadContratadaPrivado ?? ""}
       />
       <div className="flex items-center gap-2">
         <div className="w-28">
