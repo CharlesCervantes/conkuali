@@ -218,7 +218,7 @@ function ResumenContratoPrivado({
   const etiquetaPorcentaje = esAdministracion ? "% Administración" : "% Utilidad";
 
   return (
-    <Card className="enter p-5">
+    <Card className="enter p-5 ring-2 ring-emerald-200">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">

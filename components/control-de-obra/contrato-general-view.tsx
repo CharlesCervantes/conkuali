@@ -217,7 +217,7 @@ function ResumenContrato({
   porcentajeAdministracionDefault: number | null;
 }) {
   return (
-    <Card className="enter p-5">
+    <Card className="enter p-5 ring-2 ring-emerald-200">
       <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
         Resumen del contrato
       </p>
