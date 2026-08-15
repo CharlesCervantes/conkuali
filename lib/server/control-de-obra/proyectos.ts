@@ -74,9 +74,48 @@ export const obtenerProyecto = cache(async (usuario: UsuarioSesion, id: string) 
   return proyecto;
 });
 
+// Un proyecto se considera "ya iniciado contractualmente" si existe cualquiera
+// de estas dependencias (sección E de la propuesta de rediseño, agosto 2026).
+// No incluye BeneficiarioProyecto.montoContrato/concepto (texto libre de
+// Reporte General, anterior a esquemaContractual y no depende de su modelo de
+// costos). Tampoco incluye todavía estimaciones/movimientos financieros
+// ligados a esquema porque esa entidad no existe aún — cuando se construya,
+// este checklist debe extenderse.
+export async function proyectoTieneInformacionContractual(
+  proyectoId: string
+): Promise<boolean> {
+  const [partida, concepto, contrato, asignacion, avance] = await Promise.all([
+    db.partida.findFirst({ where: { proyectoId }, select: { id: true } }),
+    db.concepto.findFirst({ where: { partida: { proyectoId } }, select: { id: true } }),
+    db.contratoContratista.findFirst({
+      where: { beneficiarioProyecto: { proyectoId } },
+      select: { id: true },
+    }),
+    db.contratoConcepto.findFirst({
+      where: { concepto: { partida: { proyectoId } } },
+      select: { id: true },
+    }),
+    db.avanceConcepto.findFirst({
+      where: { concepto: { partida: { proyectoId } } },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(partida || concepto || contrato || asignacion || avance);
+}
+
 export async function crearProyecto(usuario: UsuarioSesion, datosCrudos: unknown) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
+
+  // Obra formal nueva: el esquema contractual es obligatorio desde el inicio
+  // (sección 3 del rediseño). No se aplica en editarProyecto — ahí debe seguir
+  // siendo posible editar cualquier otro campo de un proyecto existente que
+  // todavía no tiene esquema definido, sin que eso bloquee el guardado.
+  if (datos.tipo === "FORMAL" && !datos.esquemaContractual) {
+    throw new ValidacionError(
+      "Selecciona el esquema contractual (Precio alzado o Administración) para una obra formal."
+    );
+  }
 
   const proyecto = await db.proyecto.create({
     data: { ...datos, empresaId },
@@ -97,13 +136,42 @@ export async function crearProyecto(usuario: UsuarioSesion, datosCrudos: unknown
 export async function editarProyecto(
   usuario: UsuarioSesion,
   id: string,
-  datosCrudos: unknown
+  datosCrudos: unknown,
+  // Solo relevante para la asignación inicial de esquema (null -> valor) en un
+  // proyecto que ya tiene información contractual — el usuario debe confirmar
+  // a propósito que la selección es correcta, porque después queda fija
+  // (sección 3 del rediseño). Se valida aquí, no solo en la UI.
+  confirmarEsquemaConDatos = false
 ) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
 
   const anterior = await db.proyecto.findFirst({ where: { id, empresaId } });
   if (!anterior) throw new ProyectoNoEncontradoError();
+
+  if (datos.esquemaContractual !== anterior.esquemaContractual) {
+    // Asignación inicial (null -> un esquema): siempre permitida, incluso con
+    // información contractual ya existente (ej. Mississippi, Proyecto Prueba
+    // 1) — pero si ya hay información contractual, exige confirmación
+    // explícita porque a partir de ahí queda bloqueada (sección E).
+    // Cambio posterior (un esquema -> otro, o un esquema -> null): bloqueado
+    // sin excepción en cuanto exista cualquier dependencia contractual — no
+    // hay forma de "confirmar" para saltárselo (sección 4, excepción futura
+    // no implementada todavía).
+    const esAsignacionInicial = anterior.esquemaContractual === null;
+    const tieneInfo = await proyectoTieneInformacionContractual(id);
+
+    if (!esAsignacionInicial && tieneInfo) {
+      throw new ValidacionError(
+        "El esquema contractual no puede modificarse porque el proyecto ya tiene información contractual registrada."
+      );
+    }
+    if (esAsignacionInicial && tieneInfo && !confirmarEsquemaConDatos) {
+      throw new ValidacionError(
+        "Este proyecto ya contiene información contractual. Confirma para definir el esquema contractual."
+      );
+    }
+  }
 
   const proyecto = await db.proyecto.update({
     where: { id },

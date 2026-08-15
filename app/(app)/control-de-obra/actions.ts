@@ -71,9 +71,15 @@ export async function editarProyectoAction(
   formData: FormData
 ): Promise<FormState> {
   const usuario = await requireSession();
+  const confirmarEsquemaConDatos = formData.get("confirmarEsquemaConDatos") === "on";
 
   try {
-    await editarProyecto(usuario, id, datosDesdeFormData(formData));
+    await editarProyecto(
+      usuario,
+      id,
+      datosDesdeFormData(formData),
+      confirmarEsquemaConDatos
+    );
   } catch (error) {
     return { error: mensajeError(error) };
   }
