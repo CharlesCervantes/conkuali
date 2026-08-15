@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -70,7 +71,12 @@ export function ModalEditarConcepto({
     return () => document.removeEventListener("keydown", alTecla);
   }, [onClose]);
 
-  return (
+  // Portal a document.body: la tarjeta de la partida usa la clase de
+  // animación .enter (transform: translateY(...)), y cualquier ancestro con
+  // transform se vuelve el "containing block" de un descendiente
+  // position:fixed — sin el portal, el modal quedaba atrapado dentro de esa
+  // tarjeta en vez de cubrir toda la pantalla.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={(e) => {
@@ -98,7 +104,8 @@ export function ModalEditarConcepto({
           />
         )}
       </Card>
-    </div>
+    </div>,
+    document.body
   );
 }
 
