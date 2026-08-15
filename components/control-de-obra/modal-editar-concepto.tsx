@@ -83,7 +83,7 @@ export function ModalEditarConcepto({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <Card className="enter max-h-[85vh] w-full max-w-2xl overflow-y-auto p-6">
+      <Card className="enter max-h-[85vh] w-full max-w-4xl overflow-y-auto p-6">
         {estado.tipo === "cargando" && (
           <p className="py-8 text-center text-sm text-[var(--muted)]">Cargando…</p>
         )}
@@ -148,6 +148,10 @@ function FormularioConcepto({
       </div>
 
       <form action={formAction} className="space-y-4">
+        <p className="text-xs font-medium text-[var(--muted)]">
+          Partida: <span className="text-[var(--foreground)]">{concepto.partidaNombre}</span>
+        </p>
+
         <Campo label="Descripción" name="descripcion" defaultValue={concepto.descripcion} required />
 
         <div className="grid grid-cols-2 gap-3">

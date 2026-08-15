@@ -203,6 +203,7 @@ function numOrNull(valor: { toString(): string } | null): number | null {
 export type ConceptoDetalle = {
   id: string;
   descripcion: string;
+  partidaNombre: string;
   unidad: string;
   cantidadContratada: number;
   notas: string | null;
@@ -239,6 +240,7 @@ export async function obtenerConceptoDetalleAction(
       concepto: {
         id: concepto.id,
         descripcion: concepto.descripcion,
+        partidaNombre: concepto.partida.nombre,
         unidad: concepto.unidad,
         cantidadContratada: Number(concepto.cantidadContratada),
         notas: concepto.notas,
