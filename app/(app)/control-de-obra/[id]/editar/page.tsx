@@ -4,6 +4,7 @@ import { requireSession } from "@/lib/server/auth/dal";
 import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import {
   obtenerProyecto,
+  proyectoTieneInformacionContractual,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
 import { Card } from "@/components/ui/card";
@@ -36,10 +37,17 @@ export default async function EditarProyectoPage({
     throw error;
   }
 
+  // El esquema ya definido con información contractual queda bloqueado; sin
+  // esquema todavía pero con información contractual, se puede asignar pero
+  // exige confirmación explícita (sección 3-4 del rediseño, agosto 2026).
+  const tieneInfo = await proyectoTieneInformacionContractual(id);
+  const esquemaBloqueado = proyecto.esquemaContractual !== null && tieneInfo;
+  const requiereConfirmacionEsquema = proyecto.esquemaContractual === null && tieneInfo;
+
   const accionConId = editarProyectoAction.bind(null, id);
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
       <div>
         <Link
           href={`/control-de-obra/${id}`}
@@ -56,7 +64,10 @@ export default async function EditarProyectoPage({
       <Card className="enter p-6">
         <ProyectoForm
           action={accionConId}
+          modo="editar"
           textoBoton="Guardar cambios"
+          esquemaBloqueado={esquemaBloqueado}
+          requiereConfirmacionEsquema={requiereConfirmacionEsquema}
           valoresIniciales={{
             nombre: proyecto.nombre,
             tipo: proyecto.tipo,
