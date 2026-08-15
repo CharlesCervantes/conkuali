@@ -373,7 +373,7 @@ export async function editarConcepto(
 // ---------------------------------------------------------------------------
 
 const DatosConceptoPrivadoSchema = z.object({
-  precioUnitarioContratista: z.coerce.number().nonnegative().optional().nullable(),
+  precioUnitarioContratistaPrivado: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioIndirectos: z.coerce.number().nonnegative().optional().nullable(),
   precioUnitarioHerramienta: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeUtilidad: z.coerce.number().nonnegative().optional().nullable(),
@@ -381,18 +381,16 @@ const DatosConceptoPrivadoSchema = z.object({
   precioUnitarioClienteOverride: z.coerce.number().nonnegative().optional().nullable(),
 });
 
-// Edita los campos privados de un concepto, más el P.U. — descripción, unidad
-// y cantidad siguen siendo exclusivos de Contrato General (no se editan
-// aquí). El P.U. es el mismo campo que lee Contrato General (no hay un
-// segundo valor "privado" en paralelo) — Privado es simplemente donde se edita
-// hoy, porque todavía no existe una pantalla de edición estructural aparte
-// (sección 4/19 del rediseño; precisión de sesión, agosto 2026: aclarado que
-// esto no es una "segunda fuente" mientras siga siendo el único lugar que
-// edita este campo). Editar el P.U. de un Concepto NUNCA toca
-// ContratoConcepto.precioUnitarioContratista — ese valor ya quedó congelado
-// al momento de asignar el contratista y no se resincroniza (ver
-// asignarConcepto). El mismo rol-set que puedeVerContratoGeneralPrivado
-// (requerirAdmin ya lo verifica hoy — ver esa función).
+// Edita los campos privados de un concepto — descripción, unidad, cantidad y
+// el P.U. de Contrato General (precioUnitarioContratista) NO se tocan aquí.
+// El P.U. que se edita desde esta pantalla es precioUnitarioContratistaPrivado
+// — una copia propia de Contrato General Privado, independiente desde que se
+// edita por primera vez: nunca se sincroniza de vuelta hacia
+// precioUnitarioContratista (decisión de sesión, agosto 2026 — editar aquí no
+// debe afectar el Contrato General original). Tampoco toca
+// ContratoConcepto.precioUnitarioContratista, que ya quedó congelado al
+// asignar el contratista (ver asignarConcepto). El mismo rol-set que
+// puedeVerContratoGeneralPrivado (requerirAdmin ya lo verifica hoy).
 //
 // Los campos de costo/porcentaje que NO aplican al esquema actual ni siquiera
 // se incluyen en el `data` del update, así que un valor legado que ya
@@ -413,18 +411,18 @@ export async function editarConceptoPrivado(
   const datos = DatosConceptoPrivadoSchema.parse(datosCrudos);
   const esquema = anterior.partida.proyecto.esquemaContractual;
 
-  // P.U. aplica a los dos esquemas (sección D de la propuesta) — se escribe
-  // siempre, no solo cuando se manda un valor, para poder también borrarlo
-  // (volver a "sin definir") desde este formulario.
+  // El P.U. privado aplica a los dos esquemas (sección D de la propuesta) —
+  // se escribe siempre, no solo cuando se manda un valor, para poder también
+  // borrarlo (volver a "igual que Contrato General") desde este formulario.
   const data: {
-    precioUnitarioContratista: number | null;
+    precioUnitarioContratistaPrivado: number | null;
     precioUnitarioClienteOverride: number | null;
     precioUnitarioIndirectos?: number | null;
     precioUnitarioHerramienta?: number | null;
     porcentajeUtilidad?: number | null;
     porcentajeAdministracion?: number | null;
   } = {
-    precioUnitarioContratista: datos.precioUnitarioContratista ?? null,
+    precioUnitarioContratistaPrivado: datos.precioUnitarioContratistaPrivado ?? null,
     precioUnitarioClienteOverride: datos.precioUnitarioClienteOverride ?? null,
   };
   if (esquema === "PRECIO_ALZADO") {

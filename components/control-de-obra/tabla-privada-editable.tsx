@@ -20,6 +20,7 @@ export type ConceptoPrivado = {
   unidad: string;
   cantidad: number;
   precioUnitarioContratista: number | null;
+  precioUnitarioContratistaPrivado: number | null;
   precioUnitarioIndirectos: number | null;
   precioUnitarioHerramienta: number | null;
   porcentajeUtilidad: number | null;
@@ -150,8 +151,8 @@ function FormEditarConceptoPrivado({
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <CampoPrivado
           label="P.U."
-          name="precioUnitarioContratista"
-          defaultValue={concepto.precioUnitarioContratista}
+          name="precioUnitarioContratistaPrivado"
+          defaultValue={concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista}
         />
         {esPrecioAlzado && (
           <>

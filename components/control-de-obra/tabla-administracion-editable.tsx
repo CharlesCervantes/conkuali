@@ -18,6 +18,7 @@ export type ConceptoAdministracion = {
   unidad: string;
   cantidad: number;
   precioUnitarioContratista: number | null;
+  precioUnitarioContratistaPrivado: number | null;
   precioUnitarioClienteOverride: number | null;
   porcentajeAdministracion: number | null;
 };
@@ -29,11 +30,14 @@ export type ImporteFilaAdministracion = {
   porcentajeAplicado: number | null;
 };
 
-function colorPU(actual: number | null, original: number | null): string {
-  if (actual === null || original === null || actual === original) {
+// Compara contra precioUnitarioContratista (Contrato General) — dos valores
+// reales y persistidos, no una comparación de sesión, así que el color se ve
+// igual ahora, después de guardar, o en una recarga completa de la página.
+function colorPU(privado: number | null, general: number | null): string {
+  if (privado === null || general === null || privado === general) {
     return "text-[var(--foreground)]";
   }
-  return actual > original ? "text-emerald-600" : "text-red-600";
+  return privado > general ? "text-emerald-600" : "text-red-600";
 }
 
 export function TablaAdministracionEditable({
@@ -44,15 +48,6 @@ export function TablaAdministracionEditable({
   filas: { concepto: ConceptoAdministracion; importe: ImporteFilaAdministracion }[];
 }) {
   const [editandoId, setEditandoId] = useState<string | null>(null);
-
-  // Punto de referencia para el color (gris/verde/rojo): el P.U. que tenía
-  // cada concepto cuando esta tabla se cargó por primera vez en esta sesión
-  // — no se actualiza con cada guardado, así que el color se queda visible
-  // para saber cuáles ya se editaron (precisión de sesión, agosto 2026). Se
-  // reinicia con una recarga completa de la página.
-  const [baseline] = useState<Record<string, number | null>>(() =>
-    Object.fromEntries(filas.map((f) => [f.concepto.id, f.concepto.precioUnitarioContratista]))
-  );
 
   const totalAdm = filas.reduce((t, f) => t + f.importe.montoAdm, 0);
   const totalGeneral = filas.reduce((t, f) => t + f.importe.total, 0);
@@ -75,42 +70,42 @@ export function TablaAdministracionEditable({
         </Tr>
       </Thead>
       <tbody>
-        {filas.map(({ concepto, importe }) => (
-          <Tr key={concepto.id}>
-            <Td className="font-medium">{concepto.descripcion}</Td>
-            <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
-            <Td className="text-right tabular-nums">
-              {concepto.cantidad.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
-            </Td>
-            <Td className="text-right tabular-nums">
-              {editandoId === concepto.id ? (
-                <FormEditarPU
-                  proyectoId={proyectoId}
-                  concepto={concepto}
-                  original={baseline[concepto.id] ?? null}
-                  onCancelar={() => setEditandoId(null)}
-                  onGuardado={() => setEditandoId(null)}
-                />
-              ) : (
-                <div className="flex items-center justify-end gap-2">
-                  <span className={colorPU(concepto.precioUnitarioContratista, baseline[concepto.id] ?? null)}>
-                    {concepto.precioUnitarioContratista !== null
-                      ? formatMoney(concepto.precioUnitarioContratista)
-                      : "—"}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setEditandoId(concepto.id)}
-                    className="text-xs font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
-                  >
-                    Editar
-                  </button>
-                </div>
-              )}
-            </Td>
-            <Td className="text-right font-medium tabular-nums">{formatMoney(importe.subtotal)}</Td>
-          </Tr>
-        ))}
+        {filas.map(({ concepto, importe }) => {
+          const puActual = concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista;
+          return (
+            <Tr key={concepto.id}>
+              <Td className="font-medium">{concepto.descripcion}</Td>
+              <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
+              <Td className="text-right tabular-nums">
+                {concepto.cantidad.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
+              </Td>
+              <Td className="text-right tabular-nums">
+                {editandoId === concepto.id ? (
+                  <FormEditarPU
+                    proyectoId={proyectoId}
+                    concepto={concepto}
+                    onCancelar={() => setEditandoId(null)}
+                    onGuardado={() => setEditandoId(null)}
+                  />
+                ) : (
+                  <div className="flex items-center justify-end gap-2">
+                    <span className={colorPU(puActual, concepto.precioUnitarioContratista)}>
+                      {puActual !== null ? formatMoney(puActual) : "—"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEditandoId(concepto.id)}
+                      className="text-xs font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
+                    >
+                      Editar
+                    </button>
+                  </div>
+                )}
+              </Td>
+              <Td className="text-right font-medium tabular-nums">{formatMoney(importe.subtotal)}</Td>
+            </Tr>
+          );
+        })}
       </tbody>
       <tfoot>
         <Tr className="bg-black/[0.015]">
@@ -130,23 +125,21 @@ export function TablaAdministracionEditable({
   );
 }
 
-// Edita SOLO el P.U. — es el único campo editable desde esta tabla (el resto
-// de lo privado, si algún día aplica a Administración, se editaría aparte).
-// Los otros campos privados del concepto viajan como hidden para no
-// borrarlos: editarConceptoPrivado escribe lo que reciba, así que si este
-// formulario no los mandara, se perderían (precisión de sesión, agosto 2026).
-// Guarda en un solo paso: al terminar la Server Action con éxito, se cierra
-// el editor solo — no hace falta un segundo clic.
+// Edita SOLO precioUnitarioContratistaPrivado — la copia editable de
+// Contrato General Privado. Nunca toca precioUnitarioContratista (Contrato
+// General original) ni ContratoConcepto.precioUnitarioContratista (que ya
+// quedó congelado al asignar un contratista). Los demás campos privados
+// viajan como hidden para no borrarlos: editarConceptoPrivado escribe lo que
+// reciba (precisión de sesión, agosto 2026). Guarda en un solo paso: al
+// terminar la Server Action con éxito, se cierra el editor solo.
 function FormEditarPU({
   proyectoId,
   concepto,
-  original,
   onCancelar,
   onGuardado,
 }: {
   proyectoId: string;
   concepto: ConceptoAdministracion;
-  original: number | null;
   onCancelar: () => void;
   onGuardado: () => void;
 }) {
@@ -161,14 +154,13 @@ function FormEditarPU({
     if (state?.guardado) onGuardado();
   }
 
-  const [texto, setTexto] = useState(
-    concepto.precioUnitarioContratista !== null ? String(concepto.precioUnitarioContratista) : ""
-  );
+  const valorInicial = concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista;
+  const [texto, setTexto] = useState(valorInicial !== null ? String(valorInicial) : "");
   const nuevo = texto === "" ? null : Number(texto);
-  // Comparación en vivo contra el baseline de la sesión — gris si es igual,
-  // verde si lo subiste, rojo si lo bajaste.
   const color =
-    nuevo === null || Number.isNaN(nuevo) ? "text-[var(--foreground)]" : colorPU(nuevo, original);
+    nuevo === null || Number.isNaN(nuevo)
+      ? "text-[var(--foreground)]"
+      : colorPU(nuevo, concepto.precioUnitarioContratista);
 
   return (
     <form action={formAction} className="flex flex-col items-end gap-1.5">
@@ -185,7 +177,7 @@ function FormEditarPU({
       <div className="flex items-center gap-2">
         <div className="w-28">
           <Input
-            name="precioUnitarioContratista"
+            name="precioUnitarioContratistaPrivado"
             type="number"
             step="0.01"
             min="0"

@@ -500,6 +500,15 @@ model Concepto {
   precioUnitarioIndirectos  Decimal? @db.Decimal(14, 2)
   precioUnitarioHerramienta Decimal? @db.Decimal(14, 2)
 
+  // Contrato General Privado — copia EDITABLE del P.U. de arriba, propia de
+  // esta capa. Nace igual (null = "todavía no se editó aquí, se ve/usa igual
+  // al de Contrato General") pero a partir de que alguien la edita desde
+  // Privado es independiente: nunca sobreescribe ni se sincroniza con
+  // precioUnitarioContratista, que sigue siendo exclusivo de Contrato General
+  // operativo (decisión de sesión, agosto 2026 — Privado dejó de compartir
+  // este campo con Contrato General para no afectar el original al editar).
+  precioUnitarioContratistaPrivado Decimal? @db.Decimal(14, 2)
+
   // Override del % default del proyecto — separados (nunca un campo
   // genérico) por la misma razón que en Proyecto. null = usa el default.
   porcentajeUtilidad       Decimal? @db.Decimal(5, 2)

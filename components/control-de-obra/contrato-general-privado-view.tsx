@@ -44,6 +44,7 @@ export function ContratoGeneralPrivadoView({
       partida.conceptos.map((concepto) => {
         const costos = {
           precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
+          precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
           precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
           precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
           precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),

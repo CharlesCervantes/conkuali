@@ -6,6 +6,11 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
 export type CostosConcepto = {
   precioUnitarioContratista: number | null;
+  // Copia editable propia de Contrato General Privado — null = todavía no se
+  // editó aquí, se usa igual al de Contrato General (precioUnitarioContratista).
+  // Una vez editada, es independiente: nunca se sincroniza de vuelta
+  // (decisión de sesión, agosto 2026).
+  precioUnitarioContratistaPrivado: number | null;
   precioUnitarioMateriales: number | null;
   precioUnitarioIndirectos: number | null;
   precioUnitarioHerramienta: number | null;
@@ -74,7 +79,12 @@ export function calcularPrecioConcepto(
   esquema: EsquemaContractual | null,
   porcentajesDefault: PorcentajesDefaultProyecto
 ): PrecioConceptoCalculado {
-  const costoContratista = concepto.precioUnitarioContratista ?? 0;
+  // Contrato General Privado calcula sobre su propia copia editable del P.U.
+  // cuando existe — nunca sobre precioUnitarioContratista directamente, para
+  // que editar aquí no le pase nada al Contrato General original (esta
+  // función solo la usa la vista Privada — ver contrato-general-privado-view.tsx).
+  const costoContratista =
+    concepto.precioUnitarioContratistaPrivado ?? concepto.precioUnitarioContratista ?? 0;
   const esPrecioAlzado = esquema === "PRECIO_ALZADO";
   // Materiales presupuestados solo aplica como componente de Precio Alzado —
   // en Administración el costo de materiales vendrá de gasto real (otro
