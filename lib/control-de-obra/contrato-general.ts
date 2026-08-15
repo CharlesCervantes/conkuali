@@ -75,8 +75,12 @@ export function calcularPrecioConcepto(
   porcentajesDefault: PorcentajesDefaultProyecto
 ): PrecioConceptoCalculado {
   const costoContratista = concepto.precioUnitarioContratista ?? 0;
-  const costoMateriales = concepto.precioUnitarioMateriales ?? 0;
   const esPrecioAlzado = esquema === "PRECIO_ALZADO";
+  // Materiales presupuestados solo aplica como componente de Precio Alzado —
+  // en Administración el costo de materiales vendrá de gasto real (otro
+  // módulo, todavía no implementado), no de este presupuesto (precisión de
+  // sesión, agosto 2026).
+  const costoMateriales = esPrecioAlzado ? (concepto.precioUnitarioMateriales ?? 0) : 0;
   const costoIndirectos = esPrecioAlzado ? (concepto.precioUnitarioIndirectos ?? 0) : 0;
   const costoHerramienta = esPrecioAlzado ? (concepto.precioUnitarioHerramienta ?? 0) : 0;
   const costoBase = costoContratista + costoMateriales + costoIndirectos + costoHerramienta;

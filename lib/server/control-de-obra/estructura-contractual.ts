@@ -219,12 +219,24 @@ const DatosConceptoSchema = z.object({
 });
 
 // El esquema del proyecto manda sobre lo que el cliente haya enviado: en
-// Administración, Indirectos/Herramienta/%Utilidad no aplican y se fuerzan a
-// null aunque alguien los mande — "el modelo debe saber que no aplican", no
-// basta con ocultarlos en la interfaz (decisión de sesión, sección 49.9). En
-// Precio Alzado, %Administración no aplica.
-function normalizarCostosPorEsquema<
+// Administración, Materiales/Indirectos/Herramienta/%Utilidad no aplican como
+// presupuesto contractual y se fuerzan a null aunque alguien los mande — "el
+// modelo debe saber que no aplican", no basta con ocultarlos en la interfaz
+// (decisión de sesión, sección 49.9). En Precio Alzado, %Administración no
+// aplica.
+//
+// Solo se usa al CREAR un concepto — nunca al editar uno existente. Un campo
+// que no aplica al esquema "no se captura, no se presenta y no participa en
+// cálculos", pero eso no autoriza a sobreescribir con null un valor que ya
+// existiera en base de datos por otra vía (precisión de sesión, agosto 2026):
+// al crear no hay nada que destruir, así que forzar null aquí es seguro; al
+// editar sí podría haberlo, por eso editarConcepto NO llama a esta función —
+// la separación real de qué campos son editables desde dónde (Contrato
+// General vs. Contrato General Privado, cada uno con su propio esquema
+// validado) se resuelve en la etapa de edición todavía pendiente.
+function normalizarCostosParaCreacion<
   T extends {
+    precioUnitarioMateriales?: number | null;
     precioUnitarioIndirectos?: number | null;
     precioUnitarioHerramienta?: number | null;
     porcentajeUtilidad?: number | null;
@@ -234,6 +246,7 @@ function normalizarCostosPorEsquema<
   if (esquema === "ADMINISTRACION") {
     return {
       ...datos,
+      precioUnitarioMateriales: null,
       precioUnitarioIndirectos: null,
       precioUnitarioHerramienta: null,
       porcentajeUtilidad: null,
@@ -257,7 +270,7 @@ export async function crearConcepto(
   });
   if (!partida) throw new RegistroNoEncontradoError("La partida");
 
-  const datos = normalizarCostosPorEsquema(
+  const datos = normalizarCostosParaCreacion(
     DatosConceptoSchema.parse(datosCrudos),
     partida.proyecto.esquemaContractual
   );
@@ -287,10 +300,14 @@ export async function editarConcepto(
   });
   if (!anterior) throw new RegistroNoEncontradoError("El concepto");
 
-  const datos = normalizarCostosPorEsquema(
-    DatosConceptoSchema.parse(datosCrudos),
-    anterior.partida.proyecto.esquemaContractual
-  );
+  // No se normaliza por esquema aquí (a diferencia de crearConcepto) — hacerlo
+  // forzaría a null cualquier valor ya existente que no aplique al esquema
+  // actual, y eso es exactamente lo que la precisión de sesión de agosto 2026
+  // prohíbe. Esta función todavía no tiene ningún caller en la UI; la partición
+  // real por pestaña (qué campos son editables desde Contrato General vs.
+  // Contrato General Privado, cada uno con su propio esquema validado y sin
+  // tocar los campos del otro) se resuelve en la etapa de edición pendiente.
+  const datos = DatosConceptoSchema.parse(datosCrudos);
   const concepto = await db.concepto.update({ where: { id }, data: datos });
 
   await registrarAuditoria({
