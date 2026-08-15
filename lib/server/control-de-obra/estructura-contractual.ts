@@ -89,6 +89,11 @@ function partidasConConceptosOperativo(proyectoId: string) {
           estatus: true,
           precioUnitarioContratista: true,
           precioUnitarioMateriales: true,
+          // % Administración NO es privado (a diferencia de % Utilidad en
+          // Precio Alzado) — el cliente/Supervisor sí puede verlo en este
+          // esquema (sección 49.9 de la documentación de negocio, confirmado
+          // de nuevo en sesión al revisar Contrato General de MEZQUITAL).
+          porcentajeAdministracion: true,
         },
       },
     },

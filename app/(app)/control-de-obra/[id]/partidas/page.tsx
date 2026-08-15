@@ -22,6 +22,11 @@ export default async function ContratoGeneralPage({
       proyectoId={id}
       partidas={partidas}
       esquemaContractual={proyecto.esquemaContractual}
+      porcentajeAdministracionDefault={
+        proyecto.porcentajeAdministracionDefault
+          ? Number(proyecto.porcentajeAdministracionDefault)
+          : null
+      }
       puedeAdministrar={puedeAdministrarProyectos(usuario)}
     />
   );
