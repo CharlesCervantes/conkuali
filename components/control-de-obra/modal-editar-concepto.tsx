@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { formatMoney } from "@/lib/dinero";
 import {
   obtenerConceptoDetalleAction,
   editarConceptoEstructuralAction,
@@ -24,6 +25,77 @@ const ETIQUETA_ACCION: Record<string, string> = {
   ACTIVAR: "Activó",
   DESACTIVAR: "Desactivó",
 };
+
+// Etiquetas en español de cada campo de Concepto que puede aparecer en un
+// snapshot de bitácora (valorAnterior/valorNuevo) — solo los campos listados
+// aquí se consideran al calcular qué cambió; el resto (id, partidaId,
+// createdAt, updatedAt, orden, codigo) se ignora a propósito.
+const ETIQUETAS_CAMPO: Record<string, string> = {
+  descripcion: "Descripción",
+  unidad: "Unidad",
+  cantidadContratada: "Cantidad",
+  notas: "Notas",
+  precioUnitarioContratista: "P.U.",
+  precioUnitarioMateriales: "P.U. materiales",
+  descripcionPrivado: "Descripción (Priv.)",
+  unidadPrivado: "Unidad (Priv.)",
+  cantidadContratadaPrivado: "Cantidad (Priv.)",
+  precioUnitarioContratistaPrivado: "P.U. (Priv.)",
+  precioUnitarioIndirectos: "P.U. indirectos",
+  precioUnitarioHerramienta: "P.U. herramienta",
+  porcentajeUtilidad: "% utilidad",
+  porcentajeAdministracion: "% administración",
+  estatus: "Estatus",
+};
+
+const CAMPOS_MONEDA = new Set([
+  "precioUnitarioContratista",
+  "precioUnitarioMateriales",
+  "precioUnitarioContratistaPrivado",
+  "precioUnitarioIndirectos",
+  "precioUnitarioHerramienta",
+]);
+const CAMPOS_PORCENTAJE = new Set(["porcentajeUtilidad", "porcentajeAdministracion"]);
+const CAMPOS_CANTIDAD = new Set(["cantidadContratada", "cantidadContratadaPrivado"]);
+const ETIQUETA_ESTATUS: Record<string, string> = { ACTIVO: "Activo", CANCELADO: "Cancelado" };
+
+function formatValorCampo(campo: string, valor: unknown): string {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  if (campo === "estatus") return ETIQUETA_ESTATUS[String(valor)] ?? String(valor);
+  if (CAMPOS_MONEDA.has(campo)) return formatMoney(Number(valor));
+  if (CAMPOS_PORCENTAJE.has(campo)) return `${Number(valor).toLocaleString("es-MX")}%`;
+  if (CAMPOS_CANTIDAD.has(campo)) {
+    return Number(valor).toLocaleString("es-MX", { maximumFractionDigits: 3 });
+  }
+  return String(valor);
+}
+
+type CambioCampo = { campo: string; etiqueta: string; anterior: string; nuevo: string };
+
+// Compara los snapshots completos de antes/después campo por campo y regresa
+// solo los que de verdad cambiaron — así una acción "operativo" nunca muestra
+// ruido de campos privados (son idénticos en ambos snapshots) y viceversa,
+// sin necesidad de casos especiales por tipo de acción.
+function calcularCambios(
+  anterior: Record<string, unknown> | null,
+  nuevo: Record<string, unknown> | null
+): CambioCampo[] {
+  if (!anterior || !nuevo) return [];
+  const cambios: CambioCampo[] = [];
+  for (const campo of Object.keys(ETIQUETAS_CAMPO)) {
+    if (!(campo in anterior) || !(campo in nuevo)) continue;
+    const valorAnterior = anterior[campo] ?? null;
+    const valorNuevo = nuevo[campo] ?? null;
+    if (String(valorAnterior ?? "") === String(valorNuevo ?? "")) continue;
+    cambios.push({
+      campo,
+      etiqueta: ETIQUETAS_CAMPO[campo],
+      anterior: formatValorCampo(campo, valorAnterior),
+      nuevo: formatValorCampo(campo, valorNuevo),
+    });
+  }
+  return cambios;
+}
 
 function formatFecha(iso: string): string {
   return new Date(iso).toLocaleString("es-MX", {
@@ -153,15 +225,31 @@ function Bitacora({ bitacora }: { bitacora: BitacoraEntrada[] }) {
       {bitacora.length === 0 ? (
         <p className="text-sm text-[var(--muted)]">Sin eventos registrados.</p>
       ) : (
-        <ul className="space-y-2">
-          {bitacora.map((entrada) => (
-            <li key={entrada.id} className="text-xs text-[var(--muted)]">
-              <span className="font-medium text-[var(--foreground)]">
-                {entrada.usuarioNombre ?? "Usuario eliminado"}
-              </span>{" "}
-              — {ETIQUETA_ACCION[entrada.accion] ?? entrada.accion} · {formatFecha(entrada.createdAt)}
-            </li>
-          ))}
+        <ul className="space-y-3">
+          {bitacora.map((entrada) => {
+            const cambios = calcularCambios(entrada.valorAnterior, entrada.valorNuevo);
+            return (
+              <li key={entrada.id} className="text-xs">
+                <p className="text-[var(--muted)]">
+                  <span className="font-medium text-[var(--foreground)]">
+                    {entrada.usuarioNombre ?? "Usuario eliminado"}
+                  </span>{" "}
+                  — {ETIQUETA_ACCION[entrada.accion] ?? entrada.accion} ·{" "}
+                  {formatFecha(entrada.createdAt)}
+                </p>
+                {cambios.length > 0 && (
+                  <ul className="mt-1 space-y-0.5 border-l-2 border-[var(--border)] pl-2.5">
+                    {cambios.map((cambio) => (
+                      <li key={cambio.campo} className="text-[var(--muted)]">
+                        <span className="text-[var(--foreground)]">{cambio.etiqueta}:</span>{" "}
+                        {cambio.anterior} → {cambio.nuevo}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

@@ -227,6 +227,13 @@ export type BitacoraEntrada = {
   accion: string;
   usuarioNombre: string | null;
   createdAt: string;
+  // Snapshots completos del Concepto antes/después de la acción — ya vienen
+  // como JSON plano (registrarAuditoria los guarda con JSON.stringify, así
+  // que un Decimal como precioUnitarioContratista llega aquí como string,
+  // p. ej. "150.00"). El modal calcula el diff campo por campo a partir de
+  // esto, en vez de guardar una etiqueta genérica por acción.
+  valorAnterior: Record<string, unknown> | null;
+  valorNuevo: Record<string, unknown> | null;
 };
 
 // Se llama directamente desde el modal cliente (no vía <form>) — por eso
@@ -265,6 +272,8 @@ export async function obtenerConceptoDetalleAction(
         accion: b.accion,
         usuarioNombre: b.usuario?.nombre ?? null,
         createdAt: b.createdAt.toISOString(),
+        valorAnterior: (b.valorAnterior as Record<string, unknown> | null) ?? null,
+        valorNuevo: (b.valorNuevo as Record<string, unknown> | null) ?? null,
       })),
     };
   } catch (error) {

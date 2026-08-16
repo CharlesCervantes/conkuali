@@ -21,6 +21,26 @@ function requerirAdmin(usuario: UsuarioSesion) {
   return usuario.empresa.id;
 }
 
+// Compara un valor "anterior" (viene de una fila de Prisma — puede ser un
+// Decimal) contra un valor "nuevo" (ya validado por Zod — string/number/null)
+// para decidir si un campo realmente cambió. Sirve para no escribir en la
+// bitácora cuando alguien le da "Guardar" sin haber tocado nada (la
+// especificidad de la bitácora también significa no mostrar eventos que no
+// pasaron — precisión de sesión, agosto 2026).
+function valorIgual(anterior: unknown, nuevo: unknown): boolean {
+  const a = anterior === undefined ? null : anterior;
+  const n = nuevo === undefined ? null : nuevo;
+  if (a === null || n === null) return a === n;
+  if (typeof a === "object" && "toNumber" in (a as object)) {
+    return (a as { toNumber: () => number }).toNumber() === Number(n);
+  }
+  return String(a) === String(n);
+}
+
+function huboCambios(anterior: Record<string, unknown>, datos: Record<string, unknown>): boolean {
+  return Object.keys(datos).some((campo) => !valorIgual(anterior[campo], datos[campo]));
+}
+
 // ---------------------------------------------------------------------------
 // Lectura
 // ---------------------------------------------------------------------------
@@ -365,6 +385,8 @@ export async function editarConceptoEstructural(
   if (!anterior) throw new RegistroNoEncontradoError("El concepto");
 
   const datos = DatosConceptoEstructuralSchema.parse(datosCrudos);
+  if (!huboCambios(anterior, datos)) return anterior;
+
   const concepto = await db.concepto.update({ where: { id }, data: datos });
 
   await registrarAuditoria({
@@ -477,6 +499,8 @@ export async function editarConceptoPrivado(
   } else if (esquema === "ADMINISTRACION") {
     data.porcentajeAdministracion = datos.porcentajeAdministracion ?? null;
   }
+
+  if (!huboCambios(anterior, data)) return anterior;
 
   const concepto = await db.concepto.update({ where: { id }, data });
 
