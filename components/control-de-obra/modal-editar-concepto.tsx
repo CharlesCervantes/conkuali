@@ -124,7 +124,12 @@ export function ModalEditarConcepto({
   const [estado, setEstado] = useState<
     | { tipo: "cargando" }
     | { tipo: "error"; mensaje: string }
-    | { tipo: "listo"; concepto: ConceptoDetalle; bitacora: BitacoraEntrada[] }
+    | {
+        tipo: "listo";
+        concepto: ConceptoDetalle;
+        bitacoraOperativo: BitacoraEntrada[];
+        bitacoraPrivado: BitacoraEntrada[];
+      }
   >({ tipo: "cargando" });
 
   useEffect(() => {
@@ -134,7 +139,12 @@ export function ModalEditarConcepto({
       if ("error" in resultado) {
         setEstado({ tipo: "error", mensaje: resultado.error });
       } else {
-        setEstado({ tipo: "listo", concepto: resultado.concepto, bitacora: resultado.bitacora });
+        setEstado({
+          tipo: "listo",
+          concepto: resultado.concepto,
+          bitacoraOperativo: resultado.bitacoraOperativo,
+          bitacoraPrivado: resultado.bitacoraPrivado,
+        });
       }
     });
     return () => {
@@ -179,14 +189,14 @@ export function ModalEditarConcepto({
             <FormularioOperativo
               proyectoId={proyectoId}
               concepto={estado.concepto}
-              bitacora={estado.bitacora}
+              bitacora={estado.bitacoraOperativo}
               onClose={onClose}
             />
           ) : (
             <FormularioPrivado
               proyectoId={proyectoId}
               concepto={estado.concepto}
-              bitacora={estado.bitacora}
+              bitacora={estado.bitacoraPrivado}
               onClose={onClose}
             />
           ))}

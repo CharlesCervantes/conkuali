@@ -237,16 +237,33 @@ export type BitacoraEntrada = {
 };
 
 // Se llama directamente desde el modal cliente (no vía <form>) — por eso
-// regresa { concepto, bitacora } o { error }, en vez del patrón FormState de
-// useActionState. Todos los campos Decimal se convierten a number aquí mismo
-// — no son serializables cruzando de Server Action a Client Component (igual
-// que Avance de obra).
+// regresa { concepto, bitacoraOperativo, bitacoraPrivado } o { error }, en
+// vez del patrón FormState de useActionState. Todos los campos Decimal se
+// convierten a number aquí mismo — no son serializables cruzando de Server
+// Action a Client Component (igual que Avance de obra). Las dos bitácoras
+// vienen separadas de obtenerConceptoDetalle — el modo "operativo" del modal
+// solo debe pintar bitacoraOperativo y el modo "privado" solo bitacoraPrivado.
 export async function obtenerConceptoDetalleAction(
   conceptoId: string
-): Promise<{ concepto: ConceptoDetalle; bitacora: BitacoraEntrada[] } | { error: string }> {
+): Promise<
+  | { concepto: ConceptoDetalle; bitacoraOperativo: BitacoraEntrada[]; bitacoraPrivado: BitacoraEntrada[] }
+  | { error: string }
+> {
   const usuario = await requireSession();
   try {
-    const { concepto, bitacora } = await obtenerConceptoDetalle(usuario, conceptoId);
+    const { concepto, bitacoraOperativo, bitacoraPrivado } = await obtenerConceptoDetalle(
+      usuario,
+      conceptoId
+    );
+    const mapBitacora = (b: typeof bitacoraOperativo): BitacoraEntrada[] =>
+      b.map((entrada) => ({
+        id: entrada.id,
+        accion: entrada.accion,
+        usuarioNombre: entrada.usuario?.nombre ?? null,
+        createdAt: entrada.createdAt.toISOString(),
+        valorAnterior: (entrada.valorAnterior as Record<string, unknown> | null) ?? null,
+        valorNuevo: (entrada.valorNuevo as Record<string, unknown> | null) ?? null,
+      }));
     return {
       concepto: {
         id: concepto.id,
@@ -267,14 +284,8 @@ export async function obtenerConceptoDetalleAction(
         cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
         esquemaContractual: concepto.partida.proyecto.esquemaContractual,
       },
-      bitacora: bitacora.map((b) => ({
-        id: b.id,
-        accion: b.accion,
-        usuarioNombre: b.usuario?.nombre ?? null,
-        createdAt: b.createdAt.toISOString(),
-        valorAnterior: (b.valorAnterior as Record<string, unknown> | null) ?? null,
-        valorNuevo: (b.valorNuevo as Record<string, unknown> | null) ?? null,
-      })),
+      bitacoraOperativo: mapBitacora(bitacoraOperativo),
+      bitacoraPrivado: mapBitacora(bitacoraPrivado),
     };
   } catch (error) {
     return { error: mensajeError(error) };

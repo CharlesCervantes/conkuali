@@ -414,13 +414,26 @@ export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId:
   });
   if (!concepto) throw new RegistroNoEncontradoError("El concepto");
 
-  const bitacora = await db.registroAuditoria.findMany({
-    where: { entidad: "Concepto", entidadId: conceptoId },
-    orderBy: { createdAt: "desc" },
-    include: { usuario: { select: { nombre: true } } },
-  });
+  // Bitácoras independientes: "Concepto" son los eventos de Contrato General
+  // (creación, edición estructural, cambios de estatus) y "ConceptoPrivado"
+  // son solo las ediciones hechas desde Contrato General Priv. — separadas a
+  // propósito para que abrir el modal desde una pestaña nunca muestre eventos
+  // de la otra (decisión de sesión, agosto 2026, misma regla que ya aplicaba
+  // a qué se puede editar desde cada modo).
+  const [bitacoraOperativo, bitacoraPrivado] = await Promise.all([
+    db.registroAuditoria.findMany({
+      where: { entidad: "Concepto", entidadId: conceptoId },
+      orderBy: { createdAt: "desc" },
+      include: { usuario: { select: { nombre: true } } },
+    }),
+    db.registroAuditoria.findMany({
+      where: { entidad: "ConceptoPrivado", entidadId: conceptoId },
+      orderBy: { createdAt: "desc" },
+      include: { usuario: { select: { nombre: true } } },
+    }),
+  ]);
 
-  return { concepto, bitacora };
+  return { concepto, bitacoraOperativo, bitacoraPrivado };
 }
 
 // ---------------------------------------------------------------------------
@@ -504,10 +517,12 @@ export async function editarConceptoPrivado(
 
   const concepto = await db.concepto.update({ where: { id }, data });
 
+  // entidad "ConceptoPrivado" (no "Concepto") — así su bitácora nunca se
+  // mezcla con la de Contrato General (ver obtenerConceptoDetalle).
   await registrarAuditoria({
     empresaId,
     usuarioId: usuario.id,
-    entidad: "Concepto",
+    entidad: "ConceptoPrivado",
     entidadId: concepto.id,
     accion: "EDITAR",
     valorAnterior: anterior,
