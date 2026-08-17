@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CampoDinero } from "@/components/ui/campo-dinero";
 import { crearConceptoAction, type FormState } from "@/app/(app)/control-de-obra/[id]/actions";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
@@ -44,21 +45,9 @@ export function FormNuevoConcepto({
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
-        <Input
-          name="precioUnitarioContratista"
-          type="number"
-          step="0.01"
-          min="0"
-          placeholder="P.U. (presupuesto)"
-        />
+        <CampoDinero name="precioUnitarioContratista" placeholder="P.U. (presupuesto)" />
         {esPrecioAlzado && (
-          <Input
-            name="precioUnitarioMateriales"
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="P.U. materiales (presupuesto)"
-          />
+          <CampoDinero name="precioUnitarioMateriales" placeholder="P.U. materiales (presupuesto)" />
         )}
       </div>
 
