@@ -56,6 +56,8 @@ model Empresa {
   beneficiarios   Beneficiario[]
   semanas         Semana[]
   avancesConcepto AvanceConcepto[]
+  cierresSemana   CierreSemanaProyecto[]
+  cortesSemana    CorteSemanal[]
 
   @@map("empresas")
 }
@@ -130,6 +132,10 @@ model Usuario {
   comentarios            ComentarioMovimiento[]
   avancesRegistrados     AvanceConcepto[]        @relation("AvanceRegistrado")
   avancesAprobados       AvanceConcepto[]        @relation("AvanceAprobado")
+
+  cierresSemanaGenerados  CierreSemanaProyecto[] @relation("CierreSemanaGenerado")
+  cierresSemanaReabiertos CierreSemanaProyecto[] @relation("CierreSemanaReabierto")
+  cortesSemanaGenerados   CorteSemanal[]         @relation("CorteSemanalGenerado")
 
   @@map("usuarios")
 }
@@ -264,6 +270,8 @@ model Proyecto {
 
   beneficiarios BeneficiarioProyecto[]
   partidas      Partida[]
+  cierresSemana CierreSemanaProyecto[]
+  cortesSemana  CorteSemanal[]
 
   @@index([empresaId])
   @@map("proyectos")
@@ -341,9 +349,10 @@ model BeneficiarioProyecto {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  aditivas    Aditiva[]
-  movimientos MovimientoSemanal[]
-  contratos   ContratoContratista[]
+  aditivas     Aditiva[]
+  movimientos  MovimientoSemanal[]
+  contratos    ContratoContratista[]
+  cortesSemana CorteSemanal[]
 
   @@unique([beneficiarioId, proyectoId])
   @@index([proyectoId])
@@ -386,6 +395,8 @@ model Semana {
 
   movimientos     MovimientoSemanal[]
   avancesConcepto AvanceConcepto[]
+  cierresSemana   CierreSemanaProyecto[]
+  cortesSemana    CorteSemanal[]
 
   @@unique([empresaId, numero, anio])
   @@map("semanas")
@@ -431,6 +442,7 @@ model MovimientoSemanal {
   updatedAt DateTime @updatedAt
 
   comentarios ComentarioMovimiento[]
+  corte       CorteSemanal?
 
   @@unique([beneficiarioProyectoId, semanaId])
   @@index([semanaId])
@@ -537,8 +549,9 @@ model Concepto {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  asignaciones ContratoConcepto[]
-  avances      AvanceConcepto[]
+  asignaciones  ContratoConcepto[]
+  avances       AvanceConcepto[]
+  corteDetalles CorteSemanalConcepto[]
 
   @@index([partidaId])
   @@map("conceptos")
@@ -584,6 +597,8 @@ model ContratoConcepto {
   precioUnitarioContratista Decimal             @db.Decimal(14, 2)
   createdAt                 DateTime            @default(now())
   updatedAt                 DateTime            @updatedAt
+
+  corteDetalles CorteSemanalConcepto[]
 
   @@index([contratoContratistaId])
   @@map("contrato_conceptos")
@@ -634,9 +649,142 @@ model AvanceConcepto {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  corteDetalle CorteSemanalConcepto?
+
   @@unique([conceptoId, semanaId])
   @@index([empresaId])
   @@index([semanaId])
   @@index([estatusAprobacion])
   @@map("avance_conceptos")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 5: cierre semanal
+// Ver /docs/negocio/04-modulo-control-de-obra.md. Consolida oficialmente el
+// avance aprobado de un proyecto+semana: genera el corte de cada contratista
+// y su MovimientoSemanal en Reporte General. Decisión de sesión, agosto 2026.
+// ---------------------------------------------------------------------------
+
+// GENERADO = corte vigente (con o sin monto). ANULADO = se reconció a $0 (el
+// contratista dejó de tener avance aprobado esa semana tras una reapertura) —
+// no se borra, solo deja de contar como activo (mismo criterio que
+// MovimientoSemanal.estatusAprobacion = CANCELADO / estatusPago =
+// SIN_MOVIMIENTO, que es lo que se le aplica al movimiento enlazado).
+enum EstatusCorteSemanal {
+  GENERADO
+  ANULADO
+}
+
+// Candado de cierre por proyecto+semana — independiente de Semana.estado
+// (que es compartido por toda la empresa, no por proyecto: cada obra aprueba
+// y cierra a su propio ritmo). Reutiliza EstatusSemana (ABIERTA/CERRADA) por
+// tener el mismo significado, solo que aquí scoped a un proyecto. El
+// historial completo de aperturas/cierres vive en RegistroAuditoria — esta
+// fila solo refleja el estado actual (mismo patrón que Proyecto.estatus).
+model CierreSemanaProyecto {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  estatus EstatusSemana @default(CERRADA)
+
+  cerradoPor   Usuario  @relation("CierreSemanaGenerado", fields: [cerradoPorId], references: [id])
+  cerradoPorId String
+  cerradoEn    DateTime @default(now())
+
+  reabiertoPor     Usuario?  @relation("CierreSemanaReabierto", fields: [reabiertoPorId], references: [id])
+  reabiertoPorId   String?
+  reabiertoEn      DateTime?
+  motivoReapertura String?
+
+  cortes CorteSemanal[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([proyectoId, semanaId])
+  @@index([empresaId])
+  @@map("cierres_semana_proyecto")
+}
+
+// Corte semanal de UN contratista en UN proyecto — agrupa por
+// beneficiarioProyectoId (no por ContratoContratista individual), consistente
+// con que MovimientoSemanal ya es único por beneficiarioProyectoId+semanaId:
+// "un solo corte por obra por semana" aunque el contratista tenga varios
+// contratos, conceptos o partidas. Se genera la primera vez que hay avance
+// aprobado; en un recierre posterior se reconcilia en el lugar (nunca se
+// duplica) mientras su MovimientoSemanal no esté LIQUIDADO.
+model CorteSemanal {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  cierreSemanaProyecto   CierreSemanaProyecto @relation(fields: [cierreSemanaProyectoId], references: [id])
+  cierreSemanaProyectoId String
+
+  beneficiarioProyecto   BeneficiarioProyecto @relation(fields: [beneficiarioProyectoId], references: [id])
+  beneficiarioProyectoId String
+
+  // Correlativo simple por proyecto, solo para mostrarlo en pantalla — NO es
+  // el futuro folio de Recibo (ese será único a nivel compañía, sección
+  // "Recibo de Pago" de 02-control-de-obra.md, todavía no implementado).
+  numero Int
+
+  montoBruto Decimal @db.Decimal(14, 2)
+  ajustes    Decimal @default(0) @db.Decimal(14, 2)
+  montoNeto  Decimal @db.Decimal(14, 2)
+
+  estatus EstatusCorteSemanal @default(GENERADO)
+
+  movimientoSemanal   MovimientoSemanal? @relation(fields: [movimientoSemanalId], references: [id])
+  movimientoSemanalId String?            @unique
+
+  generadoPor   Usuario @relation("CorteSemanalGenerado", fields: [generadoPorId], references: [id])
+  generadoPorId String
+
+  detalle CorteSemanalConcepto[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([proyectoId, semanaId, beneficiarioProyectoId])
+  @@index([empresaId])
+  @@map("cortes_semanales")
+}
+
+// Detalle congelado del corte — una copia, no una referencia recalculable.
+// El P.U. viene de ContratoConcepto.precioUnitarioContratista (ya congelado
+// al asignar el contratista), nunca de Concepto en vivo. Nunca se recalcula
+// leyendo el estado actual: si el Contrato General cambia después, esta fila
+// no se entera (regla explícita — el precio queda fijo históricamente).
+model CorteSemanalConcepto {
+  id             String       @id @default(cuid())
+  corteSemanal   CorteSemanal @relation(fields: [corteSemanalId], references: [id])
+  corteSemanalId String
+
+  concepto   Concepto @relation(fields: [conceptoId], references: [id])
+  conceptoId String
+
+  contratoConcepto   ContratoConcepto @relation(fields: [contratoConceptoId], references: [id])
+  contratoConceptoId String
+
+  avanceConcepto   AvanceConcepto @relation(fields: [avanceConceptoId], references: [id])
+  avanceConceptoId String         @unique
+
+  descripcionConcepto      String
+  unidad                    String
+  cantidadEjecutada         Decimal @db.Decimal(14, 3)
+  precioUnitarioContratista Decimal @db.Decimal(14, 2)
+  importe                   Decimal @db.Decimal(14, 2)
+
+  @@index([corteSemanalId])
+  @@map("corte_semanal_conceptos")
 }

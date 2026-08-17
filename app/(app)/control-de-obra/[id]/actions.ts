@@ -18,6 +18,10 @@ import {
   cambiarEstatusAprobacionAvance,
 } from "@/lib/server/control-de-obra/avance";
 import {
+  cerrarSemana,
+  reabrirSemana,
+} from "@/lib/server/control-de-obra/cierre-semana";
+import {
   SinPermisoError,
   ProyectoNoEncontradoError,
   ValidacionError,
@@ -337,4 +341,45 @@ export async function asignarConceptoAction(
   }
   revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Cierre semanal de Avance de Obra
+// ---------------------------------------------------------------------------
+
+export type CerrarSemanaFormState = { error?: string; cerrado?: boolean } | undefined;
+
+export async function cerrarSemanaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: CerrarSemanaFormState,
+  _formData: FormData
+): Promise<CerrarSemanaFormState> {
+  const usuario = await requireSession();
+  try {
+    await cerrarSemana(usuario, proyectoId, semanaId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  revalidatePath("/reporte-general");
+  return { cerrado: true };
+}
+
+export type ReabrirSemanaFormState = { error?: string; reabierta?: boolean } | undefined;
+
+export async function reabrirSemanaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: ReabrirSemanaFormState,
+  formData: FormData
+): Promise<ReabrirSemanaFormState> {
+  const usuario = await requireSession();
+  try {
+    await reabrirSemana(usuario, proyectoId, semanaId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  return { reabierta: true };
 }

@@ -11,6 +11,7 @@ import {
   resolverContratistaPorConcepto,
   RegistroNoEncontradoError,
 } from "./estructura-contractual";
+import { verificarSemanaEditable } from "./cierre-semana";
 
 function requerirEmpresa(usuario: UsuarioSesion): string {
   if (!usuario.empresa) throw new SinPermisoError();
@@ -240,6 +241,11 @@ export async function guardarAvanceSemanal(
   const semana = await db.semana.findFirst({ where: { id: datos.semanaId, empresaId } });
   if (!semana) throw new RegistroNoEncontradoError("La semana");
 
+  // Bloqueo general: la semana está cerrada para este proyecto (candado
+  // fino por concepto liquidado se revisa más abajo, una vez resuelto qué
+  // conceptos de verdad van a cambiar).
+  await verificarSemanaEditable(proyectoId, semana.id, []);
+
   // Solo conceptos que en verdad pertenecen a este proyecto (protege contra
   // enviar ids de otro proyecto/empresa).
   const conceptoIds = datos.filas.map((f) => f.conceptoId);
@@ -292,6 +298,15 @@ export async function guardarAvanceSemanal(
       valorPrevio,
     });
   }
+
+  // Candado fino: aunque la semana esté abierta (nunca se cerró, o se
+  // reabrió), un concepto que ya forma parte de un corte LIQUIDADO queda
+  // protegido — solo se revisa contra lo que de verdad va a cambiar.
+  await verificarSemanaEditable(
+    proyectoId,
+    semana.id,
+    porGuardar.map((f) => f.conceptoId)
+  );
 
   // Pase 2: escribir + auditar (upsert nunca duplica; cada semana conserva su
   // propia fila, nunca se sobreescribe el histórico de semanas anteriores).
@@ -349,8 +364,11 @@ export async function cambiarEstatusAprobacionAvance(
 
   const avance = await db.avanceConcepto.findFirst({
     where: { conceptoId, semanaId, empresaId },
+    include: { concepto: { select: { partida: { select: { proyectoId: true } } } } },
   });
   if (!avance) throw new RegistroNoEncontradoError("El avance de este concepto");
+
+  await verificarSemanaEditable(avance.concepto.partida.proyectoId, semanaId, [conceptoId]);
 
   const actualizado = await db.avanceConcepto.update({
     where: { id: avance.id },

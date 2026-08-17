@@ -6,10 +6,17 @@ import {
   parametroAFecha,
 } from "@/lib/server/semanas";
 import { obtenerAvanceSemanal } from "@/lib/server/control-de-obra/avance";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
+import { obtenerResumenCierreSemana } from "@/lib/server/control-de-obra/cierre-semana";
+import {
+  puedeAdministrarProyectos,
+  puedeCerrarSemana,
+  puedeReabrirSemana,
+} from "@/lib/server/permisos";
 import { ResumenAvance } from "@/components/control-de-obra/resumen-avance";
 import { NavegacionSemana } from "@/components/control-de-obra/navegacion-semana";
 import { FormAvanceSemanal } from "@/components/control-de-obra/form-avance-semanal";
+import { CierreSemanaAbierta } from "@/components/control-de-obra/cierre-semana-abierta";
+import { CierreSemanaCerrada } from "@/components/control-de-obra/cierre-semana-cerrada";
 import { Card } from "@/components/ui/card";
 
 export default async function AvanceObraPage({
@@ -32,7 +39,11 @@ export default async function AvanceObraPage({
   // Semana compartida con toda la empresa (la misma entidad que Reporte
   // General) — no se crea un ciclo semanal independiente para este módulo.
   const semana = await obtenerOCrearSemana(usuario.empresa.id, parametroAFecha(fechaParam));
-  const partidas = await obtenerAvanceSemanal(usuario, id, semana);
+  const [partidas, resumenCierre] = await Promise.all([
+    obtenerAvanceSemanal(usuario, id, semana),
+    obtenerResumenCierreSemana(usuario, id, semana.id),
+  ]);
+  const semanaCerrada = resumenCierre.estatus === "CERRADA";
 
   const todosLosConceptos = partidas.flatMap((p) => p.conceptos);
   const conMovimiento = todosLosConceptos.filter((c) => c.estaSemana > 0).length;
@@ -74,7 +85,26 @@ export default async function AvanceObraPage({
         semanaId={semana.id}
         partidas={partidas}
         puedeAprobar={puedeAdministrarProyectos(usuario)}
+        soloLectura={semanaCerrada}
       />
+
+      {semanaCerrada ? (
+        <CierreSemanaCerrada
+          proyectoId={id}
+          semanaId={semana.id}
+          numeroSemana={semana.numero}
+          resumen={resumenCierre}
+          puedeReabrir={puedeReabrirSemana(usuario)}
+        />
+      ) : (
+        <CierreSemanaAbierta
+          proyectoId={id}
+          semanaId={semana.id}
+          numeroSemana={semana.numero}
+          resumen={resumenCierre}
+          puedeCerrarSemana={puedeCerrarSemana(usuario)}
+        />
+      )}
     </div>
   );
 }
