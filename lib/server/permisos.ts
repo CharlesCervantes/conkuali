@@ -33,6 +33,16 @@ export function puedeAdministrarProyectos(usuario: UsuarioSesion): boolean {
 }
 
 /**
+ * Eliminar un proyecto (borrado en cascada, irreversible) es más restrictivo
+ * que administrarlo — a propósito no incluye MASTER (decisión de sesión,
+ * agosto 2026: el rol de plataforma no debe poder borrar datos de un tenant
+ * casualmente desde esta pantalla).
+ */
+export function puedeEliminarProyectos(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
+}
+
+/**
  * Reportar avance físico semanal es explícito por rol (no "cualquier usuario
  * activo") para que un rol nuevo en el futuro no reciba este permiso por
  * defecto — debe agregarse aquí a propósito (decisión de sesión, agosto 2026).

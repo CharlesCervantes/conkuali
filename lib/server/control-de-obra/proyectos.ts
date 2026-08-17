@@ -3,7 +3,7 @@ import { cache } from "react";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
+import { puedeAdministrarProyectos, puedeEliminarProyectos } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { EstatusProyecto } from "@/lib/generated/prisma/enums";
 
@@ -54,6 +54,11 @@ function requerirEmpresa(usuario: UsuarioSesion): string {
 
 function requerirAdmin(usuario: UsuarioSesion): string {
   if (!puedeAdministrarProyectos(usuario)) throw new SinPermisoError();
+  return requerirEmpresa(usuario);
+}
+
+function requerirEliminar(usuario: UsuarioSesion): string {
+  if (!puedeEliminarProyectos(usuario)) throw new SinPermisoError();
   return requerirEmpresa(usuario);
 }
 
@@ -233,4 +238,95 @@ export async function cambiarEstatusProyecto(
   });
 
   return proyecto;
+}
+
+// Borrado en cascada, irreversible: además del proyecto, elimina todo lo que
+// cuelga de él (partidas, conceptos, participaciones de beneficiarios,
+// contratos de contratista, asignaciones, avances y pagos semanales) —
+// decisión explícita de sesión, agosto 2026: a diferencia de Cancelar (que
+// conserva el proyecto como historial), Eliminar lo borra por completo. La
+// bitácora de cada entidad borrada se borra con ella (ya no tiene sujeto),
+// pero la bitácora del propio Proyecto se conserva y se le agrega un último
+// registro ELIMINAR — sigue existiendo un rastro de quién eliminó qué
+// proyecto y cuándo, aunque su contenido operativo ya no esté (regla del
+// proyecto: mantener trazabilidad de operaciones importantes).
+export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
+  const empresaId = requerirEliminar(usuario);
+
+  await db.$transaction(async (tx) => {
+    const proyecto = await tx.proyecto.findFirst({ where: { id, empresaId } });
+    if (!proyecto) throw new ProyectoNoEncontradoError();
+
+    const partidas = await tx.partida.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const partidaIds = partidas.map((p) => p.id);
+
+    const conceptos = await tx.concepto.findMany({
+      where: { partidaId: { in: partidaIds } },
+      select: { id: true },
+    });
+    const conceptoIds = conceptos.map((c) => c.id);
+
+    const beneficiarioProyectos = await tx.beneficiarioProyecto.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const beneficiarioProyectoIds = beneficiarioProyectos.map((b) => b.id);
+
+    const contratos = await tx.contratoContratista.findMany({
+      where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
+      select: { id: true },
+    });
+    const contratoIds = contratos.map((c) => c.id);
+
+    const asignaciones = await tx.contratoConcepto.findMany({
+      where: { conceptoId: { in: conceptoIds } },
+      select: { id: true },
+    });
+    const asignacionIds = asignaciones.map((a) => a.id);
+
+    // Hijos antes que padres, respetando las llaves foráneas.
+    // ComentarioMovimiento tiene onDelete: Cascade desde MovimientoSemanal a
+    // nivel de base de datos — no hace falta borrarlo aparte.
+    await tx.avanceConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
+    await tx.contratoConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
+    await tx.movimientoSemanal.deleteMany({
+      where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
+    });
+    await tx.aditiva.deleteMany({
+      where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
+    });
+    await tx.contratoContratista.deleteMany({
+      where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
+    });
+    await tx.concepto.deleteMany({ where: { partidaId: { in: partidaIds } } });
+    await tx.partida.deleteMany({ where: { proyectoId: id } });
+    await tx.beneficiarioProyecto.deleteMany({ where: { proyectoId: id } });
+
+    await tx.registroAuditoria.deleteMany({
+      where: {
+        OR: [
+          { entidad: "Partida", entidadId: { in: partidaIds } },
+          { entidad: { in: ["Concepto", "ConceptoPrivado"] }, entidadId: { in: conceptoIds } },
+          { entidad: "ContratoContratista", entidadId: { in: contratoIds } },
+          { entidad: "ContratoConcepto", entidadId: { in: asignacionIds } },
+        ],
+      },
+    });
+
+    await tx.proyecto.delete({ where: { id } });
+
+    await tx.registroAuditoria.create({
+      data: {
+        empresaId,
+        usuarioId: usuario.id,
+        entidad: "Proyecto",
+        entidadId: id,
+        accion: "ELIMINAR",
+        valorAnterior: JSON.parse(JSON.stringify(proyecto)),
+      },
+    });
+  });
 }

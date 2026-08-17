@@ -33,6 +33,7 @@ enum AccionAuditoria {
   CAMBIAR_ESTATUS
   ACTIVAR
   DESACTIVAR
+  ELIMINAR
 }
 
 model Empresa {
