@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import {
   obtenerProyecto,
   ProyectoNoEncontradoError,
@@ -46,12 +45,21 @@ export default async function ProyectoLayout({
         <TabNav
           tabs={[
             { href: `/control-de-obra/${id}`, label: "Resumen" },
-            { href: `/control-de-obra/${id}/partidas`, label: "Contrato General" },
-            ...(puedeVerContratoGeneralPrivado(usuario)
-              ? [{ href: `/control-de-obra/${id}/contrato-privado`, label: "Contrato General Priv." }]
-              : []),
-            { href: `/control-de-obra/${id}/contratistas`, label: "Contratistas" },
-            { href: `/control-de-obra/${id}/avance`, label: "Avance de obra" },
+            // href apunta a la raíz de la sección (no a /contrato/general
+            // directo) a propósito: así el match por prefijo cubre todas sus
+            // subpestañas (general Y privado). /contrato en sí mismo
+            // redirige a /contrato/general (ver contrato/page.tsx).
+            {
+              href: `/control-de-obra/${id}/contrato`,
+              label: "Contrato",
+              coincideSubrutas: true,
+            },
+            {
+              href: `/control-de-obra/${id}/ejecucion`,
+              label: "Ejecución",
+              coincideSubrutas: true,
+            },
+            { href: `/control-de-obra/${id}/cliente`, label: "Cliente" },
           ]}
         />
 

@@ -23,7 +23,7 @@ import { Card } from "@/components/ui/card";
 export default async function AvanceObraPage({
   params,
   searchParams,
-}: PageProps<"/control-de-obra/[id]/avance">) {
+}: PageProps<"/control-de-obra/[id]/ejecucion/avance">) {
   const usuario = await requireSession();
   const { id } = await params;
   const { fecha } = await searchParams;

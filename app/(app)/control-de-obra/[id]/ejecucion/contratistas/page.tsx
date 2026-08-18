@@ -13,7 +13,7 @@ import { ContratistasView } from "@/components/control-de-obra/contratistas-view
 
 export default async function ContratistasPage({
   params,
-}: PageProps<"/control-de-obra/[id]/contratistas">) {
+}: PageProps<"/control-de-obra/[id]/ejecucion/contratistas">) {
   const usuario = await requireSession();
   const { id } = await params;
   const puedeAdministrar = puedeAdministrarProyectos(usuario);

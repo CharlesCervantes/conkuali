@@ -73,7 +73,7 @@ export async function crearPartidaAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
   return undefined;
 }
 
@@ -96,7 +96,7 @@ export async function crearConceptoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
   return undefined;
 }
 
@@ -117,7 +117,7 @@ export async function crearContratoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   return undefined;
 }
 
@@ -147,8 +147,8 @@ export async function guardarAvanceAction(
     return { error: mensajeError(error) };
   }
 
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   revalidatePath("/control-de-obra");
   return { guardados: resultado.guardados };
 }
@@ -161,8 +161,8 @@ export async function cambiarEstatusAprobacionAvanceAction(
 ) {
   const usuario = await requireSession();
   await cambiarEstatusAprobacionAvance(usuario, conceptoId, semanaId, nuevoEstatus);
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   revalidatePath("/control-de-obra");
 }
 
@@ -194,7 +194,7 @@ export async function editarConceptoPrivadoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
   return { guardado: true };
 }
 
@@ -327,8 +327,8 @@ export async function editarConceptoEstructuralAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
-  revalidatePath(`/control-de-obra/${proyectoId}/contrato-privado`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
   return { guardado: true };
 }
 
@@ -346,7 +346,7 @@ export async function asignarConceptoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   return undefined;
 }
 
@@ -368,7 +368,7 @@ export async function cerrarSemanaAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
   revalidatePath("/reporte-general");
   return { cerrado: true };
 }
@@ -387,7 +387,7 @@ export async function reabrirSemanaAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
   return { reabierta: true };
 }
 
@@ -408,7 +408,7 @@ export async function generarReciboAction(
   const usuario = await requireSession();
   try {
     const recibo = await generarRecibo(usuario, corteSemanalId);
-    revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+    revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
     return { generado: true, folio: recibo.folio };
   } catch (error) {
     return { error: mensajeError(error) };
@@ -446,7 +446,7 @@ export async function subirEvidenciaReciboAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   return { subido: true };
 }
 

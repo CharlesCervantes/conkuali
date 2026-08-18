@@ -7,7 +7,7 @@ import { ContratoGeneralPrivadoView } from "@/components/control-de-obra/contrat
 
 export default async function ContratoGeneralPrivadoPage({
   params,
-}: PageProps<"/control-de-obra/[id]/contrato-privado">) {
+}: PageProps<"/control-de-obra/[id]/contrato/privado">) {
   const usuario = await requireSession();
 
   // Igual que editar/page.tsx: el permiso se valida aquí, del lado servidor,

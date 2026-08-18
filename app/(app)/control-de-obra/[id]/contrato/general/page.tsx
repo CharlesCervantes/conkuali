@@ -8,7 +8,7 @@ import { ContratoGeneralView } from "@/components/control-de-obra/contrato-gener
 
 export default async function ContratoGeneralPage({
   params,
-}: PageProps<"/control-de-obra/[id]/partidas">) {
+}: PageProps<"/control-de-obra/[id]/contrato/general">) {
   const usuario = await requireSession();
   const { id } = await params;
 
