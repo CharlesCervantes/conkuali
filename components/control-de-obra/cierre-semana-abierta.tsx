@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -12,9 +13,10 @@ import {
 import type { ResumenCierreSemana } from "@/lib/server/control-de-obra/cierre-semana";
 
 // Bloque al final de Avance de obra — semana todavía abierta (nunca se
-// cerró, o se reabrió). El botón dispara cerrarSemanaAction directamente; un
-// confirm() nativo es suficiente pausa de seguridad para esta acción (a
-// diferencia de Eliminar proyecto, es reversible vía Reabrir).
+// cerró, o se reabrió). El botón abre un modal de confirmación propio (no
+// window.confirm(), para que se vea con la UI de la página, mismo patrón que
+// BotonEliminarProyecto/ModalReabrir) — es reversible vía Reabrir, así que
+// basta una confirmación simple, no un texto a escribir.
 export function CierreSemanaAbierta({
   proyectoId,
   semanaId,
@@ -28,12 +30,7 @@ export function CierreSemanaAbierta({
   resumen: ResumenCierreSemana;
   puedeCerrarSemana: boolean;
 }) {
-  const action = cerrarSemanaAction.bind(null, proyectoId, semanaId);
-  const [state, formAction, pending] = useActionState<CerrarSemanaFormState, FormData>(
-    action,
-    undefined
-  );
-
+  const [modalAbierto, setModalAbierto] = useState(false);
   const bloqueado = !resumen.puedeCerrar;
 
   return (
@@ -81,26 +78,87 @@ export function CierreSemanaAbierta({
       )}
 
       {puedeCerrarSemana && (
-        <form action={formAction} className="mt-4">
-          <Button
-            type="submit"
-            disabled={bloqueado || pending}
-            onClick={(e) => {
-              if (
-                !window.confirm(
-                  `¿Cerrar la semana ${numeroSemana}? Esto genera los cortes y movimientos de Reporte General de los contratistas con avance aprobado.`
-                )
-              ) {
-                e.preventDefault();
-              }
-            }}
-          >
-            {pending ? "Cerrando…" : `Cerrar semana ${numeroSemana}`}
+        <div className="mt-4">
+          <Button disabled={bloqueado} onClick={() => setModalAbierto(true)}>
+            Cerrar semana {numeroSemana}
           </Button>
-          {state?.error && <p className="mt-2 text-sm text-red-700">{state.error}</p>}
-        </form>
+        </div>
+      )}
+
+      {modalAbierto && (
+        <ModalConfirmarCierre
+          proyectoId={proyectoId}
+          semanaId={semanaId}
+          numeroSemana={numeroSemana}
+          onClose={() => setModalAbierto(false)}
+        />
       )}
     </Card>
+  );
+}
+
+function ModalConfirmarCierre({
+  proyectoId,
+  semanaId,
+  numeroSemana,
+  onClose,
+}: {
+  proyectoId: string;
+  semanaId: string;
+  numeroSemana: number;
+  onClose: () => void;
+}) {
+  const action = cerrarSemanaAction.bind(null, proyectoId, semanaId);
+  const [state, formAction, pending] = useActionState<CerrarSemanaFormState, FormData>(
+    action,
+    undefined
+  );
+  const [stateAnterior, setStateAnterior] = useState(state);
+  if (state !== stateAnterior) {
+    setStateAnterior(state);
+    if (state?.cerrado) onClose();
+  }
+
+  useEffect(() => {
+    function alTecla(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", alTecla);
+    return () => document.removeEventListener("keydown", alTecla);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <Card className="enter w-full max-w-md p-6">
+        <h2 className="text-lg font-semibold text-[var(--foreground)]">
+          Cerrar semana {numeroSemana}
+        </h2>
+        <p className="mt-2 text-sm text-[var(--muted)]">
+          Esto genera los cortes y los movimientos de Reporte General de los contratistas con
+          avance aprobado esta semana. Puedes reabrirla después si hace falta corregir algo.
+        </p>
+
+        <form action={formAction} className="mt-5 flex items-center gap-3">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Cerrando…" : "Sí, cerrar semana"}
+          </Button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-sm text-[var(--muted)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+          >
+            Cancelar
+          </button>
+        </form>
+        {state?.error && <p className="mt-3 text-sm text-red-700">{state.error}</p>}
+      </Card>
+    </div>,
+    document.body
   );
 }
 
