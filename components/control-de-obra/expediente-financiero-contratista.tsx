@@ -1,8 +1,6 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { cn } from "@/lib/cn";
 import { formatMoney } from "@/lib/dinero";
@@ -17,25 +15,26 @@ import type {
   CorteHistorial,
 } from "@/lib/server/control-de-obra/recibos";
 
-// Expediente financiero de un contratista dentro de la obra — resumen +
-// historial de cortes. Solo se renderiza si puedeVerRecibosFinancieros ya lo
-// decidió el caller (contratistas-view.tsx); este componente no repite ese
-// gate de permiso.
+// Resumen financiero + historial de cortes de un contratista — se renderiza
+// DENTRO de la tarjeta principal del contratista (contratistas-view.tsx la
+// arma), nunca en su propia tarjeta aparte: así queda claro a simple vista a
+// quién pertenece cada resumen. Solo se renderiza si puedeVerRecibosFinancieros
+// ya lo decidió el caller; este componente no repite ese gate de permiso.
+// "Contrato vigente" vive aquí (no se repite en el encabezado del contratista
+// cuando este bloque es visible — ver contratistas-view.tsx).
 export function ExpedienteFinancieroContratista({
   proyectoId,
-  nombreContratista,
   resumen,
   historial,
 }: {
   proyectoId: string;
-  nombreContratista: string;
   resumen: ResumenFinancieroContratista;
   historial: CorteHistorial[];
 }) {
   const [corteDetalleId, setCorteDetalleId] = useState<string | null>(null);
 
   return (
-    <Card className="p-5">
+    <>
       <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
         Resumen financiero
       </p>
@@ -51,11 +50,13 @@ export function ExpedienteFinancieroContratista({
         />
       </dl>
 
-      {historial.length > 0 && (
-        <div className="mt-5 border-t border-[var(--border)] pt-4">
-          <p className="mb-3 text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
-            Estimaciones y pagos
-          </p>
+      <div className="mt-5 border-t border-[var(--border)] pt-4">
+        <p className="mb-3 text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
+          Estimaciones y pagos
+        </p>
+        {historial.length === 0 ? (
+          <p className="text-sm text-[var(--muted)]">Aún no hay estimaciones generadas.</p>
+        ) : (
           <Table>
             <Thead>
               <Tr>
@@ -90,8 +91,8 @@ export function ExpedienteFinancieroContratista({
               ))}
             </tbody>
           </Table>
-        </div>
-      )}
+        )}
+      </div>
 
       {corteDetalleId && (
         <DetalleCorteModal
@@ -100,7 +101,7 @@ export function ExpedienteFinancieroContratista({
           onClose={() => setCorteDetalleId(null)}
         />
       )}
-    </Card>
+    </>
   );
 }
 

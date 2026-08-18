@@ -35,19 +35,21 @@ export function FormAvanceSemanal({
   partidas,
   puedeAprobar,
   soloLectura = false,
+  mensajeVacio,
 }: {
   proyectoId: string;
   semanaId: string;
   partidas: Partidas;
   puedeAprobar: boolean;
   soloLectura?: boolean;
+  mensajeVacio?: string;
 }) {
   return (
     <div className="space-y-3">
       {partidas.length === 0 && (
         <Card className="p-6 text-sm text-[var(--muted)]">
-          Todavía no hay partidas en este proyecto. Créalas primero en Partidas de
-          obra.
+          {mensajeVacio ??
+            "Todavía no hay partidas en este proyecto. Créalas primero en Partidas de obra."}
         </Card>
       )}
 

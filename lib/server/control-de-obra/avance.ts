@@ -93,7 +93,9 @@ type CamposDecimalConcepto =
   | "precioUnitarioIndirectos"
   | "precioUnitarioHerramienta"
   | "porcentajeUtilidad"
-  | "porcentajeAdministracion";
+  | "porcentajeAdministracion"
+  | "precioUnitarioContratistaPrivado"
+  | "cantidadContratadaPrivado";
 
 export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
   AvanceCalculado & {
@@ -104,6 +106,12 @@ export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
     precioUnitarioHerramienta: number | null;
     porcentajeUtilidad: number | null;
     porcentajeAdministracion: number | null;
+    // No se usan en esta vista (operativo, no Privado) pero igual hay que
+    // convertirlos — `...concepto` los arrastra sin tocarlos, y un
+    // Prisma.Decimal crudo no es serializable de Server a Client Component
+    // (rompía obtenerAvanceSemanal desde que se agregaron estos campos).
+    precioUnitarioContratistaPrivado: number | null;
+    cantidadContratadaPrivado: number | null;
     anterior: number;
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
@@ -170,6 +178,8 @@ export async function obtenerAvanceSemanal(
         precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
         porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
+        precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
+        cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,
