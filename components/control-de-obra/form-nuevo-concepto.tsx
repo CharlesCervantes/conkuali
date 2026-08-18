@@ -3,19 +3,23 @@
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CampoDinero } from "@/components/ui/campo-dinero";
 import { crearConceptoAction, type FormState } from "@/app/(app)/control-de-obra/[id]/actions";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
+// Solo campos operativos (Contrato General) — descripción, unidad, cantidad,
+// P.U., y P.U. materiales cuando aplica (Precio Alzado). Los campos privados
+// (Indirectos, Herramienta, %, precio comercial) ya no se capturan aquí — se
+// definen desde Contrato General Priv., una vez creado el concepto (sección
+// 13 del rediseño, agosto 2026: "la separación debe ser real por pestaña").
 export function FormNuevoConcepto({
   partidaId,
   proyectoId,
   esquemaContractual,
-  puedeVerPrivado,
 }: {
   partidaId: string;
   proyectoId: string;
   esquemaContractual: EsquemaContractual | null;
-  puedeVerPrivado: boolean;
 }) {
   const action = crearConceptoAction.bind(null, partidaId, proyectoId);
   const [state, formAction, pending] = useActionState<FormState, FormData>(
@@ -24,7 +28,6 @@ export function FormNuevoConcepto({
   );
 
   const esPrecioAlzado = esquemaContractual === "PRECIO_ALZADO";
-  const esAdministracion = esquemaContractual === "ADMINISTRACION";
 
   return (
     <form action={formAction} className="space-y-4">
@@ -41,80 +44,12 @@ export function FormNuevoConcepto({
         />
       </div>
 
-      <div>
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-          Contrato General
-        </p>
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
-          <Input
-            name="precioUnitarioContratista"
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="P.U. contratista (presupuesto)"
-          />
-          <Input
-            name="precioUnitarioMateriales"
-            type="number"
-            step="0.01"
-            min="0"
-            placeholder="P.U. materiales (presupuesto)"
-          />
-        </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
+        <CampoDinero name="precioUnitarioContratista" placeholder="P.U. (presupuesto)" />
+        {esPrecioAlzado && (
+          <CampoDinero name="precioUnitarioMateriales" placeholder="P.U. materiales (presupuesto)" />
+        )}
       </div>
-
-      {puedeVerPrivado && (
-        <div className="border-t border-[var(--border)] pt-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-            Contrato General Privado
-          </p>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
-            {esPrecioAlzado && (
-              <>
-                <Input
-                  name="precioUnitarioIndirectos"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="P.U. indirectos"
-                />
-                <Input
-                  name="precioUnitarioHerramienta"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder="P.U. herramienta"
-                />
-              </>
-            )}
-            {esPrecioAlzado && (
-              <Input
-                name="porcentajeUtilidad"
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="% utilidad (usa el default si se deja vacío)"
-              />
-            )}
-            {esAdministracion && (
-              <Input
-                name="porcentajeAdministracion"
-                type="number"
-                step="0.01"
-                min="0"
-                placeholder="% administración (usa el default si se deja vacío)"
-              />
-            )}
-            <Input
-              name="precioUnitarioClienteOverride"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="Precio comercial final (opcional)"
-            />
-          </div>
-        </div>
-      )}
 
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending} className="shrink-0">

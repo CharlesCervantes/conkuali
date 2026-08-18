@@ -33,6 +33,31 @@ export function puedeAdministrarProyectos(usuario: UsuarioSesion): boolean {
 }
 
 /**
+ * Eliminar un proyecto (borrado en cascada, irreversible) es más restrictivo
+ * que administrarlo — a propósito no incluye MASTER (decisión de sesión,
+ * agosto 2026: el rol de plataforma no debe poder borrar datos de un tenant
+ * casualmente desde esta pantalla).
+ */
+export function puedeEliminarProyectos(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
+}
+
+/**
+ * Cerrar/reabrir una semana de Avance de Obra genera y toca movimientos
+ * financieros reales en Reporte General — mismo rol-set restringido que
+ * eliminar proyectos, sin Master (decisión de sesión, agosto 2026).
+ */
+export function puedeCerrarSemana(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
+}
+
+// Reabrir toca lo mismo financieramente sensible que cerrar — mismo rol-set,
+// no se relaja para nadie más.
+export function puedeReabrirSemana(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
  * Reportar avance físico semanal es explícito por rol (no "cualquier usuario
  * activo") para que un rol nuevo en el futuro no reciba este permiso por
  * defecto — debe agregarse aquí a propósito (decisión de sesión, agosto 2026).
@@ -56,4 +81,53 @@ export function puedeReportarAvance(usuario: UsuarioSesion): boolean {
  */
 export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean {
   return puedeAdministrarProyectos(usuario);
+}
+
+/**
+ * Recibos financieros (expediente de contratista: estimado/pagado acumulado,
+ * saldo, historial de cortes, generar/ver/subir evidencia de recibo) — mismo
+ * rol-set que la información privada de Contrato General. Supervisor no ve
+ * precios de recibo ni puede generar/subir nada (04-modulo-control-de-obra.md,
+ * sección 49.9 y "Recibo de Pago" de 02-control-de-obra.md).
+ */
+export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
+  return puedeAdministrarProyectos(usuario);
+}
+
+/**
+ * Emitir una Estimación Cliente la congela para siempre — mismo criterio
+ * financieramente sensible que cerrar/reabrir semana y eliminar proyectos,
+ * sin Master (04-modulo-control-de-obra.md, sección "Cliente").
+ */
+export function puedeEmitirEstimacionCliente(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Materializar retroactivamente la EstimacionCliente de una semana que ya
+ * estaba cerrada antes de que este módulo existiera — mismo criterio
+ * financieramente sensible que cerrar semana/emitir, sin Master
+ * (04-modulo-control-de-obra.md, sección "Cliente").
+ */
+export function puedeMaterializarEstimacionHistorica(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Ver Control Contractual (información financiera privada del cliente:
+ * fondo/cuentas por cobrar, aportaciones, pagos) — mismo rol-set que el
+ * resto de la capa privada de Contrato General (04-modulo-control-de-obra.md,
+ * sección "Control Contractual").
+ */
+export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
+  return puedeVerContratoGeneralPrivado(usuario);
+}
+
+/**
+ * Registrar movimientos financieros del cliente (aportación al fondo, pago de
+ * una estimación) — mismo criterio financieramente sensible que cerrar
+ * semana/emitir/materializar histórico, sin Master.
+ */
+export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
 }

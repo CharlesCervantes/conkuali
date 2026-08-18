@@ -4,6 +4,8 @@ import { requireSession } from "@/lib/server/auth/dal";
 import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import {
   obtenerProyecto,
+  proyectoTieneInformacionContractual,
+  proyectoTieneMovimientosFinancieros,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
 import { Card } from "@/components/ui/card";
@@ -36,10 +38,26 @@ export default async function EditarProyectoPage({
     throw error;
   }
 
+  // El esquema ya definido con información contractual queda bloqueado; sin
+  // esquema todavía pero con información contractual, se puede asignar pero
+  // exige confirmación explícita (sección 3-4 del rediseño, agosto 2026).
+  const tieneInfo = await proyectoTieneInformacionContractual(id);
+  const esquemaBloqueado = proyecto.esquemaContractual !== null && tieneInfo;
+  const requiereConfirmacionEsquema = proyecto.esquemaContractual === null && tieneInfo;
+
+  // Mismo criterio, para el esquema financiero del cliente (Control
+  // Contractual, agosto 2026) — "ya tiene información" aquí es "ya tiene
+  // movimientos financieros", no información contractual.
+  const tieneMovimientosFinancieros = await proyectoTieneMovimientosFinancieros(id);
+  const esquemaFinancieroBloqueado =
+    proyecto.esquemaFinanciamientoCliente !== null && tieneMovimientosFinancieros;
+  const requiereConfirmacionEsquemaFinanciero =
+    proyecto.esquemaFinanciamientoCliente === null && tieneMovimientosFinancieros;
+
   const accionConId = editarProyectoAction.bind(null, id);
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
       <div>
         <Link
           href={`/control-de-obra/${id}`}
@@ -56,7 +74,12 @@ export default async function EditarProyectoPage({
       <Card className="enter p-6">
         <ProyectoForm
           action={accionConId}
+          modo="editar"
           textoBoton="Guardar cambios"
+          esquemaBloqueado={esquemaBloqueado}
+          requiereConfirmacionEsquema={requiereConfirmacionEsquema}
+          esquemaFinancieroBloqueado={esquemaFinancieroBloqueado}
+          requiereConfirmacionEsquemaFinanciero={requiereConfirmacionEsquemaFinanciero}
           valoresIniciales={{
             nombre: proyecto.nombre,
             tipo: proyecto.tipo,
@@ -71,6 +94,7 @@ export default async function EditarProyectoPage({
             porcentajeUtilidadDefault: proyecto.porcentajeUtilidadDefault?.toString() ?? null,
             porcentajeAdministracionDefault:
               proyecto.porcentajeAdministracionDefault?.toString() ?? null,
+            esquemaFinanciamientoCliente: proyecto.esquemaFinanciamientoCliente,
           }}
         />
       </Card>

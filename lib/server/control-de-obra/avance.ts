@@ -11,6 +11,10 @@ import {
   resolverContratistaPorConcepto,
   RegistroNoEncontradoError,
 } from "./estructura-contractual";
+import { verificarSemanaEditable } from "./cierre-semana";
+import { sumaEjecutadaPorConcepto } from "./avance-calculo";
+
+export { sumaEjecutadaPorConcepto };
 
 function requerirEmpresa(usuario: UsuarioSesion): string {
   if (!usuario.empresa) throw new SinPermisoError();
@@ -47,52 +51,61 @@ function calcularAvance(cantidadTotal: number, acumulado: number): AvanceCalcula
   };
 }
 
-// Suma cantidadEjecutada por concepto — solo lo APROBADO cuenta como oficial
-// (lo PENDIENTE/RECHAZADO no suma hasta que un Director/Administrador lo
-// apruebe explícitamente; decisión de sesión, agosto 2026, ver 49.9). Si
-// `antesDe` se indica, solo cuenta semanas anteriores a esa fecha (para
-// calcular "Anterior"); sin `antesDe`, suma todo el histórico aprobado (para
-// el acumulado a la fecha que usa Contratistas).
-async function sumaEjecutadaPorConcepto(
-  conceptoIds: string[],
-  antesDe?: Date
-): Promise<Map<string, number>> {
-  if (conceptoIds.length === 0) return new Map();
-
-  const filas = await db.avanceConcepto.groupBy({
-    by: ["conceptoId"],
-    where: {
-      conceptoId: { in: conceptoIds },
-      estatusAprobacion: "APROBADO",
-      ...(antesDe ? { semana: { fechaInicio: { lt: antesDe } } } : {}),
-    },
-    _sum: { cantidadEjecutada: true },
-  });
-
-  return new Map(filas.map((f) => [f.conceptoId, Number(f._sum.cantidadEjecutada ?? 0)]));
-}
-
 // ---------------------------------------------------------------------------
 // Lectura — pestaña Avance de obra (una semana específica)
 // ---------------------------------------------------------------------------
 
-export type ConceptoConAvance = Awaited<
+type ConceptoBase = Awaited<
   ReturnType<typeof partidasConConceptos>
->[number]["conceptos"][number] &
+>[number]["conceptos"][number];
+
+// Campos Decimal de Concepto (presupuesto de Contrato General) — se
+// convierten explícitamente a number antes de devolverse, porque esta forma
+// cruza hacia FormAvanceSemanal ("use client") y las instancias de
+// Prisma.Decimal no son serializables de Server a Client Component. No
+// afecta lo que se guarda en Postgres/Prisma, solo esta lectura.
+type CamposDecimalConcepto =
+  | "cantidadContratada"
+  | "precioUnitarioContratista"
+  | "precioUnitarioMateriales"
+  | "precioUnitarioIndirectos"
+  | "precioUnitarioHerramienta"
+  | "porcentajeUtilidad"
+  | "porcentajeAdministracion"
+  | "precioUnitarioContratistaPrivado"
+  | "cantidadContratadaPrivado";
+
+export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
   AvanceCalculado & {
+    cantidadContratada: number;
+    precioUnitarioContratista: number | null;
+    precioUnitarioMateriales: number | null;
+    precioUnitarioIndirectos: number | null;
+    precioUnitarioHerramienta: number | null;
+    porcentajeUtilidad: number | null;
+    porcentajeAdministracion: number | null;
+    // No se usan en esta vista (operativo, no Privado) pero igual hay que
+    // convertirlos — `...concepto` los arrastra sin tocarlos, y un
+    // Prisma.Decimal crudo no es serializable de Server a Client Component
+    // (rompía obtenerAvanceSemanal desde que se agregaron estos campos).
+    precioUnitarioContratistaPrivado: number | null;
+    cantidadContratadaPrivado: number | null;
     anterior: number;
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
     estatusAprobacion: EstatusAprobacionAvance | null;
     // P.U. CONTRATADO (resuelto vía ContratoConcepto) — distinto del
     // presupuesto `Concepto.precioUnitarioContratista` (Etapa B, Contrato
-    // General) que ya viene incluido en el spread de arriba. null si el
-    // concepto no tiene contratista asignado o si tiene varios (no
-    // atribuible, sección 49.8). Visible a los 4 roles (sección 49.9,
-    // sustituye el gate por puedeAdministrarProyectos que tenía esta
-    // pantalla antes).
+    // General) que ya viene incluido arriba. null si el concepto no tiene
+    // contratista asignado o si tiene varios (no atribuible, sección 49.8).
+    // Visible a los 4 roles (sección 49.9, sustituye el gate por
+    // puedeAdministrarProyectos que tenía esta pantalla antes).
     precioUnitarioContratistaContratado: number | null;
   };
+
+function numOrNull(valor: { toNumber(): number } | null): number | null {
+  return valor === null ? null : valor.toNumber();
+}
 
 export async function obtenerAvanceSemanal(
   usuario: UsuarioSesion,
@@ -101,15 +114,20 @@ export async function obtenerAvanceSemanal(
 ) {
   await obtenerProyecto(usuario, proyectoId);
 
-  const partidas = await partidasConConceptos(proyectoId);
+  // resolverContratistaPorConcepto no depende de conceptoIds (filtra por
+  // proyectoId directamente) — va en la primera fase junto con partidas, no
+  // en la segunda, donde tendría que esperar sin necesidad.
+  const [partidas, resolucionContratista] = await Promise.all([
+    partidasConConceptos(proyectoId),
+    resolverContratistaPorConcepto(proyectoId),
+  ]);
   const conceptoIds = partidas.flatMap((p) => p.conceptos.map((c) => c.id));
 
-  const [anteriorPorConcepto, filasEstaSemana, resolucionContratista] = await Promise.all([
+  const [anteriorPorConcepto, filasEstaSemana] = await Promise.all([
     sumaEjecutadaPorConcepto(conceptoIds, semana.fechaInicio),
     db.avanceConcepto.findMany({
       where: { conceptoId: { in: conceptoIds }, semanaId: semana.id },
     }),
-    resolverContratistaPorConcepto(proyectoId),
   ]);
   const estaSemanaPorConcepto = new Map(
     filasEstaSemana.map((f) => [f.conceptoId, Number(f.cantidadEjecutada)])
@@ -131,6 +149,15 @@ export async function obtenerAvanceSemanal(
       const acumulado = anterior + (estatusSemana === "APROBADO" ? estaSemana : 0);
       return {
         ...concepto,
+        cantidadContratada: Number(concepto.cantidadContratada),
+        precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
+        precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
+        precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
+        precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
+        porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
+        porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
+        precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
+        cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,
@@ -142,17 +169,36 @@ export async function obtenerAvanceSemanal(
   }));
 }
 
+// En semana cerrada, solo se muestran conceptos con avance real registrado
+// ESA semana (estaSemana > 0) — una partida sin ningún concepto con
+// movimiento tampoco se muestra. Compartido por Avance de obra y por Cliente/
+// Cliente Priv. (misma regla, un solo lugar — sección 4/5 del diseño de
+// Cliente, agosto 2026).
+export function filtrarPartidasConMovimiento<
+  P extends { conceptos: { estaSemana: number }[] },
+>(partidas: P[]): P[] {
+  return partidas
+    .map((p) => ({ ...p, conceptos: p.conceptos.filter((c) => c.estaSemana > 0) }))
+    .filter((p) => p.conceptos.length > 0);
+}
+
 // ---------------------------------------------------------------------------
 // Lectura — enriquecer Contratistas con avance acumulado a la fecha
 // ---------------------------------------------------------------------------
 
 export async function obtenerAvanceAcumuladoPorConcepto(
   usuario: UsuarioSesion,
-  proyectoId: string,
-  conceptos: { id: string; cantidadContratada: unknown }[]
+  proyectoId: string
 ): Promise<Map<string, AvanceCalculado>> {
   await obtenerProyecto(usuario, proyectoId);
 
+  // Se resuelve por proyectoId, no a partir de la lista de conceptos de
+  // `partidas` — así el caller no tiene que esperar a que esa consulta
+  // termine primero y puede pedir todo en un solo Promise.all.
+  const conceptos = await db.concepto.findMany({
+    where: { partida: { proyectoId } },
+    select: { id: true, cantidadContratada: true },
+  });
   const conceptoIds = conceptos.map((c) => c.id);
   const acumuladoPorConcepto = await sumaEjecutadaPorConcepto(conceptoIds);
 
@@ -195,6 +241,11 @@ export async function guardarAvanceSemanal(
 
   const semana = await db.semana.findFirst({ where: { id: datos.semanaId, empresaId } });
   if (!semana) throw new RegistroNoEncontradoError("La semana");
+
+  // Bloqueo general: la semana está cerrada para este proyecto (candado
+  // fino por concepto liquidado se revisa más abajo, una vez resuelto qué
+  // conceptos de verdad van a cambiar).
+  await verificarSemanaEditable(proyectoId, semana.id, []);
 
   // Solo conceptos que en verdad pertenecen a este proyecto (protege contra
   // enviar ids de otro proyecto/empresa).
@@ -248,6 +299,15 @@ export async function guardarAvanceSemanal(
       valorPrevio,
     });
   }
+
+  // Candado fino: aunque la semana esté abierta (nunca se cerró, o se
+  // reabrió), un concepto que ya forma parte de un corte LIQUIDADO queda
+  // protegido — solo se revisa contra lo que de verdad va a cambiar.
+  await verificarSemanaEditable(
+    proyectoId,
+    semana.id,
+    porGuardar.map((f) => f.conceptoId)
+  );
 
   // Pase 2: escribir + auditar (upsert nunca duplica; cada semana conserva su
   // propia fila, nunca se sobreescribe el histórico de semanas anteriores).
@@ -305,8 +365,11 @@ export async function cambiarEstatusAprobacionAvance(
 
   const avance = await db.avanceConcepto.findFirst({
     where: { conceptoId, semanaId, empresaId },
+    include: { concepto: { select: { partida: { select: { proyectoId: true } } } } },
   });
   if (!avance) throw new RegistroNoEncontradoError("El avance de este concepto");
+
+  await verificarSemanaEditable(avance.concepto.partida.proyectoId, semanaId, [conceptoId]);
 
   const actualizado = await db.avanceConcepto.update({
     where: { id: avance.id },

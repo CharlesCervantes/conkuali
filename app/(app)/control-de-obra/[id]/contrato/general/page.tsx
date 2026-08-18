@@ -1,5 +1,5 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
+import { puedeAdministrarProyectos } from "@/lib/server/permisos";
 import {
   obtenerPartidasProyecto,
 } from "@/lib/server/control-de-obra/estructura-contractual";
@@ -8,7 +8,7 @@ import { ContratoGeneralView } from "@/components/control-de-obra/contrato-gener
 
 export default async function ContratoGeneralPage({
   params,
-}: PageProps<"/control-de-obra/[id]/partidas">) {
+}: PageProps<"/control-de-obra/[id]/contrato/general">) {
   const usuario = await requireSession();
   const { id } = await params;
 
@@ -22,16 +22,12 @@ export default async function ContratoGeneralPage({
       proyectoId={id}
       partidas={partidas}
       esquemaContractual={proyecto.esquemaContractual}
-      porcentajesDefault={{
-        utilidad: proyecto.porcentajeUtilidadDefault
-          ? Number(proyecto.porcentajeUtilidadDefault)
-          : null,
-        administracion: proyecto.porcentajeAdministracionDefault
+      porcentajeAdministracionDefault={
+        proyecto.porcentajeAdministracionDefault
           ? Number(proyecto.porcentajeAdministracionDefault)
-          : null,
-      }}
+          : null
+      }
       puedeAdministrar={puedeAdministrarProyectos(usuario)}
-      puedeVerPrivado={puedeVerContratoGeneralPrivado(usuario)}
     />
   );
 }

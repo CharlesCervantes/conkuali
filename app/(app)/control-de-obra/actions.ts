@@ -8,6 +8,7 @@ import {
   crearProyecto,
   editarProyecto,
   cambiarEstatusProyecto,
+  eliminarProyecto,
   SinPermisoError,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
@@ -46,6 +47,7 @@ function datosDesdeFormData(formData: FormData) {
     porcentajeAdministracionDefault: opcional(
       formData.get("porcentajeAdministracionDefault")
     ),
+    esquemaFinanciamientoCliente: opcional(formData.get("esquemaFinanciamientoCliente")),
   };
 }
 
@@ -71,9 +73,18 @@ export async function editarProyectoAction(
   formData: FormData
 ): Promise<FormState> {
   const usuario = await requireSession();
+  const confirmarEsquemaConDatos = formData.get("confirmarEsquemaConDatos") === "on";
+  const confirmarEsquemaFinancieroConDatos =
+    formData.get("confirmarEsquemaFinancieroConDatos") === "on";
 
   try {
-    await editarProyecto(usuario, id, datosDesdeFormData(formData));
+    await editarProyecto(
+      usuario,
+      id,
+      datosDesdeFormData(formData),
+      confirmarEsquemaConDatos,
+      confirmarEsquemaFinancieroConDatos
+    );
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -86,4 +97,24 @@ export async function cambiarEstatusAction(id: string, estatus: string) {
   const usuario = await requireSession();
   await cambiarEstatusProyecto(usuario, id, estatus);
   revalidatePath("/control-de-obra");
+}
+
+// Mismo patrón de "distingue éxito de no-enviado" que editarConceptoPrivadoAction
+// (ver app/(app)/control-de-obra/[id]/actions.ts) — el modal de confirmación
+// necesita saber cuándo cerrarse solo.
+export type EliminarProyectoFormState = { error?: string; eliminado?: boolean } | undefined;
+
+export async function eliminarProyectoAction(
+  id: string,
+  _state: EliminarProyectoFormState,
+  _formData: FormData
+): Promise<EliminarProyectoFormState> {
+  const usuario = await requireSession();
+  try {
+    await eliminarProyecto(usuario, id);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath("/control-de-obra");
+  return { eliminado: true };
 }

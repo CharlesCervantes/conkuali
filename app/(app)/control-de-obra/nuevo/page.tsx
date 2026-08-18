@@ -17,7 +17,7 @@ export default async function NuevoProyectoPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
       <div>
         <Link
           href="/control-de-obra"
@@ -32,7 +32,11 @@ export default async function NuevoProyectoPage() {
       </div>
 
       <Card className="enter p-6">
-        <ProyectoForm action={crearProyectoAction} textoBoton="Crear proyecto" />
+        <ProyectoForm
+          action={crearProyectoAction}
+          modo="crear"
+          textoBoton="Crear proyecto"
+        />
       </Card>
     </div>
   );

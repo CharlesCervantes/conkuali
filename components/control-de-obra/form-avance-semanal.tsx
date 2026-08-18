@@ -34,18 +34,22 @@ export function FormAvanceSemanal({
   semanaId,
   partidas,
   puedeAprobar,
+  soloLectura = false,
+  mensajeVacio,
 }: {
   proyectoId: string;
   semanaId: string;
   partidas: Partidas;
   puedeAprobar: boolean;
+  soloLectura?: boolean;
+  mensajeVacio?: string;
 }) {
   return (
     <div className="space-y-3">
       {partidas.length === 0 && (
         <Card className="p-6 text-sm text-[var(--muted)]">
-          Todavía no hay partidas en este proyecto. Créalas primero en Partidas de
-          obra.
+          {mensajeVacio ??
+            "Todavía no hay partidas en este proyecto. Créalas primero en Partidas de obra."}
         </Card>
       )}
 
@@ -56,6 +60,7 @@ export function FormAvanceSemanal({
           semanaId={semanaId}
           partida={partida}
           puedeAprobar={puedeAprobar}
+          soloLectura={soloLectura}
           indiceEntrada={i}
         />
       ))}
@@ -68,12 +73,14 @@ function PartidaAvance({
   semanaId,
   partida,
   puedeAprobar,
+  soloLectura,
   indiceEntrada,
 }: {
   proyectoId: string;
   semanaId: string;
   partida: Partidas[number];
   puedeAprobar: boolean;
+  soloLectura: boolean;
   indiceEntrada: number;
 }) {
   const action = guardarAvanceAction.bind(null, proyectoId, semanaId);
@@ -126,7 +133,7 @@ function PartidaAvance({
       className="enter overflow-hidden"
       style={{ transitionDelay: `${Math.min(indiceEntrada, 6) * 30}ms` }}
     >
-      <details open={conMovimiento > 0}>
+      <details>
         <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
           <span className="text-sm font-semibold text-[var(--foreground)]">
             {partida.nombre}
@@ -178,6 +185,7 @@ function PartidaAvance({
                       valor={valores[concepto.id] ?? ""}
                       onCambiar={(v) => actualizarValor(concepto.id, v)}
                       puedeAprobar={puedeAprobar}
+                      soloLectura={soloLectura}
                     />
                   ))}
                 </tbody>
@@ -230,6 +238,7 @@ function FilaConcepto({
   valor,
   onCambiar,
   puedeAprobar,
+  soloLectura,
 }: {
   proyectoId: string;
   semanaId: string;
@@ -237,6 +246,7 @@ function FilaConcepto({
   valor: string;
   onCambiar: (nuevaCantidad: string) => void;
   puedeAprobar: boolean;
+  soloLectura: boolean;
 }) {
   const cantidadActual = new Prisma.Decimal(valor || 0);
   const anterior = new Prisma.Decimal(concepto.anterior);
@@ -316,8 +326,10 @@ function FilaConcepto({
           step="0.001"
           value={valor}
           onChange={(e) => alCambiarCantidad(e.target.value)}
+          disabled={soloLectura}
           placeholder="0"
           className={cn(
+            soloLectura && "opacity-60",
             "w-24 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
             excede
               ? "border-red-300 focus:border-red-400"
@@ -340,8 +352,10 @@ function FilaConcepto({
             onFocus={() => setMontoEnfocado(true)}
             onBlur={() => setMontoEnfocado(false)}
             onChange={(e) => alCambiarMonto(e.target.value)}
+            disabled={soloLectura}
             placeholder="$0.00"
             className={cn(
+              soloLectura && "opacity-60",
               "w-28 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
               excede
                 ? "border-red-300 focus:border-red-400"
@@ -367,7 +381,7 @@ function FilaConcepto({
       <Td>
         <div className="space-y-1">
           <EstatusAprobacionAvanceBadge estatus={concepto.estatusAprobacion} />
-          {puedeAprobar && concepto.estatusAprobacion === "PENDIENTE" && (
+          {puedeAprobar && !soloLectura && concepto.estatusAprobacion === "PENDIENTE" && (
             <ControlesAprobacion
               proyectoId={proyectoId}
               conceptoId={concepto.id}

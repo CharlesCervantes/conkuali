@@ -8,12 +8,34 @@ import {
   crearConcepto,
   crearContratoContratista,
   asignarConcepto,
+  editarConceptoEstructural,
+  editarConceptoPrivado,
+  obtenerConceptoDetalle,
   RegistroNoEncontradoError,
 } from "@/lib/server/control-de-obra/estructura-contractual";
 import {
   guardarAvanceSemanal,
   cambiarEstatusAprobacionAvance,
 } from "@/lib/server/control-de-obra/avance";
+import {
+  cerrarSemana,
+  reabrirSemana,
+} from "@/lib/server/control-de-obra/cierre-semana";
+import {
+  generarRecibo,
+  registrarEvidenciaRecibo,
+  obtenerDetalleCorte,
+  type DetalleCorte,
+} from "@/lib/server/control-de-obra/recibos";
+import {
+  emitirEstimacion,
+  materializarEstimacionHistorica,
+} from "@/lib/server/control-de-obra/estimacion-cliente";
+import {
+  registrarAportacionFondo,
+  registrarPagoEstimacion,
+} from "@/lib/server/control-de-obra/financiero-cliente";
+import { put } from "@vercel/blob";
 import {
   SinPermisoError,
   ProyectoNoEncontradoError,
@@ -53,11 +75,13 @@ export async function crearPartidaAction(
     await crearPartida(usuario, proyectoId, {
       nombre: formData.get("nombre"),
       orden: formData.get("orden") || 0,
+      icono: opcional(formData.get("icono")),
+      color: opcional(formData.get("color")),
     });
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
   return undefined;
 }
 
@@ -76,16 +100,11 @@ export async function crearConceptoAction(
       notas: opcional(formData.get("notas")),
       precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
       precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
-      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
-      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
-      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
-      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
-      precioUnitarioClienteOverride: opcional(formData.get("precioUnitarioClienteOverride")),
     });
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/partidas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
   return undefined;
 }
 
@@ -106,7 +125,7 @@ export async function crearContratoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   return undefined;
 }
 
@@ -136,8 +155,8 @@ export async function guardarAvanceAction(
     return { error: mensajeError(error) };
   }
 
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   revalidatePath("/control-de-obra");
   return { guardados: resultado.guardados };
 }
@@ -150,9 +169,175 @@ export async function cambiarEstatusAprobacionAvanceAction(
 ) {
   const usuario = await requireSession();
   await cambiarEstatusAprobacionAvance(usuario, conceptoId, semanaId, nuevoEstatus);
-  revalidatePath(`/control-de-obra/${proyectoId}/avance`);
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   revalidatePath("/control-de-obra");
+}
+
+// A diferencia de FormState (undefined en éxito), este estado sí distingue
+// éxito de "todavía no se ha enviado" — con undefined en los dos casos,
+// useActionState nunca detectaba que la acción había terminado bien (el
+// formulario de edición se quedaba abierto, dando la impresión de que hacía
+// falta guardar otra vez). Ver tabla-privada-editable.tsx / tabla-administracion-editable.tsx.
+export type EditarConceptoPrivadoFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function editarConceptoPrivadoAction(
+  conceptoId: string,
+  proyectoId: string,
+  _state: EditarConceptoPrivadoFormState,
+  formData: FormData
+): Promise<EditarConceptoPrivadoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarConceptoPrivado(usuario, conceptoId, {
+      descripcionPrivado: opcional(formData.get("descripcionPrivado")),
+      unidadPrivado: opcional(formData.get("unidadPrivado")),
+      cantidadContratadaPrivado: opcional(formData.get("cantidadContratadaPrivado")),
+      precioUnitarioContratistaPrivado: opcional(formData.get("precioUnitarioContratistaPrivado")),
+      precioUnitarioIndirectos: opcional(formData.get("precioUnitarioIndirectos")),
+      precioUnitarioHerramienta: opcional(formData.get("precioUnitarioHerramienta")),
+      porcentajeUtilidad: opcional(formData.get("porcentajeUtilidad")),
+      porcentajeAdministracion: opcional(formData.get("porcentajeAdministracion")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
+  return { guardado: true };
+}
+
+// ---------------------------------------------------------------------------
+// Modal "editar concepto" — dos modos reales, cada uno con su propia acción
+// de guardado: "operativo" (abierto desde Contrato General, solo
+// editarConceptoEstructural) y "privado" (abierto desde Contrato General
+// Priv., solo editarConceptoPrivado). El modal NUNCA mezcla los dos — abrir
+// desde Contrato General no debe mostrar ni poder tocar nada de Privado
+// (decisión de sesión, agosto 2026). obtenerConceptoDetalleAction sí regresa
+// todos los campos (los necesitan las dos vistas para mostrar contexto de
+// solo lectura), pero cada modo solo envía a guardar lo que le corresponde.
+// ---------------------------------------------------------------------------
+
+function numOrNull(valor: { toString(): string } | null): number | null {
+  return valor === null ? null : Number(valor);
+}
+
+export type ConceptoDetalle = {
+  id: string;
+  descripcion: string;
+  partidaNombre: string;
+  unidad: string;
+  cantidadContratada: number;
+  notas: string | null;
+  precioUnitarioContratista: number | null;
+  precioUnitarioMateriales: number | null;
+  precioUnitarioIndirectos: number | null;
+  precioUnitarioHerramienta: number | null;
+  porcentajeUtilidad: number | null;
+  porcentajeAdministracion: number | null;
+  precioUnitarioContratistaPrivado: number | null;
+  descripcionPrivado: string | null;
+  unidadPrivado: string | null;
+  cantidadContratadaPrivado: number | null;
+  esquemaContractual: "PRECIO_ALZADO" | "ADMINISTRACION" | null;
+};
+
+export type BitacoraEntrada = {
+  id: string;
+  accion: string;
+  usuarioNombre: string | null;
+  createdAt: string;
+  // Snapshots completos del Concepto antes/después de la acción — ya vienen
+  // como JSON plano (registrarAuditoria los guarda con JSON.stringify, así
+  // que un Decimal como precioUnitarioContratista llega aquí como string,
+  // p. ej. "150.00"). El modal calcula el diff campo por campo a partir de
+  // esto, en vez de guardar una etiqueta genérica por acción.
+  valorAnterior: Record<string, unknown> | null;
+  valorNuevo: Record<string, unknown> | null;
+};
+
+// Se llama directamente desde el modal cliente (no vía <form>) — por eso
+// regresa { concepto, bitacoraOperativo, bitacoraPrivado } o { error }, en
+// vez del patrón FormState de useActionState. Todos los campos Decimal se
+// convierten a number aquí mismo — no son serializables cruzando de Server
+// Action a Client Component (igual que Avance de obra). Las dos bitácoras
+// vienen separadas de obtenerConceptoDetalle — el modo "operativo" del modal
+// solo debe pintar bitacoraOperativo y el modo "privado" solo bitacoraPrivado.
+export async function obtenerConceptoDetalleAction(
+  conceptoId: string
+): Promise<
+  | { concepto: ConceptoDetalle; bitacoraOperativo: BitacoraEntrada[]; bitacoraPrivado: BitacoraEntrada[] }
+  | { error: string }
+> {
+  const usuario = await requireSession();
+  try {
+    const { concepto, bitacoraOperativo, bitacoraPrivado } = await obtenerConceptoDetalle(
+      usuario,
+      conceptoId
+    );
+    const mapBitacora = (b: typeof bitacoraOperativo): BitacoraEntrada[] =>
+      b.map((entrada) => ({
+        id: entrada.id,
+        accion: entrada.accion,
+        usuarioNombre: entrada.usuario?.nombre ?? null,
+        createdAt: entrada.createdAt.toISOString(),
+        valorAnterior: (entrada.valorAnterior as Record<string, unknown> | null) ?? null,
+        valorNuevo: (entrada.valorNuevo as Record<string, unknown> | null) ?? null,
+      }));
+    return {
+      concepto: {
+        id: concepto.id,
+        descripcion: concepto.descripcion,
+        partidaNombre: concepto.partida.nombre,
+        unidad: concepto.unidad,
+        cantidadContratada: Number(concepto.cantidadContratada),
+        notas: concepto.notas,
+        precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
+        precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
+        precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
+        precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
+        porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
+        porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
+        precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
+        descripcionPrivado: concepto.descripcionPrivado,
+        unidadPrivado: concepto.unidadPrivado,
+        cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
+        esquemaContractual: concepto.partida.proyecto.esquemaContractual,
+      },
+      bitacoraOperativo: mapBitacora(bitacoraOperativo),
+      bitacoraPrivado: mapBitacora(bitacoraPrivado),
+    };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export type EditarConceptoEstructuralFormState = { error?: string; guardado?: boolean } | undefined;
+
+// Modo "operativo" del modal — SOLO campos de Contrato General. Nunca toca
+// ningún campo *Privado, Indirectos, Herramienta, %, ni override (eso es
+// editarConceptoPrivadoAction, usado por el modo "privado").
+export async function editarConceptoEstructuralAction(
+  conceptoId: string,
+  proyectoId: string,
+  _state: EditarConceptoEstructuralFormState,
+  formData: FormData
+): Promise<EditarConceptoEstructuralFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarConceptoEstructural(usuario, conceptoId, {
+      descripcion: formData.get("descripcion"),
+      unidad: formData.get("unidad"),
+      cantidadContratada: formData.get("cantidadContratada"),
+      notas: opcional(formData.get("notas")),
+      precioUnitarioContratista: opcional(formData.get("precioUnitarioContratista")),
+      precioUnitarioMateriales: opcional(formData.get("precioUnitarioMateriales")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
+  return { guardado: true };
 }
 
 export async function asignarConceptoAction(
@@ -169,6 +354,221 @@ export async function asignarConceptoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
   return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Cierre semanal de Avance de Obra
+// ---------------------------------------------------------------------------
+
+export type CerrarSemanaFormState = { error?: string; cerrado?: boolean } | undefined;
+
+export async function cerrarSemanaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: CerrarSemanaFormState,
+  _formData: FormData
+): Promise<CerrarSemanaFormState> {
+  const usuario = await requireSession();
+  try {
+    await cerrarSemana(usuario, proyectoId, semanaId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  revalidatePath("/reporte-general");
+  return { cerrado: true };
+}
+
+export type ReabrirSemanaFormState = { error?: string; reabierta?: boolean } | undefined;
+
+export async function reabrirSemanaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: ReabrirSemanaFormState,
+  formData: FormData
+): Promise<ReabrirSemanaFormState> {
+  const usuario = await requireSession();
+  try {
+    await reabrirSemana(usuario, proyectoId, semanaId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { reabierta: true };
+}
+
+// ---------------------------------------------------------------------------
+// Recibos de pago
+// ---------------------------------------------------------------------------
+
+export type GenerarReciboFormState =
+  | { error?: string; generado?: boolean; folio?: string }
+  | undefined;
+
+export async function generarReciboAction(
+  corteSemanalId: string,
+  proyectoId: string,
+  _state: GenerarReciboFormState,
+  _formData: FormData
+): Promise<GenerarReciboFormState> {
+  const usuario = await requireSession();
+  try {
+    const recibo = await generarRecibo(usuario, corteSemanalId);
+    revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
+    return { generado: true, folio: recibo.folio };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export type SubirEvidenciaReciboFormState = { error?: string; subido?: boolean } | undefined;
+
+// Sube el archivo directo a Vercel Blob (Next.js ya soporta File en
+// FormData nativamente en Server Actions, no hace falta ningún parser de
+// multipart aparte) y solo entonces persiste la URL resultante.
+export async function subirEvidenciaReciboAction(
+  reciboId: string,
+  proyectoId: string,
+  _state: SubirEvidenciaReciboFormState,
+  formData: FormData
+): Promise<SubirEvidenciaReciboFormState> {
+  const usuario = await requireSession();
+
+  const archivo = formData.get("archivo");
+  if (!(archivo instanceof File) || archivo.size === 0) {
+    return { error: "Selecciona un archivo (PDF o imagen)." };
+  }
+
+  try {
+    const blob = await put(`recibos/${reciboId}/${archivo.name}`, archivo, {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    await registrarEvidenciaRecibo(usuario, reciboId, {
+      archivoEvidenciaUrl: blob.url,
+      archivoEvidenciaNombre: archivo.name,
+      fechaRecepcion: opcional(formData.get("fechaRecepcion")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
+  return { subido: true };
+}
+
+// Se llama directamente desde el modal cliente (no vía <form>) — mismo patrón
+// que obtenerConceptoDetalleAction.
+export async function obtenerDetalleCorteAction(
+  corteSemanalId: string
+): Promise<{ detalle: DetalleCorte } | { error: string }> {
+  const usuario = await requireSession();
+  try {
+    const detalle = await obtenerDetalleCorte(usuario, corteSemanalId);
+    return { detalle };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Estimación Cliente
+// ---------------------------------------------------------------------------
+
+export type EmitirEstimacionFormState = { error?: string; emitida?: boolean } | undefined;
+
+export async function emitirEstimacionAction(
+  proyectoId: string,
+  estimacionId: string,
+  _state: EmitirEstimacionFormState,
+  _formData: FormData
+): Promise<EmitirEstimacionFormState> {
+  const usuario = await requireSession();
+  try {
+    await emitirEstimacion(usuario, estimacionId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { emitida: true };
+}
+
+export type MaterializarEstimacionFormState =
+  | { error?: string; generada?: boolean; yaExistia?: boolean }
+  | undefined;
+
+export async function materializarEstimacionHistoricaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: MaterializarEstimacionFormState,
+  _formData: FormData
+): Promise<MaterializarEstimacionFormState> {
+  const usuario = await requireSession();
+  try {
+    const resultado = await materializarEstimacionHistorica(usuario, proyectoId, semanaId);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+    return { generada: true, yaExistia: resultado.yaExistia };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Control Contractual — esquema financiero del cliente
+// ---------------------------------------------------------------------------
+
+export type RegistrarAportacionFormState = { error?: string; registrada?: boolean } | undefined;
+
+export async function registrarAportacionFondoAction(
+  proyectoId: string,
+  _state: RegistrarAportacionFormState,
+  formData: FormData
+): Promise<RegistrarAportacionFormState> {
+  const usuario = await requireSession();
+  try {
+    await registrarAportacionFondo(usuario, proyectoId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { registrada: true };
+}
+
+export type RegistrarPagoFormState = { error?: string; registrado?: boolean } | undefined;
+
+export async function registrarPagoEstimacionAction(
+  proyectoId: string,
+  estimacionId: string,
+  _state: RegistrarPagoFormState,
+  formData: FormData
+): Promise<RegistrarPagoFormState> {
+  const usuario = await requireSession();
+  try {
+    await registrarPagoEstimacion(usuario, estimacionId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { registrado: true };
 }

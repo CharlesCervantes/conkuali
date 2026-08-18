@@ -1,13 +1,19 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/server/auth/dal";
-import { empresaTieneModulo, puedeAdministrarProyectos } from "@/lib/server/permisos";
+import {
+  empresaTieneModulo,
+  puedeAdministrarProyectos,
+  puedeEliminarProyectos,
+} from "@/lib/server/permisos";
 import { listarProyectos } from "@/lib/server/control-de-obra/proyectos";
 import { contarPendientesPorProyecto } from "@/lib/server/control-de-obra/avance";
 import type { EstatusProyecto, Proyecto } from "@/lib/generated/prisma/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
+import { cn } from "@/lib/cn";
 import { EstatusProyectoBadge } from "@/components/control-de-obra/estatus-proyecto-badge";
+import { BotonEliminarProyecto } from "@/components/control-de-obra/boton-eliminar-proyecto";
 import { cambiarEstatusAction } from "./actions";
 
 const TIPO_LABEL: Record<string, string> = {
@@ -43,6 +49,7 @@ export default async function ControlDeObraPage() {
     (p) => p.estatus === "CERRADO" || p.estatus === "CANCELADO"
   );
   const puedeAdministrar = puedeAdministrarProyectos(usuario);
+  const puedeEliminar = puedeEliminarProyectos(usuario);
   // Solo quien puede aprobar necesita ver el aviso — nadie más puede actuar
   // sobre él (mismo criterio que P.U./Monto en Avance de obra).
   const pendientesPorProyecto = puedeAdministrar
@@ -89,6 +96,7 @@ export default async function ControlDeObraPage() {
                   key={p.id}
                   proyecto={p}
                   puedeAdministrar={puedeAdministrar}
+                  puedeEliminar={puedeEliminar}
                   pendientesAprobar={pendientesPorProyecto.get(p.id) ?? 0}
                 />
               ))}
@@ -127,6 +135,7 @@ export default async function ControlDeObraPage() {
                       key={p.id}
                       proyecto={p}
                       puedeAdministrar={puedeAdministrar}
+                      puedeEliminar={puedeEliminar}
                       pendientesAprobar={pendientesPorProyecto.get(p.id) ?? 0}
                     />
                   ))}
@@ -143,10 +152,12 @@ export default async function ControlDeObraPage() {
 function FilaProyecto({
   proyecto,
   puedeAdministrar,
+  puedeEliminar,
   pendientesAprobar,
 }: {
   proyecto: Proyecto;
   puedeAdministrar: boolean;
+  puedeEliminar: boolean;
   pendientesAprobar: number;
 }) {
   return (
@@ -183,12 +194,6 @@ function FilaProyecto({
                 ⋯
               </summary>
               <div className="absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--surface)] py-1 text-left shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.16)]">
-                <Link
-                  href={`/control-de-obra/${proyecto.id}/editar`}
-                  className="block px-3.5 py-2 text-sm text-[var(--foreground)] transition-colors duration-150 ease-out hover:bg-black/[0.04]"
-                >
-                  Editar información
-                </Link>
                 {transicionesDisponibles(proyecto.estatus).map((t) => (
                   <form
                     key={t.estatus}
@@ -196,12 +201,18 @@ function FilaProyecto({
                   >
                     <button
                       type="submit"
-                      className="block w-full px-3.5 py-2 text-left text-sm text-[var(--foreground)] transition-colors duration-150 ease-out hover:bg-black/[0.04]"
+                      className={cn(
+                        "block w-full px-3.5 py-2 text-left text-sm transition-colors duration-150 ease-out",
+                        t.claseColor ?? "text-[var(--foreground)] hover:bg-black/[0.04]"
+                      )}
                     >
                       {t.etiqueta}
                     </button>
                   </form>
                 ))}
+                {puedeEliminar && (
+                  <BotonEliminarProyecto proyectoId={proyecto.id} proyectoNombre={proyecto.nombre} />
+                )}
               </div>
             </details>
           )}
@@ -211,21 +222,28 @@ function FilaProyecto({
   );
 }
 
+// claseColor: solo las 3 transiciones que el negocio pidió distinguir por
+// color (Reactivar/Pausar/Cancelar) — Cerrar y Reabrir se quedan con el
+// estilo neutro por defecto (decisión de sesión, agosto 2026).
 function transicionesDisponibles(
   estatus: EstatusProyecto
-): { estatus: EstatusProyecto; etiqueta: string }[] {
+): { estatus: EstatusProyecto; etiqueta: string; claseColor?: string }[] {
   switch (estatus) {
     case "ACTIVO":
       return [
-        { estatus: "PAUSADO", etiqueta: "Pausar" },
+        { estatus: "PAUSADO", etiqueta: "Pausar", claseColor: "text-amber-700 hover:bg-amber-50" },
         { estatus: "CERRADO", etiqueta: "Cerrar" },
-        { estatus: "CANCELADO", etiqueta: "Cancelar" },
+        { estatus: "CANCELADO", etiqueta: "Cancelar", claseColor: "text-red-700 hover:bg-red-50" },
       ];
     case "PAUSADO":
       return [
-        { estatus: "ACTIVO", etiqueta: "Reactivar" },
+        {
+          estatus: "ACTIVO",
+          etiqueta: "Reactivar",
+          claseColor: "text-emerald-700 hover:bg-emerald-50",
+        },
         { estatus: "CERRADO", etiqueta: "Cerrar" },
-        { estatus: "CANCELADO", etiqueta: "Cancelar" },
+        { estatus: "CANCELADO", etiqueta: "Cancelar", claseColor: "text-red-700 hover:bg-red-50" },
       ];
     case "CERRADO":
     case "CANCELADO":

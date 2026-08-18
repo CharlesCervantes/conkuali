@@ -1,64 +1,112 @@
 import { Card } from "@/components/ui/card";
-import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { FormNuevaPartida } from "./form-nueva-partida";
 import { FormNuevoConcepto } from "./form-nuevo-concepto";
+import { IconoPartida } from "./icono-partida";
+import { TablaOperativaEditable, type ConceptoOperativoPlano } from "./tabla-operativa-editable";
 import { formatMoney } from "@/lib/dinero";
-import {
-  calcularImportesConcepto,
-  type ImportesConceptoCalculados,
-} from "@/lib/control-de-obra/contrato-general";
+import { calcularPrecioOperativoConcepto } from "@/lib/control-de-obra/contrato-general";
 import type { obtenerPartidasProyecto } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
 type Partidas = Awaited<ReturnType<typeof obtenerPartidasProyecto>>;
 type Concepto = Partidas[number]["conceptos"][number];
 
-function cant(valor: number): string {
-  return valor.toLocaleString("es-MX", { maximumFractionDigits: 3 });
+// Nada de Decimal cruza hacia TablaOperativaEditable ("use client") — se
+// convierte a number aquí, en el server component (mismo motivo que Avance
+// de obra y Contrato General Privado).
+function aConceptoPlano(concepto: Concepto): ConceptoOperativoPlano {
+  return {
+    id: concepto.id,
+    descripcion: concepto.descripcion,
+    unidad: concepto.unidad,
+    cantidadContratada: Number(concepto.cantidadContratada),
+    precioUnitarioContratista:
+      concepto.precioUnitarioContratista !== null ? Number(concepto.precioUnitarioContratista) : null,
+    precioUnitarioMateriales:
+      concepto.precioUnitarioMateriales !== null ? Number(concepto.precioUnitarioMateriales) : null,
+    porcentajeAdministracion:
+      concepto.porcentajeAdministracion !== null ? Number(concepto.porcentajeAdministracion) : null,
+  };
+}
+
+// Wrapper: convierte los Decimal del Concepto de Prisma y llama al motor
+// operativo compartido (lib/control-de-obra/contrato-general.ts) — Cliente
+// (operativo) reutiliza esa misma función, así que esta fórmula nunca se
+// duplica entre las dos pantallas.
+function precioOperativo(
+  concepto: Concepto,
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+) {
+  return calcularPrecioOperativoConcepto(
+    {
+      precioUnitarioContratista:
+        concepto.precioUnitarioContratista !== null ? Number(concepto.precioUnitarioContratista) : null,
+      precioUnitarioMateriales:
+        concepto.precioUnitarioMateriales !== null ? Number(concepto.precioUnitarioMateriales) : null,
+      porcentajeAdministracion:
+        concepto.porcentajeAdministracion !== null ? Number(concepto.porcentajeAdministracion) : null,
+    },
+    esquema,
+    porcentajeAdministracionDefault
+  );
+}
+
+// Subtotal operativo = cantidad × (P.U. + Materiales si Precio Alzado). Nunca
+// incluye Indirectos/Herramienta/precio comercial — eso es Contrato General
+// Privado (pestaña aparte).
+function subtotalOperativo(
+  concepto: Concepto,
+  esquema: EsquemaContractual | null
+): number {
+  return Number(concepto.cantidadContratada) * precioOperativo(concepto, esquema, null).subtotalPorUnidad;
+}
+
+function montoAdministracion(
+  concepto: Concepto,
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+): number {
+  return (
+    Number(concepto.cantidadContratada) *
+    precioOperativo(concepto, esquema, porcentajeAdministracionDefault).montoAdministracionPorUnidad
+  );
 }
 
 export function ContratoGeneralView({
   proyectoId,
   partidas,
   esquemaContractual,
-  porcentajesDefault,
+  porcentajeAdministracionDefault,
   puedeAdministrar,
-  puedeVerPrivado,
 }: {
   proyectoId: string;
   partidas: Partidas;
   esquemaContractual: EsquemaContractual | null;
-  porcentajesDefault: { utilidad: number | null; administracion: number | null };
+  porcentajeAdministracionDefault: number | null;
   puedeAdministrar: boolean;
-  puedeVerPrivado: boolean;
 }) {
-  const mostrarIndirectosHerramienta = esquemaContractual !== "ADMINISTRACION";
+  const esPrecioAlzado = esquemaContractual === "PRECIO_ALZADO";
+  const esAdministracion = esquemaContractual === "ADMINISTRACION";
 
-  const partidasConCalculo = partidas.map((partida) => {
-    const conceptos = partida.conceptos.map((concepto) => ({
-      concepto,
-      importes: calcularImportesConcepto(
-        {
-          precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
-          precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
-          precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
-          precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
-          porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
-          porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
-          precioUnitarioClienteOverride: numOrNull(concepto.precioUnitarioClienteOverride),
-          cantidadContratada: Number(concepto.cantidadContratada),
-        },
-        esquemaContractual,
-        porcentajesDefault
-      ),
-    }));
-
-    const totalPartida = conceptos.reduce((t, c) => t + c.importes.importeTotal, 0);
-
-    return { partida, conceptos, totalPartida };
-  });
-
-  const totalContratoVenta = partidasConCalculo.reduce((t, p) => t + p.totalPartida, 0);
+  const todosLosConceptos = partidas.flatMap((p) => p.conceptos);
+  const totalContratistas = todosLosConceptos.reduce(
+    (t, c) => t + Number(c.cantidadContratada) * (c.precioUnitarioContratista ? Number(c.precioUnitarioContratista) : 0),
+    0
+  );
+  const totalMateriales = esPrecioAlzado
+    ? todosLosConceptos.reduce(
+        (t, c) => t + Number(c.cantidadContratada) * (c.precioUnitarioMateriales ? Number(c.precioUnitarioMateriales) : 0),
+        0
+      )
+    : 0;
+  const subtotalGeneral = totalContratistas + totalMateriales;
+  const montoAdmGeneral = esAdministracion
+    ? todosLosConceptos.reduce(
+        (t, c) => t + montoAdministracion(c, esquemaContractual, porcentajeAdministracionDefault),
+        0
+      )
+    : 0;
 
   return (
     <div className="space-y-3">
@@ -68,11 +116,29 @@ export function ContratoGeneralView({
         </Card>
       )}
 
-      {partidasConCalculo.map(({ partida, conceptos, totalPartida }, i) => {
-        const subtotalOperativo = conceptos.reduce(
-          (t, c) => t + c.importes.subtotalOperativo,
+      {partidas.length > 0 && (
+        <ResumenContrato
+          esPrecioAlzado={esPrecioAlzado}
+          esAdministracion={esAdministracion}
+          totalContratistas={totalContratistas}
+          totalMateriales={totalMateriales}
+          subtotalGeneral={subtotalGeneral}
+          montoAdmGeneral={montoAdmGeneral}
+          porcentajeAdministracionDefault={porcentajeAdministracionDefault}
+        />
+      )}
+
+      {partidas.map((partida, i) => {
+        const subtotal = partida.conceptos.reduce(
+          (t, c) => t + subtotalOperativo(c, esquemaContractual),
           0
         );
+        const montoAdm = esAdministracion
+          ? partida.conceptos.reduce(
+              (t, c) => t + montoAdministracion(c, esquemaContractual, porcentajeAdministracionDefault),
+              0
+            )
+          : 0;
 
         return (
           <Card
@@ -80,37 +146,52 @@ export function ContratoGeneralView({
             className="enter overflow-hidden"
             style={{ transitionDelay: `${Math.min(i, 6) * 40}ms` }}
           >
-            <details open={partida.conceptos.length > 0}>
+            <details>
               <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-                <span className="text-sm font-semibold text-[var(--foreground)]">
-                  {partida.nombre}
+                <span className="flex items-center gap-3">
+                  <IconoPartida icono={partida.icono} color={partida.color} />
+                  <span className="text-sm font-semibold text-[var(--foreground)]">
+                    {partida.nombre}
+                  </span>
                 </span>
-                <span className="text-xs text-[var(--muted)]">
-                  {partida.conceptos.length} concepto
-                  {partida.conceptos.length === 1 ? "" : "s"}
-                </span>
+                {esAdministracion && partida.conceptos.length > 0 ? (
+                  <div className="flex items-center gap-4 text-xs text-[var(--muted)]">
+                    <span>
+                      Subtotal{" "}
+                      <span className="tabular-nums text-[var(--foreground)]">
+                        {formatMoney(subtotal)}
+                      </span>
+                    </span>
+                    <span>
+                      ADM{" "}
+                      <span className="tabular-nums text-[var(--foreground)]">
+                        {formatMoney(montoAdm)}
+                      </span>
+                    </span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      Total <span className="tabular-nums">{formatMoney(subtotal + montoAdm)}</span>
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-xs text-[var(--muted)]">
+                    {partida.conceptos.length} concepto
+                    {partida.conceptos.length === 1 ? "" : "s"}
+                  </span>
+                )}
               </summary>
 
               <div className="border-t border-[var(--border)] px-5 py-4 space-y-5">
-                {conceptos.length > 0 && (
-                  <TablaOperativa conceptos={conceptos} subtotal={subtotalOperativo} />
-                )}
-
-                {puedeVerPrivado && conceptos.length > 0 && (
-                  <div>
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-                      Contrato General Privado
-                    </p>
-                    <TablaPrivada
-                      conceptos={conceptos}
-                      mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
-                    />
-                    <ResumenPartida
-                      conceptos={conceptos}
-                      totalPartida={totalPartida}
-                      mostrarIndirectosHerramienta={mostrarIndirectosHerramienta}
-                    />
-                  </div>
+                {partida.conceptos.length > 0 && (
+                  <TablaOperativaEditable
+                    proyectoId={proyectoId}
+                    conceptos={partida.conceptos.map(aConceptoPlano)}
+                    esPrecioAlzado={esPrecioAlzado}
+                    esAdministracion={esAdministracion}
+                    porcentajeAdministracionDefault={porcentajeAdministracionDefault}
+                    subtotal={subtotal}
+                    montoAdm={montoAdm}
+                    puedeAdministrar={puedeAdministrar}
+                  />
                 )}
 
                 {puedeAdministrar && (
@@ -123,7 +204,6 @@ export function ContratoGeneralView({
                         partidaId={partida.id}
                         proyectoId={proyectoId}
                         esquemaContractual={esquemaContractual}
-                        puedeVerPrivado={puedeVerPrivado}
                       />
                     </div>
                   </details>
@@ -139,184 +219,69 @@ export function ContratoGeneralView({
           <FormNuevaPartida proyectoId={proyectoId} />
         </Card>
       )}
-
-      {puedeVerPrivado && partidas.length > 0 && (
-        <Card className="enter flex items-center justify-between px-5 py-4">
-          <span className="text-sm font-semibold text-[var(--foreground)]">
-            TOTAL CONTRATO
-          </span>
-          <span className="text-base font-semibold tabular-nums text-[var(--foreground)]">
-            {formatMoney(totalContratoVenta)}
-          </span>
-        </Card>
-      )}
     </div>
   );
 }
 
-function numOrNull(valor: unknown): number | null {
-  if (valor === null || valor === undefined) return null;
-  const n = Number(valor);
-  return Number.isNaN(n) ? null : n;
-}
-
-function TablaOperativa({
-  conceptos,
-  subtotal,
+// Solo componentes operativos (Contratistas/Materiales) — nunca % Utilidad,
+// P.U. Cliente ni Indirectos/Herramienta (eso es Contrato General Privado).
+// % Administración es la única excepción porque no es privado (ver arriba).
+function ResumenContrato({
+  esPrecioAlzado,
+  esAdministracion,
+  totalContratistas,
+  totalMateriales,
+  subtotalGeneral,
+  montoAdmGeneral,
+  porcentajeAdministracionDefault,
 }: {
-  conceptos: { concepto: Concepto; importes: ImportesConceptoCalculados }[];
-  subtotal: number;
+  esPrecioAlzado: boolean;
+  esAdministracion: boolean;
+  totalContratistas: number;
+  totalMateriales: number;
+  subtotalGeneral: number;
+  montoAdmGeneral: number;
+  porcentajeAdministracionDefault: number | null;
 }) {
   return (
-    <Table>
-      <Thead>
-        <Tr>
-          <Th>Concepto</Th>
-          <Th>Unidad</Th>
-          <Th className="text-right">Cantidad</Th>
-          <Th className="text-right">P.U. contratista</Th>
-          <Th className="text-right">P.U. materiales</Th>
-          <Th className="text-right">Subtotal</Th>
-        </Tr>
-      </Thead>
-      <tbody>
-        {conceptos.map(({ concepto, importes }) => (
-          <Tr key={concepto.id}>
-            <Td className="font-medium">{concepto.descripcion}</Td>
-            <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
-            <Td className="text-right tabular-nums">{cant(importes.cantidad)}</Td>
-            <Td className="text-right tabular-nums text-[var(--muted)]">
-              {concepto.precioUnitarioContratista !== null
-                ? formatMoney(concepto.precioUnitarioContratista)
-                : "—"}
-            </Td>
-            <Td className="text-right tabular-nums text-[var(--muted)]">
-              {concepto.precioUnitarioMateriales !== null
-                ? formatMoney(concepto.precioUnitarioMateriales)
-                : "—"}
-            </Td>
-            <Td className="text-right font-medium tabular-nums">
-              {formatMoney(importes.subtotalOperativo)}
-            </Td>
-          </Tr>
-        ))}
-      </tbody>
-      <tfoot>
-        <Tr className="bg-black/[0.015]">
-          <Td colSpan={5} className="text-right text-sm font-medium text-[var(--muted)]">
-            Presupuesto de partida (contratista + materiales)
-          </Td>
-          <Td className="text-right font-semibold tabular-nums">{formatMoney(subtotal)}</Td>
-        </Tr>
-      </tfoot>
-    </Table>
+    <Card className="enter p-5 ring-2 ring-emerald-200">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+        Resumen del contrato
+      </p>
+      <div className="mt-3 flex flex-wrap gap-x-8 gap-y-3">
+        <Metrica label="Contratistas" valor={totalContratistas} />
+        {esPrecioAlzado && <Metrica label="Materiales" valor={totalMateriales} />}
+        {esAdministracion && (
+          <Metrica
+            label={
+              porcentajeAdministracionDefault !== null
+                ? `% Administración (${porcentajeAdministracionDefault.toLocaleString("es-MX")}%)`
+                : "% Administración"
+            }
+            valor={montoAdmGeneral}
+          />
+        )}
+      </div>
+      <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-3">
+        <span className="text-sm font-medium text-[var(--muted)]">
+          {esAdministracion ? "Total (mano de obra + administración)" : "Subtotal directo (Contratistas + Materiales)"}
+        </span>
+        <span className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
+          {formatMoney(esAdministracion ? subtotalGeneral + montoAdmGeneral : subtotalGeneral)}
+        </span>
+      </div>
+    </Card>
   );
 }
 
-function TablaPrivada({
-  conceptos,
-  mostrarIndirectosHerramienta,
-}: {
-  conceptos: { concepto: Concepto; importes: ImportesConceptoCalculados }[];
-  mostrarIndirectosHerramienta: boolean;
-}) {
+function Metrica({ label, valor }: { label: string; valor: number }) {
   return (
-    <Table>
-      <Thead>
-        <Tr>
-          <Th>Concepto</Th>
-          {mostrarIndirectosHerramienta && <Th className="text-right">Indirectos</Th>}
-          {mostrarIndirectosHerramienta && <Th className="text-right">Herramienta</Th>}
-          <Th className="text-right">%</Th>
-          <Th className="text-right">P.U. recomendado</Th>
-          <Th className="text-right">P.U. cliente</Th>
-          <Th className="text-right">Importe</Th>
-        </Tr>
-      </Thead>
-      <tbody>
-        {conceptos.map(({ concepto, importes }) => (
-          <Tr key={concepto.id}>
-            <Td className="font-medium">{concepto.descripcion}</Td>
-            {mostrarIndirectosHerramienta && (
-              <Td className="text-right tabular-nums text-[var(--muted)]">
-                {formatMoney(importes.costoIndirectos)}
-              </Td>
-            )}
-            {mostrarIndirectosHerramienta && (
-              <Td className="text-right tabular-nums text-[var(--muted)]">
-                {formatMoney(importes.costoHerramienta)}
-              </Td>
-            )}
-            <Td className="text-right tabular-nums text-[var(--muted)]">
-              {importes.porcentajeAplicado !== null
-                ? `${importes.porcentajeAplicado.toLocaleString("es-MX")}%`
-                : "—"}
-            </Td>
-            <Td className="text-right tabular-nums text-[var(--muted)]">
-              {formatMoney(importes.precioUnitarioRecomendado)}
-            </Td>
-            <Td className="text-right tabular-nums">
-              <span className={importes.tieneOverride ? "font-semibold" : ""}>
-                {formatMoney(importes.precioUnitarioCliente)}
-              </span>
-              {importes.tieneOverride && (
-                <span className="ml-1.5 text-xs text-[var(--muted)]">(comercial)</span>
-              )}
-            </Td>
-            <Td className="text-right font-medium tabular-nums">
-              {formatMoney(importes.importeTotal)}
-            </Td>
-          </Tr>
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-function ResumenPartida({
-  conceptos,
-  totalPartida,
-  mostrarIndirectosHerramienta,
-}: {
-  conceptos: { concepto: Concepto; importes: ImportesConceptoCalculados }[];
-  totalPartida: number;
-  mostrarIndirectosHerramienta: boolean;
-}) {
-  const totales = conceptos.reduce(
-    (t, c) => ({
-      contratistas: t.contratistas + c.importes.importeContratista,
-      materiales: t.materiales + c.importes.importeMateriales,
-      indirectos: t.indirectos + c.importes.importeIndirectos,
-      herramienta: t.herramienta + c.importes.importeHerramienta,
-      utilidad: t.utilidad + c.importes.importeUtilidadOAdministracion,
-    }),
-    { contratistas: 0, materiales: 0, indirectos: 0, herramienta: 0, utilidad: 0 }
-  );
-
-  return (
-    <div className="mt-3 flex flex-wrap items-center justify-end gap-x-5 gap-y-1 border-t border-[var(--border)] pt-3 text-xs text-[var(--muted)]">
-      <span>
-        Contratistas <span className="tabular-nums text-[var(--foreground)]">{formatMoney(totales.contratistas)}</span>
-      </span>
-      <span>
-        Materiales <span className="tabular-nums text-[var(--foreground)]">{formatMoney(totales.materiales)}</span>
-      </span>
-      {mostrarIndirectosHerramienta && (
-        <>
-          <span>
-            Indirectos <span className="tabular-nums text-[var(--foreground)]">{formatMoney(totales.indirectos)}</span>
-          </span>
-          <span>
-            Herramienta <span className="tabular-nums text-[var(--foreground)]">{formatMoney(totales.herramienta)}</span>
-          </span>
-        </>
-      )}
-      <span>
-        Utilidad/Administración <span className="tabular-nums text-[var(--foreground)]">{formatMoney(totales.utilidad)}</span>
-      </span>
-      <span className="text-sm font-semibold text-[var(--foreground)]">
-        Total venta de partida <span className="tabular-nums">{formatMoney(totalPartida)}</span>
-      </span>
+    <div>
+      <p className="text-xs text-[var(--muted)]">{label}</p>
+      <p className="text-base font-semibold tabular-nums text-[var(--foreground)]">
+        {formatMoney(valor)}
+      </p>
     </div>
   );
 }
+
