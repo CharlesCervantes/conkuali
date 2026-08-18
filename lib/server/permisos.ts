@@ -93,3 +93,41 @@ export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean 
 export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
   return puedeAdministrarProyectos(usuario);
 }
+
+/**
+ * Emitir una Estimación Cliente la congela para siempre — mismo criterio
+ * financieramente sensible que cerrar/reabrir semana y eliminar proyectos,
+ * sin Master (04-modulo-control-de-obra.md, sección "Cliente").
+ */
+export function puedeEmitirEstimacionCliente(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Materializar retroactivamente la EstimacionCliente de una semana que ya
+ * estaba cerrada antes de que este módulo existiera — mismo criterio
+ * financieramente sensible que cerrar semana/emitir, sin Master
+ * (04-modulo-control-de-obra.md, sección "Cliente").
+ */
+export function puedeMaterializarEstimacionHistorica(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Ver Control Contractual (información financiera privada del cliente:
+ * fondo/cuentas por cobrar, aportaciones, pagos) — mismo rol-set que el
+ * resto de la capa privada de Contrato General (04-modulo-control-de-obra.md,
+ * sección "Control Contractual").
+ */
+export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
+  return puedeVerContratoGeneralPrivado(usuario);
+}
+
+/**
+ * Registrar movimientos financieros del cliente (aportación al fondo, pago de
+ * una estimación) — mismo criterio financieramente sensible que cerrar
+ * semana/emitir/materializar histórico, sin Master.
+ */
+export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}

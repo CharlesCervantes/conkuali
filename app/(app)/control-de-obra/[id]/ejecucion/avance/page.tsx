@@ -5,7 +5,7 @@ import {
   fechaAParametro,
   parametroAFecha,
 } from "@/lib/server/semanas";
-import { obtenerAvanceSemanal } from "@/lib/server/control-de-obra/avance";
+import { obtenerAvanceSemanal, filtrarPartidasConMovimiento } from "@/lib/server/control-de-obra/avance";
 import { obtenerResumenCierreSemana } from "@/lib/server/control-de-obra/cierre-semana";
 import {
   puedeAdministrarProyectos,
@@ -61,11 +61,7 @@ export default async function AvanceObraPage({
   // semana (AvanceConcepto real de esa semana vía `estaSemana`, nunca el
   // acumulado) — una partida sin ningún concepto con movimiento tampoco se
   // muestra. Al reabrir, semanaCerrada pasa a false y reaparece todo solo.
-  const partidasVisibles = semanaCerrada
-    ? partidas
-        .map((p) => ({ ...p, conceptos: p.conceptos.filter((c) => c.estaSemana > 0) }))
-        .filter((p) => p.conceptos.length > 0)
-    : partidas;
+  const partidasVisibles = semanaCerrada ? filtrarPartidasConMovimiento(partidas) : partidas;
 
   const fechaAnterior = new Date(semana.fechaInicio);
   fechaAnterior.setDate(fechaAnterior.getDate() - 7);

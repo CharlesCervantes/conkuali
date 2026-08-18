@@ -1,12 +1,13 @@
-import { Card } from "@/components/ui/card";
+import { redirect } from "next/navigation";
 
-// Placeholder de la nueva área "Cliente" — Estimaciones Cliente y Control
-// Contractual se construyen en una etapa posterior. Por ahora solo deja lista
-// la navegación (decisión de sesión, agosto 2026).
-export default function ClientePage() {
-  return (
-    <Card className="p-6 text-sm text-[var(--muted)]">
-      La sección Cliente se habilitará en la siguiente etapa.
-    </Card>
-  );
+// /cliente (sin subpestaña) no tiene vista propia — manda a la subpestaña
+// por defecto. La pestaña principal "Cliente" enlaza aquí a propósito (no
+// directo a /cliente/general) para que el resaltado activo por prefijo cubra
+// tanto Cliente como Cliente Priv. (ver [id]/layout.tsx, TabNav) — mismo
+// patrón que /contrato y /ejecucion.
+export default async function ClienteIndexPage({
+  params,
+}: PageProps<"/control-de-obra/[id]/cliente">) {
+  const { id } = await params;
+  redirect(`/control-de-obra/${id}/cliente/general`);
 }

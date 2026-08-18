@@ -22,6 +22,17 @@ const ESQUEMA_LABEL: Record<string, string> = {
   ADMINISTRACION: "Administración",
 };
 
+const ESQUEMAS_FINANCIEROS = [
+  { value: "", label: "Sin definir" },
+  { value: "FONDO", label: "Fondo" },
+  { value: "PAGO_POR_ESTIMACION", label: "Pago por estimación" },
+];
+
+const ESQUEMA_FINANCIERO_LABEL: Record<string, string> = {
+  FONDO: "Fondo",
+  PAGO_POR_ESTIMACION: "Pago por estimación",
+};
+
 type ValoresProyecto = {
   nombre: string;
   tipo: string;
@@ -35,6 +46,7 @@ type ValoresProyecto = {
   esquemaContractual?: string | null;
   porcentajeUtilidadDefault?: string | null;
   porcentajeAdministracionDefault?: string | null;
+  esquemaFinanciamientoCliente?: string | null;
 };
 
 export function ProyectoForm({
@@ -44,6 +56,8 @@ export function ProyectoForm({
   textoBoton,
   esquemaBloqueado = false,
   requiereConfirmacionEsquema = false,
+  esquemaFinancieroBloqueado = false,
+  requiereConfirmacionEsquemaFinanciero = false,
 }: {
   action: (state: FormState, formData: FormData) => Promise<FormState>;
   modo: "crear" | "editar";
@@ -58,6 +72,11 @@ export function ProyectoForm({
   // asignar uno es la última oportunidad de corregirlo, así que exige
   // confirmación explícita antes de guardar (sección 3 del rediseño).
   requiereConfirmacionEsquema?: boolean;
+  // Mismo criterio que esquemaBloqueado/requiereConfirmacionEsquema, para el
+  // esquema financiero del cliente (Control Contractual, agosto 2026) — "ya
+  // tiene información" aquí es "ya tiene movimientos financieros".
+  esquemaFinancieroBloqueado?: boolean;
+  requiereConfirmacionEsquemaFinanciero?: boolean;
 }) {
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     action,
@@ -66,9 +85,15 @@ export function ProyectoForm({
   const [tipo, setTipo] = useState(valoresIniciales?.tipo ?? "FORMAL");
   const [esquema, setEsquema] = useState(valoresIniciales?.esquemaContractual ?? "");
   const [confirmado, setConfirmado] = useState(false);
+  const [esquemaFinanciero, setEsquemaFinanciero] = useState(
+    valoresIniciales?.esquemaFinanciamientoCliente ?? ""
+  );
+  const [confirmadoFinanciero, setConfirmadoFinanciero] = useState(false);
 
   const esquemaEsObligatorio = modo === "crear" && tipo === "FORMAL";
   const mostrarConfirmacion = requiereConfirmacionEsquema && esquema !== "";
+  const mostrarConfirmacionFinanciera =
+    requiereConfirmacionEsquemaFinanciero && esquemaFinanciero !== "";
 
   return (
     <form action={formAction} className="space-y-5">
@@ -203,6 +228,73 @@ export function ProyectoForm({
                   required={mostrarConfirmacion}
                   checked={confirmado}
                   onChange={(e) => setConfirmado(e.target.checked)}
+                />
+                Confirmo que la selección es correcta.
+              </label>
+            </div>
+          )}
+        </div>
+
+        <div className="sm:col-span-2 lg:col-span-3 border-t border-[var(--border)] pt-5">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+            Control Contractual
+          </p>
+          <div className="grid grid-cols-1 gap-x-6 gap-y-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+                Esquema financiero del cliente
+              </label>
+
+              {esquemaFinancieroBloqueado ? (
+                <>
+                  <p className="rounded-lg border border-[var(--border)] bg-black/[0.02] px-3.5 py-2.5 text-sm text-[var(--foreground)]">
+                    {ESQUEMA_FINANCIERO_LABEL[esquemaFinanciero] ?? "Sin definir"}
+                  </p>
+                  <p className="mt-1.5 text-xs text-[var(--muted)]">
+                    El esquema financiero no puede modificarse porque el proyecto
+                    ya tiene movimientos financieros registrados.
+                  </p>
+                  <input
+                    type="hidden"
+                    name="esquemaFinanciamientoCliente"
+                    value={esquemaFinanciero}
+                  />
+                </>
+              ) : (
+                <select
+                  name="esquemaFinanciamientoCliente"
+                  value={esquemaFinanciero}
+                  onChange={(e) => {
+                    setEsquemaFinanciero(e.target.value);
+                    setConfirmadoFinanciero(false);
+                  }}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+                >
+                  {ESQUEMAS_FINANCIEROS.map((e) => (
+                    <option key={e.value} value={e.value}>
+                      {e.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+
+          {mostrarConfirmacionFinanciera && (
+            <div className="enter mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3.5">
+              <p className="text-sm text-amber-900">
+                Este proyecto ya contiene movimientos financieros. Una vez
+                definido el esquema financiero no podrá modificarse de forma
+                normal. Verifica que la selección sea correcta antes de
+                continuar.
+              </p>
+              <label className="mt-2.5 flex items-center gap-2 text-sm text-amber-900">
+                <input
+                  type="checkbox"
+                  name="confirmarEsquemaFinancieroConDatos"
+                  required={mostrarConfirmacionFinanciera}
+                  checked={confirmadoFinanciero}
+                  onChange={(e) => setConfirmadoFinanciero(e.target.checked)}
                 />
                 Confirmo que la selección es correcta.
               </label>

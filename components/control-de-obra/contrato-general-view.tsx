@@ -4,6 +4,7 @@ import { FormNuevoConcepto } from "./form-nuevo-concepto";
 import { IconoPartida } from "./icono-partida";
 import { TablaOperativaEditable, type ConceptoOperativoPlano } from "./tabla-operativa-editable";
 import { formatMoney } from "@/lib/dinero";
+import { calcularPrecioOperativoConcepto } from "@/lib/control-de-obra/contrato-general";
 import type { obtenerPartidasProyecto } from "@/lib/server/control-de-obra/estructura-contractual";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
@@ -28,41 +29,48 @@ function aConceptoPlano(concepto: Concepto): ConceptoOperativoPlano {
   };
 }
 
+// Wrapper: convierte los Decimal del Concepto de Prisma y llama al motor
+// operativo compartido (lib/control-de-obra/contrato-general.ts) — Cliente
+// (operativo) reutiliza esa misma función, así que esta fórmula nunca se
+// duplica entre las dos pantallas.
+function precioOperativo(
+  concepto: Concepto,
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+) {
+  return calcularPrecioOperativoConcepto(
+    {
+      precioUnitarioContratista:
+        concepto.precioUnitarioContratista !== null ? Number(concepto.precioUnitarioContratista) : null,
+      precioUnitarioMateriales:
+        concepto.precioUnitarioMateriales !== null ? Number(concepto.precioUnitarioMateriales) : null,
+      porcentajeAdministracion:
+        concepto.porcentajeAdministracion !== null ? Number(concepto.porcentajeAdministracion) : null,
+    },
+    esquema,
+    porcentajeAdministracionDefault
+  );
+}
+
 // Subtotal operativo = cantidad × (P.U. + Materiales si Precio Alzado). Nunca
 // incluye Indirectos/Herramienta/precio comercial — eso es Contrato General
-// Privado (pestaña aparte). En Administración no es "el costo total de la
-// partida" (todavía falta materiales reales y otros gastos reales) — por eso
-// la etiqueta en el pie de tabla es distinta según esquema (precisión de
-// sesión, agosto 2026).
-function subtotalOperativo(concepto: Concepto, esPrecioAlzado: boolean): number {
-  const puContratista = concepto.precioUnitarioContratista
-    ? Number(concepto.precioUnitarioContratista)
-    : 0;
-  const puMateriales =
-    esPrecioAlzado && concepto.precioUnitarioMateriales
-      ? Number(concepto.precioUnitarioMateriales)
-      : 0;
-  return Number(concepto.cantidadContratada) * (puContratista + puMateriales);
-}
-
-// % Administración NO es privado (a diferencia de % Utilidad en Precio
-// Alzado) — Supervisor sí lo ve en Contrato General, igual que el monto que
-// representa (sección 49.9 de la documentación de negocio). Se calcula
-// siempre sobre precioUnitarioContratista (nunca sobre el P.U. de Contrato
-// General Privado, que es un valor aparte).
-function porcentajeAdministracionEfectivo(
+// Privado (pestaña aparte).
+function subtotalOperativo(
   concepto: Concepto,
-  porcentajeAdministracionDefault: number | null
-): number | null {
-  const propio = concepto.porcentajeAdministracion;
-  return propio !== null && propio !== undefined
-    ? Number(propio)
-    : porcentajeAdministracionDefault;
+  esquema: EsquemaContractual | null
+): number {
+  return Number(concepto.cantidadContratada) * precioOperativo(concepto, esquema, null).subtotalPorUnidad;
 }
 
-function montoAdministracion(concepto: Concepto, porcentajeAdministracionDefault: number | null): number {
-  const porcentaje = porcentajeAdministracionEfectivo(concepto, porcentajeAdministracionDefault);
-  return subtotalOperativo(concepto, false) * ((porcentaje ?? 0) / 100);
+function montoAdministracion(
+  concepto: Concepto,
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+): number {
+  return (
+    Number(concepto.cantidadContratada) *
+    precioOperativo(concepto, esquema, porcentajeAdministracionDefault).montoAdministracionPorUnidad
+  );
 }
 
 export function ContratoGeneralView({
@@ -94,7 +102,10 @@ export function ContratoGeneralView({
     : 0;
   const subtotalGeneral = totalContratistas + totalMateriales;
   const montoAdmGeneral = esAdministracion
-    ? todosLosConceptos.reduce((t, c) => t + montoAdministracion(c, porcentajeAdministracionDefault), 0)
+    ? todosLosConceptos.reduce(
+        (t, c) => t + montoAdministracion(c, esquemaContractual, porcentajeAdministracionDefault),
+        0
+      )
     : 0;
 
   return (
@@ -119,12 +130,12 @@ export function ContratoGeneralView({
 
       {partidas.map((partida, i) => {
         const subtotal = partida.conceptos.reduce(
-          (t, c) => t + subtotalOperativo(c, esPrecioAlzado),
+          (t, c) => t + subtotalOperativo(c, esquemaContractual),
           0
         );
         const montoAdm = esAdministracion
           ? partida.conceptos.reduce(
-              (t, c) => t + montoAdministracion(c, porcentajeAdministracionDefault),
+              (t, c) => t + montoAdministracion(c, esquemaContractual, porcentajeAdministracionDefault),
               0
             )
           : 0;

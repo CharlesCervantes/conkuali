@@ -27,6 +27,14 @@ import {
   obtenerDetalleCorte,
   type DetalleCorte,
 } from "@/lib/server/control-de-obra/recibos";
+import {
+  emitirEstimacion,
+  materializarEstimacionHistorica,
+} from "@/lib/server/control-de-obra/estimacion-cliente";
+import {
+  registrarAportacionFondo,
+  registrarPagoEstimacion,
+} from "@/lib/server/control-de-obra/financiero-cliente";
 import { put } from "@vercel/blob";
 import {
   SinPermisoError,
@@ -369,6 +377,9 @@ export async function cerrarSemanaAction(
     return { error: mensajeError(error) };
   }
   revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
   revalidatePath("/reporte-general");
   return { cerrado: true };
 }
@@ -388,6 +399,9 @@ export async function reabrirSemanaAction(
     return { error: mensajeError(error) };
   }
   revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
   return { reabierta: true };
 }
 
@@ -462,4 +476,99 @@ export async function obtenerDetalleCorteAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Estimación Cliente
+// ---------------------------------------------------------------------------
+
+export type EmitirEstimacionFormState = { error?: string; emitida?: boolean } | undefined;
+
+export async function emitirEstimacionAction(
+  proyectoId: string,
+  estimacionId: string,
+  _state: EmitirEstimacionFormState,
+  _formData: FormData
+): Promise<EmitirEstimacionFormState> {
+  const usuario = await requireSession();
+  try {
+    await emitirEstimacion(usuario, estimacionId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { emitida: true };
+}
+
+export type MaterializarEstimacionFormState =
+  | { error?: string; generada?: boolean; yaExistia?: boolean }
+  | undefined;
+
+export async function materializarEstimacionHistoricaAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: MaterializarEstimacionFormState,
+  _formData: FormData
+): Promise<MaterializarEstimacionFormState> {
+  const usuario = await requireSession();
+  try {
+    const resultado = await materializarEstimacionHistorica(usuario, proyectoId, semanaId);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/general`);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/estimacion`);
+    revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+    return { generada: true, yaExistia: resultado.yaExistia };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Control Contractual — esquema financiero del cliente
+// ---------------------------------------------------------------------------
+
+export type RegistrarAportacionFormState = { error?: string; registrada?: boolean } | undefined;
+
+export async function registrarAportacionFondoAction(
+  proyectoId: string,
+  _state: RegistrarAportacionFormState,
+  formData: FormData
+): Promise<RegistrarAportacionFormState> {
+  const usuario = await requireSession();
+  try {
+    await registrarAportacionFondo(usuario, proyectoId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { registrada: true };
+}
+
+export type RegistrarPagoFormState = { error?: string; registrado?: boolean } | undefined;
+
+export async function registrarPagoEstimacionAction(
+  proyectoId: string,
+  estimacionId: string,
+  _state: RegistrarPagoFormState,
+  formData: FormData
+): Promise<RegistrarPagoFormState> {
+  const usuario = await requireSession();
+  try {
+    await registrarPagoEstimacion(usuario, estimacionId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { registrado: true };
 }

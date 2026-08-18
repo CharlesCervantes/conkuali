@@ -71,6 +71,62 @@ export function calcularImportesConcepto(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Motor operativo (Contrato General, NO privado) — Contratistas + Materiales
+// (si Precio Alzado) + % Administración (que no es privado, a diferencia de
+// % Utilidad — sección 49.9). Nunca incluye Indirectos/Herramienta/precio
+// comercial, eso es exclusivo de calcularPrecioConcepto/Privado. Se calcula
+// siempre sobre precioUnitarioContratista (nunca sobre el P.U. de Contrato
+// General Privado). Compartido por ContratoGeneralView y por Cliente
+// (operativo) — no duplicar esta fórmula en ninguno de los dos.
+// ---------------------------------------------------------------------------
+
+export type CostosOperativoConcepto = {
+  precioUnitarioContratista: number | null;
+  precioUnitarioMateriales: number | null;
+  porcentajeAdministracion: number | null;
+};
+
+export type PrecioOperativoCalculado = {
+  costoContratista: number;
+  costoMateriales: number;
+  subtotalPorUnidad: number; // contratista + materiales (si Precio Alzado)
+  porcentajeAdministracionAplicado: number | null; // null si el esquema no es ADMINISTRACION
+  montoAdministracionPorUnidad: number; // 0 si el esquema no es ADMINISTRACION
+  precioUnitarioConAdministracion: number; // subtotalPorUnidad + montoAdministracionPorUnidad
+};
+
+export function calcularPrecioOperativoConcepto(
+  concepto: CostosOperativoConcepto,
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+): PrecioOperativoCalculado {
+  const esPrecioAlzado = esquema === "PRECIO_ALZADO";
+  const esAdministracion = esquema === "ADMINISTRACION";
+
+  const costoContratista = concepto.precioUnitarioContratista ?? 0;
+  const costoMateriales = esPrecioAlzado ? (concepto.precioUnitarioMateriales ?? 0) : 0;
+  const subtotalPorUnidad = costoContratista + costoMateriales;
+
+  const porcentajeAdministracionAplicado = esAdministracion
+    ? (concepto.porcentajeAdministracion ?? porcentajeAdministracionDefault)
+    : null;
+  // Base de administración = solo contratista, nunca materiales — aunque el
+  // concepto tuviera materiales capturados (dato residual de otro esquema).
+  const montoAdministracionPorUnidad = esAdministracion
+    ? costoContratista * ((porcentajeAdministracionAplicado ?? 0) / 100)
+    : 0;
+
+  return {
+    costoContratista,
+    costoMateriales,
+    subtotalPorUnidad,
+    porcentajeAdministracionAplicado,
+    montoAdministracionPorUnidad,
+    precioUnitarioConAdministracion: subtotalPorUnidad + montoAdministracionPorUnidad,
+  };
+}
+
 export function calcularPrecioConcepto(
   concepto: CostosConcepto,
   esquema: EsquemaContractual | null,

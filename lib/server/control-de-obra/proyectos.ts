@@ -43,6 +43,10 @@ const DatosProyectoSchema = z.object({
   esquemaContractual: z.enum(["PRECIO_ALZADO", "ADMINISTRACION"]).optional().nullable(),
   porcentajeUtilidadDefault: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeAdministracionDefault: z.coerce.number().nonnegative().optional().nullable(),
+  // Control Contractual — cómo el cliente ENTREGA el dinero, dimensión
+  // independiente de esquemaContractual (que define cómo se calcula el
+  // precio). null = sin definir todavía, nunca se infiere.
+  esquemaFinanciamientoCliente: z.enum(["FONDO", "PAGO_POR_ESTIMACION"]).optional().nullable(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;
@@ -108,6 +112,26 @@ export async function proyectoTieneInformacionContractual(
   return Boolean(partida || concepto || contrato || asignacion || avance);
 }
 
+// Un proyecto se considera "ya iniciado financieramente" (Control
+// Contractual) si existe cualquier movimiento del ledger, o cualquier
+// EstimacionCliente EMITIDA (sección 5 del diseño de Control Contractual,
+// agosto 2026: EMITIDA es el momento en que una estimación entra al control
+// financiero, aunque en PAGO_POR_ESTIMACION todavía no tenga ningún pago
+// registrado). Mismo checklist que proyectoTieneInformacionContractual, pero
+// para esquemaFinanciamientoCliente en vez de esquemaContractual.
+export async function proyectoTieneMovimientosFinancieros(
+  proyectoId: string
+): Promise<boolean> {
+  const [movimiento, estimacionEmitida] = await Promise.all([
+    db.movimientoFinancieroCliente.findFirst({ where: { proyectoId }, select: { id: true } }),
+    db.estimacionCliente.findFirst({
+      where: { proyectoId, estatus: "EMITIDA" },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(movimiento || estimacionEmitida);
+}
+
 export async function crearProyecto(usuario: UsuarioSesion, datosCrudos: unknown) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
@@ -146,7 +170,11 @@ export async function editarProyecto(
   // proyecto que ya tiene información contractual — el usuario debe confirmar
   // a propósito que la selección es correcta, porque después queda fija
   // (sección 3 del rediseño). Se valida aquí, no solo en la UI.
-  confirmarEsquemaConDatos = false
+  confirmarEsquemaConDatos = false,
+  // Mismo criterio que arriba, pero para esquemaFinanciamientoCliente — "ya
+  // tiene información" aquí significa "ya tiene movimientos financieros" (ver
+  // proyectoTieneMovimientosFinancieros), no información contractual.
+  confirmarEsquemaFinancieroConDatos = false
 ) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
@@ -178,9 +206,55 @@ export async function editarProyecto(
     }
   }
 
-  const proyecto = await db.proyecto.update({
-    where: { id },
-    data: datos,
+  // Mismo patrón de bloqueo/confirmación que esquemaContractual, aplicado a
+  // esquemaFinanciamientoCliente (Control Contractual, agosto 2026) — nunca
+  // se cambia FONDO <-> PAGO_POR_ESTIMACION una vez que el proyecto ya tiene
+  // movimientos financieros (sección 23.2 del diseño).
+  const cambioEsquemaFinanciero =
+    datos.esquemaFinanciamientoCliente !== anterior.esquemaFinanciamientoCliente;
+  let esAsignacionInicialFinanciera = false;
+  if (cambioEsquemaFinanciero) {
+    esAsignacionInicialFinanciera = anterior.esquemaFinanciamientoCliente === null;
+    const tieneMovimientos = await proyectoTieneMovimientosFinancieros(id);
+
+    if (!esAsignacionInicialFinanciera && tieneMovimientos) {
+      throw new ValidacionError(
+        "El esquema financiero del cliente no puede modificarse porque el proyecto ya tiene movimientos financieros registrados."
+      );
+    }
+    if (esAsignacionInicialFinanciera && tieneMovimientos && !confirmarEsquemaFinancieroConDatos) {
+      throw new ValidacionError(
+        "Este proyecto ya contiene movimientos financieros. Confirma para definir el esquema financiero del cliente."
+      );
+    }
+  }
+
+  const proyecto = await db.$transaction(async (tx) => {
+    const actualizado = await tx.proyecto.update({
+      where: { id },
+      data: datos,
+    });
+
+    // Asignación inicial null -> FONDO: las EstimacionCliente EMITIDA que ya
+    // existían antes de definir el esquema no tienen APLICACION_ESTIMACION
+    // porque esa lógica no corría todavía — se materializan aquí, en la
+    // misma transacción que fija el esquema, para que nunca quede un
+    // proyecto en FONDO con estimaciones emitidas "invisibles" para el
+    // fondo (sección "Integridad financiera" del diseño, agosto 2026).
+    if (
+      cambioEsquemaFinanciero &&
+      esAsignacionInicialFinanciera &&
+      datos.esquemaFinanciamientoCliente === "FONDO"
+    ) {
+      const { materializarAplicacionesFondoHistoricas } = await import("./financiero-cliente");
+      await materializarAplicacionesFondoHistoricas(tx, {
+        empresaId,
+        proyectoId: id,
+        usuarioId: usuario.id,
+      });
+    }
+
+    return actualizado;
   });
 
   await registrarAuditoria({

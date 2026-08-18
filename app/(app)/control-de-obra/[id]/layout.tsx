@@ -59,7 +59,11 @@ export default async function ProyectoLayout({
               label: "Ejecución",
               coincideSubrutas: true,
             },
-            { href: `/control-de-obra/${id}/cliente`, label: "Cliente" },
+            {
+              href: `/control-de-obra/${id}/cliente`,
+              label: "Cliente",
+              coincideSubrutas: true,
+            },
           ]}
         />
 

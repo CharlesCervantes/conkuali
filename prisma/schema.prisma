@@ -64,16 +64,18 @@ model Empresa {
   reciboMostrarDetalle Boolean @default(true)
   reciboMostrarPU      Boolean @default(true)
 
-  dominiosCorreo  DominioCorreo[]
-  usuarios        Usuario[]
-  registros       RegistroAuditoria[]
-  proyectos       Proyecto[]
-  beneficiarios   Beneficiario[]
-  semanas         Semana[]
-  avancesConcepto AvanceConcepto[]
-  cierresSemana   CierreSemanaProyecto[]
-  cortesSemana    CorteSemanal[]
-  recibosPago     ReciboPago[]
+  dominiosCorreo      DominioCorreo[]
+  usuarios            Usuario[]
+  registros           RegistroAuditoria[]
+  proyectos           Proyecto[]
+  beneficiarios       Beneficiario[]
+  semanas             Semana[]
+  avancesConcepto     AvanceConcepto[]
+  cierresSemana       CierreSemanaProyecto[]
+  cortesSemana        CorteSemanal[]
+  recibosPago         ReciboPago[]
+  estimacionesCliente EstimacionCliente[]
+  movimientosFinancieros MovimientoFinancieroCliente[]
 
   @@map("empresas")
 }
@@ -155,6 +157,10 @@ model Usuario {
 
   recibosGenerados        ReciboPago[] @relation("ReciboPagoGenerado")
   recibosEvidenciaSubida  ReciboPago[] @relation("ReciboPagoEvidenciaSubida")
+
+  estimacionesClienteGeneradas EstimacionCliente[] @relation("EstimacionClienteGenerada")
+  estimacionesClienteEmitidas  EstimacionCliente[] @relation("EstimacionClienteEmitida")
+  movimientosFinancierosClienteRegistrados MovimientoFinancieroCliente[]
 
   @@map("usuarios")
 }
@@ -253,6 +259,13 @@ enum EsquemaContractual {
   ADMINISTRACION
 }
 
+// Dimensión independiente de EsquemaContractual — cómo el cliente ENTREGA el
+// dinero, no cómo se calcula el precio. Ver Proyecto.esquemaFinanciamientoCliente.
+enum EsquemaFinanciamientoCliente {
+  FONDO
+  PAGO_POR_ESTIMACION
+}
+
 model Proyecto {
   id          String          @id @default(cuid())
   empresa     Empresa         @relation(fields: [empresaId], references: [id])
@@ -284,13 +297,32 @@ model Proyecto {
   porcentajeUtilidadDefault      Decimal?            @db.Decimal(5, 2)
   porcentajeAdministracionDefault Decimal?           @db.Decimal(5, 2)
 
+  // Esquema financiero del cliente (sección "Control Contractual" de
+  // 04-modulo-control-de-obra.md) — cómo el cliente ENTREGA el dinero
+  // (Fondo anticipado vs. Pago por estimación), dimensión totalmente
+  // independiente de esquemaContractual (que define cómo se CALCULA el
+  // precio). null = sin definir todavía, nunca se infiere — mismo criterio
+  // que esquemaContractual. Bloqueado en cuanto el proyecto ya tiene
+  // movimientos financieros (ver proyectoTieneMovimientosFinancieros en
+  // proyectos.ts), mismo patrón que el bloqueo de esquemaContractual.
+  esquemaFinanciamientoCliente EsquemaFinanciamientoCliente?
+
+  // Contador atómico de Estimación Cliente (sección "Cliente" de
+  // 04-modulo-control-de-obra.md) — correlativo POR PROYECTO (a diferencia
+  // del folio de Recibos, que es por empresa). Se incrementa con `increment`
+  // dentro de la misma transacción de cierre de semana que crea la
+  // EstimacionCliente — mismo mecanismo que Empresa.ultimoFolioRecibo.
+  ultimoNumeroEstimacion Int @default(0)
+
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  beneficiarios BeneficiarioProyecto[]
-  partidas      Partida[]
-  cierresSemana CierreSemanaProyecto[]
-  cortesSemana  CorteSemanal[]
+  beneficiarios       BeneficiarioProyecto[]
+  partidas            Partida[]
+  cierresSemana       CierreSemanaProyecto[]
+  cortesSemana        CorteSemanal[]
+  estimacionesCliente EstimacionCliente[]
+  movimientosFinancieros MovimientoFinancieroCliente[]
 
   @@index([empresaId])
   @@map("proyectos")
@@ -412,10 +444,11 @@ model Semana {
   fechaFin    DateTime
   estado      EstatusSemana @default(ABIERTA)
 
-  movimientos     MovimientoSemanal[]
-  avancesConcepto AvanceConcepto[]
-  cierresSemana   CierreSemanaProyecto[]
-  cortesSemana    CorteSemanal[]
+  movimientos         MovimientoSemanal[]
+  avancesConcepto     AvanceConcepto[]
+  cierresSemana       CierreSemanaProyecto[]
+  cortesSemana        CorteSemanal[]
+  estimacionesCliente EstimacionCliente[]
 
   @@unique([empresaId, numero, anio])
   @@map("semanas")
@@ -568,9 +601,10 @@ model Concepto {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  asignaciones  ContratoConcepto[]
-  avances       AvanceConcepto[]
-  corteDetalles CorteSemanalConcepto[]
+  asignaciones       ContratoConcepto[]
+  avances            AvanceConcepto[]
+  corteDetalles      CorteSemanalConcepto[]
+  estimacionDetalles EstimacionClienteConcepto[]
 
   @@index([partidaId])
   @@map("conceptos")
@@ -861,4 +895,154 @@ model ReciboPago {
   @@unique([empresaId, folio])
   @@index([corteSemanalId])
   @@map("recibos_pago")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 7: Cliente / Cliente Priv.
+// Ver /docs/negocio/04-modulo-control-de-obra.md. Valoriza el mismo avance
+// físico de AvanceConcepto hacia el cliente — Cliente usa la lógica de
+// Contrato General (operativo), Cliente Priv. la de Contrato General Privado.
+// Un solo avance físico, dos valorizaciones — nunca dos fuentes de verdad de
+// cantidad. Mientras la semana está ABIERTA no existe fila aquí (la vista
+// calcula en vivo); al CERRAR la semana se genera/reconcilia en BORRADOR
+// dentro de la misma transacción de cierre; EMITIDA queda congelada para
+// siempre, ni una reapertura ni un recierre posterior la tocan. Decisión de
+// sesión, agosto 2026.
+// ---------------------------------------------------------------------------
+
+enum EstatusEstimacionCliente {
+  BORRADOR
+  EMITIDA
+}
+
+model EstimacionCliente {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  // Correlativo por proyecto (Proyecto.ultimoNumeroEstimacion) — "Estimación 1",
+  // "Estimación 2"...
+  numero Int
+
+  estatus EstatusEstimacionCliente @default(BORRADOR)
+
+  // Snapshot del esquema al momento de generar — si el esquema del proyecto
+  // cambiara después, esta fila no cambia de significado retroactivamente.
+  esquemaContractualUsado EsquemaContractual?
+
+  // Resumen comercial (capa Privada — el monto "oficial" de la estimación).
+  // El resumen operativo/Cliente se calcula sumando en vivo el detalle
+  // congelado (columnas *Operativo), no se duplica aquí.
+  subtotal                     Decimal @db.Decimal(14, 2)
+  montoAdministracionOUtilidad Decimal @db.Decimal(14, 2)
+  total                        Decimal @db.Decimal(14, 2)
+
+  generadoPor   Usuario  @relation("EstimacionClienteGenerada", fields: [generadoPorId], references: [id])
+  generadoPorId String
+  generadoEn    DateTime @default(now())
+
+  emitidoPor   Usuario?  @relation("EstimacionClienteEmitida", fields: [emitidoPorId], references: [id])
+  emitidoPorId String?
+  emitidoEn    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  detalle             EstimacionClienteConcepto[]
+  movimientosFinancieros MovimientoFinancieroCliente[]
+
+  @@unique([proyectoId, semanaId])
+  @@index([empresaId])
+  @@map("estimaciones_cliente")
+}
+
+model EstimacionClienteConcepto {
+  id                  String            @id @default(cuid())
+  estimacionCliente   EstimacionCliente @relation(fields: [estimacionClienteId], references: [id])
+  estimacionClienteId String
+  concepto            Concepto          @relation(fields: [conceptoId], references: [id])
+  conceptoId          String
+
+  // Frozen, organizativo — mismo patrón que CorteSemanalConcepto (nunca se
+  // vuelve a leer Partida/Concepto en vivo para reconstruir un histórico).
+  partidaNombre       String
+  descripcionConcepto String
+  unidad              String
+
+  cantidadContratada Decimal @db.Decimal(14, 3)
+  cantidadAnterior   Decimal @db.Decimal(14, 3)
+  cantidadEstaSemana Decimal @db.Decimal(14, 3)
+  cantidadAcumulada  Decimal @db.Decimal(14, 3)
+  cantidadPorEjercer Decimal @db.Decimal(14, 3)
+  avancePorcentaje   Decimal @db.Decimal(5, 2)
+
+  // Capa Cliente (operativo — lógica de Contrato General).
+  precioUnitarioOperativo    Decimal @db.Decimal(14, 2)
+  importeContratadoOperativo Decimal @db.Decimal(14, 2)
+  importeEstaSemanaOperativo Decimal @db.Decimal(14, 2)
+  importeAcumuladoOperativo  Decimal @db.Decimal(14, 2)
+  importePorEjercerOperativo Decimal @db.Decimal(14, 2)
+
+  // Capa Cliente Priv. (comercial — lógica de Contrato General Privado).
+  precioUnitarioPrivado     Decimal  @db.Decimal(14, 2)
+  importeContratadoPrivado Decimal  @db.Decimal(14, 2)
+  importeEstaSemanaPrivado Decimal  @db.Decimal(14, 2)
+  importeAcumuladoPrivado  Decimal  @db.Decimal(14, 2)
+  importePorEjercerPrivado Decimal  @db.Decimal(14, 2)
+  porcentajeAplicadoPrivado Decimal? @db.Decimal(5, 2)
+
+  @@index([estimacionClienteId])
+  @@index([conceptoId])
+  @@map("estimacion_cliente_conceptos")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 8: Control Contractual / esquema financiero
+// del cliente. Ledger único para las tres cosas que mueven dinero del lado
+// del cliente — aportación al fondo, pago de una estimación, y aplicación de
+// una estimación contra el fondo — en vez de tres tablas casi idénticas. El
+// monto siempre es la magnitud real y positiva; el signo/dirección lo decide
+// `tipo`, nunca un negativo en la fila (legible para auditoría). Decisión de
+// sesión, agosto 2026.
+// ---------------------------------------------------------------------------
+
+enum TipoMovimientoFinancieroCliente {
+  APORTACION_FONDO // entrada — proyecto FONDO, no ligada a una estimación
+  PAGO_ESTIMACION // entrada — proyecto PAGO_POR_ESTIMACION, ligada a una estimación
+  APLICACION_ESTIMACION // salida — proyecto FONDO, se genera solo al emitir (o al asignar FONDO por primera vez, para el histórico — ver materializarAplicacionesFondoHistoricas)
+}
+
+model MovimientoFinancieroCliente {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+
+  tipo   TipoMovimientoFinancieroCliente
+  monto  Decimal  @db.Decimal(14, 2)
+  fecha  DateTime
+  referencia String?
+  notas      String?
+
+  // Obligatorio en PAGO_ESTIMACION y APLICACION_ESTIMACION — una estimación
+  // puede tener varios PAGO_ESTIMACION (pagos parciales) pero como mucho un
+  // APLICACION_ESTIMACION (garantizado por un índice único parcial en la
+  // migración, WHERE tipo = 'APLICACION_ESTIMACION' — no representable en
+  // este DSL de Prisma, ver migration.sql). null en APORTACION_FONDO (una
+  // aportación es del proyecto, no de una estimación específica).
+  estimacionCliente   EstimacionCliente? @relation(fields: [estimacionClienteId], references: [id])
+  estimacionClienteId String?
+
+  registradoPor   Usuario @relation(fields: [registradoPorId], references: [id])
+  registradoPorId String
+  createdAt DateTime @default(now())
+
+  @@index([proyectoId])
+  @@index([estimacionClienteId])
+  @@map("movimientos_financieros_cliente")
 }

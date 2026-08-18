@@ -7,6 +7,7 @@ import { puedeCerrarSemana, puedeReabrirSemana } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
+import { generarOReconciliarEstimacionBorrador } from "./estimacion-cliente";
 
 type Cliente = Prisma.TransactionClient;
 
@@ -491,6 +492,7 @@ export type ResultadoCierreSemana = {
   cortesReconciliados: number;
   cortesOmitidosPorLiquidado: number;
   montoTotalGenerado: number;
+  estimacionClienteOmitidaPorEmitida: boolean;
 };
 
 export async function cerrarSemana(
@@ -521,6 +523,7 @@ export async function cerrarSemana(
             cortesReconciliados: 0,
             cortesOmitidosPorLiquidado: 0,
             montoTotalGenerado: 0,
+            estimacionClienteOmitidaPorEmitida: false,
           };
         }
 
@@ -630,12 +633,23 @@ export async function cerrarSemana(
           }
         }
 
+        // Estimación Cliente — una sola vez por proyecto+semana (no por
+        // contratista), después de los cortes, dentro de la misma
+        // transacción atómica. EMITIDA nunca se toca (ver
+        // generarOReconciliarEstimacionBorrador).
+        const resultadoEstimacion = await generarOReconciliarEstimacionBorrador(
+          tx,
+          { empresaId, proyectoId, semanaId, usuarioId: usuario.id },
+          semana
+        );
+
         return {
           yaEstabaCerrada: false,
           cortesGenerados,
           cortesReconciliados,
           cortesOmitidosPorLiquidado,
           montoTotalGenerado,
+          estimacionClienteOmitidaPorEmitida: resultadoEstimacion.tipo === "OMITIDA_EMITIDA",
         };
       },
       { timeout: 20000 }
@@ -655,6 +669,7 @@ export async function cerrarSemana(
           cortesReconciliados: 0,
           cortesOmitidosPorLiquidado: 0,
           montoTotalGenerado: 0,
+          estimacionClienteOmitidaPorEmitida: false,
         };
       }
     }

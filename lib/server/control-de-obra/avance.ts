@@ -12,6 +12,9 @@ import {
   RegistroNoEncontradoError,
 } from "./estructura-contractual";
 import { verificarSemanaEditable } from "./cierre-semana";
+import { sumaEjecutadaPorConcepto } from "./avance-calculo";
+
+export { sumaEjecutadaPorConcepto };
 
 function requerirEmpresa(usuario: UsuarioSesion): string {
   if (!usuario.empresa) throw new SinPermisoError();
@@ -46,31 +49,6 @@ function calcularAvance(cantidadTotal: number, acumulado: number): AvanceCalcula
     avancePorcentaje: cantidadTotal > 0 ? (acumulado / cantidadTotal) * 100 : 0,
     estado: calcularEstado(acumulado, cantidadTotal),
   };
-}
-
-// Suma cantidadEjecutada por concepto — solo lo APROBADO cuenta como oficial
-// (lo PENDIENTE/RECHAZADO no suma hasta que un Director/Administrador lo
-// apruebe explícitamente; decisión de sesión, agosto 2026, ver 49.9). Si
-// `antesDe` se indica, solo cuenta semanas anteriores a esa fecha (para
-// calcular "Anterior"); sin `antesDe`, suma todo el histórico aprobado (para
-// el acumulado a la fecha que usa Contratistas).
-async function sumaEjecutadaPorConcepto(
-  conceptoIds: string[],
-  antesDe?: Date
-): Promise<Map<string, number>> {
-  if (conceptoIds.length === 0) return new Map();
-
-  const filas = await db.avanceConcepto.groupBy({
-    by: ["conceptoId"],
-    where: {
-      conceptoId: { in: conceptoIds },
-      estatusAprobacion: "APROBADO",
-      ...(antesDe ? { semana: { fechaInicio: { lt: antesDe } } } : {}),
-    },
-    _sum: { cantidadEjecutada: true },
-  });
-
-  return new Map(filas.map((f) => [f.conceptoId, Number(f._sum.cantidadEjecutada ?? 0)]));
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +167,19 @@ export async function obtenerAvanceSemanal(
       };
     }),
   }));
+}
+
+// En semana cerrada, solo se muestran conceptos con avance real registrado
+// ESA semana (estaSemana > 0) — una partida sin ningún concepto con
+// movimiento tampoco se muestra. Compartido por Avance de obra y por Cliente/
+// Cliente Priv. (misma regla, un solo lugar — sección 4/5 del diseño de
+// Cliente, agosto 2026).
+export function filtrarPartidasConMovimiento<
+  P extends { conceptos: { estaSemana: number }[] },
+>(partidas: P[]): P[] {
+  return partidas
+    .map((p) => ({ ...p, conceptos: p.conceptos.filter((c) => c.estaSemana > 0) }))
+    .filter((p) => p.conceptos.length > 0);
 }
 
 // ---------------------------------------------------------------------------
