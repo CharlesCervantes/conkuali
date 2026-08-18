@@ -4,10 +4,20 @@ import { sumarMontos } from "@/lib/dinero";
 import type {
   EstatusAprobacion,
   EstatusPago,
+  OrigenMovimientoSemanal,
 } from "@/lib/generated/prisma/enums";
 
+// Un beneficiario puede tener más de un MovimientoSemanal la misma semana
+// desde que existen Gastos de Obra (p. ej. un contratista con su corte Y una
+// reposición de gastos que él mismo pagó) — cada `origen` es su propia fila
+// aquí, nunca se combinan en un solo monto (evita que se pisen entre sí y
+// deja claro en la UI de dónde sale cada importe). `id` sigue siendo el
+// beneficiarioProyectoId (agrupa lo contractual); `movimientoId` distingue
+// cada fila cuando hay más de una para el mismo beneficiario.
 export type FilaContratista = {
   id: string; // beneficiarioProyectoId
+  movimientoId: string | null;
+  origen: OrigenMovimientoSemanal | null;
   nombre: string;
   concepto: string | null;
   montoContrato: number;
@@ -23,6 +33,8 @@ export type FilaContratista = {
 
 export type FilaProveedor = {
   id: string;
+  movimientoId: string | null;
+  origen: OrigenMovimientoSemanal | null;
   nombre: string;
   giro: string | null;
   montoEntreSemana: number;
@@ -33,6 +45,8 @@ export type FilaProveedor = {
 
 export type FilaAdministracion = {
   id: string;
+  movimientoId: string | null;
+  origen: OrigenMovimientoSemanal | null;
   nombre: string;
   puesto: string | null;
   montoEntreSemana: number;
@@ -79,11 +93,15 @@ export async function obtenerReporteSemana(
         },
       },
     }),
+    // Solo origen CORTE_CONTRATISTA cuenta contra el saldo contractual — una
+    // reposición de gastos o una orden de compra no es un pago contra el
+    // contrato del beneficiario, aunque comparta el mismo BeneficiarioProyecto.
     db.movimientoSemanal.groupBy({
       by: ["beneficiarioProyectoId"],
       where: {
         beneficiarioProyecto: { proyecto: { empresaId } },
         estatusAprobacion: "APROBADO",
+        origen: "CORTE_CONTRATISTA",
       },
       _sum: { montoEntreSemana: true, montoFinSemana: true },
     }),
@@ -103,56 +121,72 @@ export async function obtenerReporteSemana(
     const administracion: FilaAdministracion[] = [];
 
     for (const bp of proyecto.beneficiarios) {
-      const movimiento = bp.movimientos[0] ?? null;
-      const montoEntreSemana = movimiento
-        ? Number(movimiento.montoEntreSemana)
-        : 0;
-      const montoFinSemana = movimiento ? Number(movimiento.montoFinSemana) : 0;
-      const estatusAprobacion = movimiento?.estatusAprobacion ?? null;
-      const estatusPago = movimiento?.estatusPago ?? null;
+      // Normalmente hay a lo más un movimiento (el corte de siempre). Si hay
+      // más de uno (p. ej. corte + reposición la misma semana), cada uno se
+      // muestra en su propia fila — nunca se combinan en un solo monto. Sin
+      // ningún movimiento, se muestra una fila vacía (comportamiento actual:
+      // el beneficiario siempre aparece, aunque no tenga nada esta semana).
+      const movimientosSemana = bp.movimientos.length > 0 ? bp.movimientos : [null];
 
-      if (bp.beneficiario.tipo === "CONTRATISTA") {
-        const montoContrato = Number(bp.montoContrato ?? 0);
-        const aditivasAutorizadas = sumarMontos(
-          ...bp.aditivas.map((a) => a.monto)
-        );
-        const montoContractualVigente = montoContrato + aditivasAutorizadas;
-        const pagadoHistorico = pagadoPorParticipacion.get(bp.id) ?? 0;
+      for (const movimiento of movimientosSemana) {
+        const montoEntreSemana = movimiento
+          ? Number(movimiento.montoEntreSemana)
+          : 0;
+        const montoFinSemana = movimiento ? Number(movimiento.montoFinSemana) : 0;
+        const estatusAprobacion = movimiento?.estatusAprobacion ?? null;
+        const estatusPago = movimiento?.estatusPago ?? null;
+        const movimientoId = movimiento?.id ?? null;
+        const origen = movimiento?.origen ?? null;
 
-        contratistas.push({
-          id: bp.id,
-          nombre: bp.beneficiario.nombre,
-          concepto: bp.concepto,
-          montoContrato,
-          aditivasAutorizadas,
-          montoContractualVigente,
-          pagadoHistorico,
-          saldo: montoContractualVigente - pagadoHistorico,
-          montoEntreSemana,
-          montoFinSemana,
-          estatusAprobacion,
-          estatusPago,
-        });
-      } else if (bp.beneficiario.tipo === "PROVEEDOR") {
-        proveedores.push({
-          id: bp.id,
-          nombre: bp.beneficiario.nombre,
-          giro: bp.beneficiario.proveedor?.giro ?? null,
-          montoEntreSemana,
-          montoFinSemana,
-          estatusAprobacion,
-          estatusPago,
-        });
-      } else {
-        administracion.push({
-          id: bp.id,
-          nombre: bp.beneficiario.nombre,
-          puesto: bp.puesto,
-          montoEntreSemana,
-          montoFinSemana,
-          estatusAprobacion,
-          estatusPago,
-        });
+        if (bp.beneficiario.tipo === "CONTRATISTA") {
+          const montoContrato = Number(bp.montoContrato ?? 0);
+          const aditivasAutorizadas = sumarMontos(
+            ...bp.aditivas.map((a) => a.monto)
+          );
+          const montoContractualVigente = montoContrato + aditivasAutorizadas;
+          const pagadoHistorico = pagadoPorParticipacion.get(bp.id) ?? 0;
+
+          contratistas.push({
+            id: bp.id,
+            movimientoId,
+            origen,
+            nombre: bp.beneficiario.nombre,
+            concepto: bp.concepto,
+            montoContrato,
+            aditivasAutorizadas,
+            montoContractualVigente,
+            pagadoHistorico,
+            saldo: montoContractualVigente - pagadoHistorico,
+            montoEntreSemana,
+            montoFinSemana,
+            estatusAprobacion,
+            estatusPago,
+          });
+        } else if (bp.beneficiario.tipo === "PROVEEDOR") {
+          proveedores.push({
+            id: bp.id,
+            movimientoId,
+            origen,
+            nombre: bp.beneficiario.nombre,
+            giro: bp.beneficiario.proveedor?.giro ?? null,
+            montoEntreSemana,
+            montoFinSemana,
+            estatusAprobacion,
+            estatusPago,
+          });
+        } else {
+          administracion.push({
+            id: bp.id,
+            movimientoId,
+            origen,
+            nombre: bp.beneficiario.nombre,
+            puesto: bp.puesto,
+            montoEntreSemana,
+            montoFinSemana,
+            estatusAprobacion,
+            estatusPago,
+          });
+        }
       }
     }
 

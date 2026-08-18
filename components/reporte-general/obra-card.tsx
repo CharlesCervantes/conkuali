@@ -13,6 +13,25 @@ const TIPO_LABEL: Record<string, string> = {
   OFICINA: "Oficina",
 };
 
+// Solo se muestra cuando el origen NO es el corte de contratista de siempre
+// — la fila normal (95%+ de los casos) no cambia visualmente en nada; esto
+// solo aparece cuando un beneficiario tiene más de un movimiento la misma
+// semana (p. ej. corte + reposición de gastos).
+const ORIGEN_LABEL: Record<string, string> = {
+  REPOSICION_GASTOS: "Reposición",
+  ORDEN_COMPRA: "Orden de compra",
+  MANUAL: "Manual",
+};
+
+function EtiquetaOrigen({ origen }: { origen: string | null }) {
+  if (!origen || origen === "CORTE_CONTRATISTA") return null;
+  return (
+    <span className="ml-1.5 rounded-full bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)]">
+      {ORIGEN_LABEL[origen] ?? origen}
+    </span>
+  );
+}
+
 export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) {
   const sinParticipantes =
     obra.contratistas.length === 0 &&
@@ -99,8 +118,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.contratistas.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.concepto ?? "—"}
                           </Td>
@@ -167,8 +189,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.proveedores.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.giro ?? "—"}
                           </Td>
@@ -202,8 +227,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.administracion.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.puesto ?? "—"}
                           </Td>

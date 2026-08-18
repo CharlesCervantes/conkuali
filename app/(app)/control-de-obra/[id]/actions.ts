@@ -35,7 +35,29 @@ import {
   registrarAportacionFondo,
   registrarPagoEstimacion,
 } from "@/lib/server/control-de-obra/financiero-cliente";
-import { put } from "@vercel/blob";
+import {
+  crearGasto,
+  editarGasto,
+  enviarGastoARevision,
+  aprobarGasto,
+  rechazarGasto,
+  registrarFacturaGasto,
+} from "@/lib/server/control-de-obra/gastos";
+import {
+  crearReposicion,
+  enviarReposicionARevision,
+  aprobarReposicion,
+  rechazarReposicion,
+} from "@/lib/server/control-de-obra/reposiciones";
+import {
+  crearOrdenCompra,
+  editarOrdenCompra,
+  autorizarOrdenCompra,
+  rechazarOrdenCompra,
+  cancelarOrdenCompra,
+  generarGastoDesdeOrdenCompra,
+} from "@/lib/server/control-de-obra/ordenes-compra";
+import { subirArchivo } from "@/lib/server/archivos";
 import {
   SinPermisoError,
   ProyectoNoEncontradoError,
@@ -448,13 +470,10 @@ export async function subirEvidenciaReciboAction(
   }
 
   try {
-    const blob = await put(`recibos/${reciboId}/${archivo.name}`, archivo, {
-      access: "public",
-      addRandomSuffix: true,
-    });
+    const { url, nombre } = await subirArchivo(`recibos/${reciboId}`, archivo);
     await registrarEvidenciaRecibo(usuario, reciboId, {
-      archivoEvidenciaUrl: blob.url,
-      archivoEvidenciaNombre: archivo.name,
+      archivoEvidenciaUrl: url,
+      archivoEvidenciaNombre: nombre,
       fechaRecepcion: opcional(formData.get("fechaRecepcion")),
     });
   } catch (error) {
@@ -571,4 +590,351 @@ export async function registrarPagoEstimacionAction(
   }
   revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
   return { registrado: true };
+}
+
+// ---------------------------------------------------------------------------
+// Gastos de Obra — Gastos
+// ---------------------------------------------------------------------------
+
+function rutaReposiciones(proyectoId: string): string {
+  return `/control-de-obra/${proyectoId}/ejecucion/gastos/reposiciones`;
+}
+function rutaOrdenesCompra(proyectoId: string): string {
+  return `/control-de-obra/${proyectoId}/ejecucion/gastos/ordenes-compra`;
+}
+
+function datosGastoDesdeFormData(formData: FormData) {
+  return {
+    fecha: formData.get("fecha"),
+    descripcion: formData.get("descripcion"),
+    categoria: formData.get("categoria"),
+    monto: formData.get("monto"),
+    metodoPago: formData.get("metodoPago"),
+    pagadorBeneficiarioId: opcional(formData.get("pagadorBeneficiarioId")),
+    proveedorBeneficiarioId: opcional(formData.get("proveedorBeneficiarioId")),
+    comentario: opcional(formData.get("comentario")),
+    requiereFactura: formData.get("requiereFactura") === "on",
+    tratamientoCliente: formData.get("tratamientoCliente") || "NO_COBRABLE",
+  };
+}
+
+export type GastoFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function crearGastoAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: GastoFormState,
+  formData: FormData
+): Promise<GastoFormState> {
+  const usuario = await requireSession();
+  try {
+    let ticketUrl: string | null = null;
+    let ticketNombre: string | null = null;
+    const archivo = formData.get("ticket");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`gastos/${proyectoId}`, archivo);
+      ticketUrl = subido.url;
+      ticketNombre = subido.nombre;
+    }
+    await crearGasto(usuario, proyectoId, semanaId, {
+      ...datosGastoDesdeFormData(formData),
+      ticketUrl,
+      ticketNombre,
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { guardado: true };
+}
+
+export async function editarGastoAction(
+  proyectoId: string,
+  gastoId: string,
+  _state: GastoFormState,
+  formData: FormData
+): Promise<GastoFormState> {
+  const usuario = await requireSession();
+  try {
+    let ticketUrl: string | null = null;
+    let ticketNombre: string | null = null;
+    const archivo = formData.get("ticket");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`gastos/${proyectoId}`, archivo);
+      ticketUrl = subido.url;
+      ticketNombre = subido.nombre;
+    }
+    await editarGasto(usuario, gastoId, {
+      ...datosGastoDesdeFormData(formData),
+      ticketUrl,
+      ticketNombre,
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { guardado: true };
+}
+
+export async function enviarGastoARevisionAction(proyectoId: string, gastoId: string) {
+  const usuario = await requireSession();
+  await enviarGastoARevision(usuario, gastoId);
+  revalidatePath(rutaReposiciones(proyectoId));
+}
+
+export type AprobarGastoFormState = { error?: string; aprobado?: boolean } | undefined;
+
+export async function aprobarGastoAction(
+  proyectoId: string,
+  gastoId: string,
+  _state: AprobarGastoFormState,
+  _formData: FormData
+): Promise<AprobarGastoFormState> {
+  const usuario = await requireSession();
+  try {
+    await aprobarGasto(usuario, gastoId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { aprobado: true };
+}
+
+export type RechazarGastoFormState = { error?: string; rechazado?: boolean } | undefined;
+
+export async function rechazarGastoAction(
+  proyectoId: string,
+  gastoId: string,
+  _state: RechazarGastoFormState,
+  formData: FormData
+): Promise<RechazarGastoFormState> {
+  const usuario = await requireSession();
+  try {
+    await rechazarGasto(usuario, gastoId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { rechazado: true };
+}
+
+export async function subirFacturaGastoAction(
+  proyectoId: string,
+  gastoId: string,
+  _state: GastoFormState,
+  formData: FormData
+): Promise<GastoFormState> {
+  const usuario = await requireSession();
+  const archivo = formData.get("factura");
+  if (!(archivo instanceof File) || archivo.size === 0) {
+    return { error: "Selecciona un archivo (PDF o imagen)." };
+  }
+  try {
+    const subido = await subirArchivo(`gastos/${proyectoId}/facturas`, archivo);
+    await registrarFacturaGasto(usuario, gastoId, {
+      facturaUrl: subido.url,
+      facturaNombre: subido.nombre,
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { guardado: true };
+}
+
+// ---------------------------------------------------------------------------
+// Gastos de Obra — Reposiciones
+// ---------------------------------------------------------------------------
+
+export type ReposicionFormState =
+  | { error?: string; creada?: boolean; enviada?: boolean; aprobada?: boolean; rechazada?: boolean }
+  | undefined;
+
+export async function crearReposicionAction(
+  proyectoId: string,
+  semanaId: string,
+  beneficiarioId: string,
+  gastoIds: string[]
+): Promise<ReposicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await crearReposicion(usuario, proyectoId, semanaId, beneficiarioId, gastoIds);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { creada: true };
+}
+
+export async function enviarReposicionARevisionAction(proyectoId: string, reposicionId: string) {
+  const usuario = await requireSession();
+  await enviarReposicionARevision(usuario, reposicionId);
+  revalidatePath(rutaReposiciones(proyectoId));
+}
+
+export async function aprobarReposicionAction(
+  proyectoId: string,
+  reposicionId: string,
+  _state: ReposicionFormState,
+  _formData: FormData
+): Promise<ReposicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await aprobarReposicion(usuario, reposicionId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  revalidatePath("/reporte-general");
+  return { aprobada: true };
+}
+
+export async function rechazarReposicionAction(
+  proyectoId: string,
+  reposicionId: string,
+  _state: ReposicionFormState,
+  formData: FormData
+): Promise<ReposicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await rechazarReposicion(usuario, reposicionId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { rechazada: true };
+}
+
+// ---------------------------------------------------------------------------
+// Gastos de Obra — Órdenes de Compra
+// ---------------------------------------------------------------------------
+
+function detalleOCDesdeFormData(formData: FormData): {
+  concepto: string;
+  descripcion: string | null;
+  unidad: string;
+  cantidad: string;
+  precioUnitario: string;
+}[] {
+  const raw = formData.get("detalle");
+  if (typeof raw !== "string" || raw.length === 0) return [];
+  return JSON.parse(raw);
+}
+
+function datosOCDesdeFormData(formData: FormData) {
+  return {
+    proveedorBeneficiarioId: formData.get("proveedorBeneficiarioId"),
+    fecha: formData.get("fecha"),
+    metodoPago: opcional(formData.get("metodoPago")),
+    requiereFactura: formData.get("requiereFactura") === "on",
+    notas: opcional(formData.get("notas")),
+    tratamientoCliente: formData.get("tratamientoCliente") || "NO_COBRABLE",
+    detalle: detalleOCDesdeFormData(formData),
+  };
+}
+
+export type OrdenCompraFormState = { error?: string; guardada?: boolean } | undefined;
+
+export async function crearOrdenCompraAction(
+  proyectoId: string,
+  semanaId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    await crearOrdenCompra(usuario, proyectoId, semanaId, datosOCDesdeFormData(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  return { guardada: true };
+}
+
+export async function editarOrdenCompraAction(
+  proyectoId: string,
+  ocId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarOrdenCompra(usuario, ocId, datosOCDesdeFormData(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  return { guardada: true };
+}
+
+export async function autorizarOrdenCompraAction(
+  proyectoId: string,
+  ocId: string,
+  _state: OrdenCompraFormState,
+  _formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    await autorizarOrdenCompra(usuario, ocId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  revalidatePath("/reporte-general");
+  return { guardada: true };
+}
+
+export async function rechazarOrdenCompraAction(
+  proyectoId: string,
+  ocId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    await rechazarOrdenCompra(usuario, ocId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  return { guardada: true };
+}
+
+export async function cancelarOrdenCompraAction(proyectoId: string, ocId: string) {
+  const usuario = await requireSession();
+  await cancelarOrdenCompra(usuario, ocId);
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+}
+
+export async function generarGastoDesdeOrdenCompraAction(
+  proyectoId: string,
+  ocId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    let comprobantePagoUrl: string | null = null;
+    let comprobantePagoNombre: string | null = null;
+    const archivo = formData.get("comprobantePago");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`ordenes-compra/${proyectoId}`, archivo);
+      comprobantePagoUrl = subido.url;
+      comprobantePagoNombre = subido.nombre;
+    }
+    await generarGastoDesdeOrdenCompra(usuario, ocId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      categoria: formData.get("categoria") || "MATERIAL",
+      metodoPago: formData.get("metodoPago"),
+      comentario: opcional(formData.get("comentario")),
+      comprobantePagoUrl,
+      comprobantePagoNombre,
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  revalidatePath(rutaReposiciones(proyectoId));
+  return { guardada: true };
 }

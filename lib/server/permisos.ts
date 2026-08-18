@@ -131,3 +131,28 @@ export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
 export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
   return puedeCerrarSemana(usuario);
 }
+
+/**
+ * Capturar/editar Gastos de Obra, subir evidencia, solicitar Órdenes de
+ * Compra — operativo, mismo rol-set amplio que reportar avance (Supervisor
+ * incluido). 04-modulo-control-de-obra.md, sección "Gastos de Obra".
+ */
+export function puedeCapturarGastos(usuario: UsuarioSesion): boolean {
+  return puedeReportarAvance(usuario);
+}
+
+/**
+ * Aprobar/rechazar Gastos, crear y aprobar Reposiciones de cualquier
+ * beneficiario — financieramente sensible, mismo criterio que cerrar
+ * semana/emitir estimación (sin Master).
+ */
+export function puedeAprobarGastos(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Autorizar Órdenes de Compra — mismo criterio que puedeAprobarGastos.
+ */
+export function puedeAutorizarOrdenesCompra(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
+}
