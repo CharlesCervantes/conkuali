@@ -1,5 +1,6 @@
 import "server-only";
 import { db } from "@/lib/server/db";
+import { Prisma } from "@/lib/generated/prisma/client";
 import type { AccionAuditoria } from "@/lib/generated/prisma/enums";
 
 // Json de Prisma solo acepta valores JSON planos — las fechas (Date) hay que
@@ -10,7 +11,7 @@ function aJson(valor: Record<string, unknown> | null | undefined) {
   return JSON.parse(JSON.stringify(valor));
 }
 
-export async function registrarAuditoria(params: {
+type ParametrosAuditoria = {
   empresaId?: string | null;
   usuarioId: string;
   entidad: string;
@@ -18,8 +19,31 @@ export async function registrarAuditoria(params: {
   accion: AccionAuditoria;
   valorAnterior?: Record<string, unknown> | null;
   valorNuevo?: Record<string, unknown> | null;
-}) {
+};
+
+export async function registrarAuditoria(params: ParametrosAuditoria) {
   await db.registroAuditoria.create({
+    data: {
+      empresaId: params.empresaId ?? null,
+      usuarioId: params.usuarioId,
+      entidad: params.entidad,
+      entidadId: params.entidadId,
+      accion: params.accion,
+      valorAnterior: aJson(params.valorAnterior),
+      valorNuevo: aJson(params.valorNuevo),
+    },
+  });
+}
+
+// Igual que registrarAuditoria, pero atado a un cliente de transacción (`tx`)
+// en vez del `db` global — necesario dentro de cualquier `db.$transaction`:
+// si el registro fuera vía `db`, sobreviviría aunque la transacción completa
+// se revirtiera, rompiendo la atomicidad de la operación.
+export async function registrarAuditoriaTx(
+  tx: Prisma.TransactionClient,
+  params: ParametrosAuditoria
+) {
+  await tx.registroAuditoria.create({
     data: {
       empresaId: params.empresaId ?? null,
       usuarioId: params.usuarioId,

@@ -2,8 +2,7 @@ import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { Prisma } from "@/lib/generated/prisma/client";
-import type { AccionAuditoria } from "@/lib/generated/prisma/enums";
-import { registrarAuditoria } from "@/lib/server/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx as auditarTx } from "@/lib/server/auditoria";
 import { puedeCerrarSemana, puedeReabrirSemana } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
@@ -21,40 +20,6 @@ function requerirReabrir(usuario: UsuarioSesion): string {
   if (!puedeReabrirSemana(usuario)) throw new SinPermisoError();
   if (!usuario.empresa) throw new SinPermisoError();
   return usuario.empresa.id;
-}
-
-// Igual que registrarAuditoria (lib/server/auditoria.ts) pero atado a `tx` —
-// necesario dentro de cerrarSemana: si el registro fuera vía el `db` global,
-// sobreviviría aunque la transacción completa se revirtiera, rompiendo la
-// atomicidad ("no debe quedar la semana medio cerrada").
-function aJson(valor: Record<string, unknown> | null | undefined) {
-  if (!valor) return undefined;
-  return JSON.parse(JSON.stringify(valor));
-}
-
-async function auditarTx(
-  tx: Cliente,
-  params: {
-    empresaId: string;
-    usuarioId: string;
-    entidad: string;
-    entidadId: string;
-    accion: AccionAuditoria;
-    valorAnterior?: Record<string, unknown> | null;
-    valorNuevo?: Record<string, unknown> | null;
-  }
-) {
-  await tx.registroAuditoria.create({
-    data: {
-      empresaId: params.empresaId,
-      usuarioId: params.usuarioId,
-      entidad: params.entidad,
-      entidadId: params.entidadId,
-      accion: params.accion,
-      valorAnterior: aJson(params.valorAnterior),
-      valorNuevo: aJson(params.valorNuevo),
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -79,10 +44,24 @@ export async function verificarSemanaEditable(
 
   if (conceptoIds.length === 0) return;
 
+  // Congelado si ya está LIQUIDADO, o si ya tiene un recibo VIGENTE con
+  // evidencia firmada — un recibo firmado es un compromiso real ya entregado
+  // al contratista, aunque Reporte General todavía no lo marque Liquidado
+  // (el flujo real es jueves firma, viernes se paga y ahí sí se liquida).
   const bloqueados = await db.corteSemanalConcepto.findMany({
     where: {
       conceptoId: { in: conceptoIds },
-      corteSemanal: { semanaId, movimientoSemanal: { estatusPago: "LIQUIDADO" } },
+      corteSemanal: {
+        semanaId,
+        OR: [
+          { movimientoSemanal: { estatusPago: "LIQUIDADO" } },
+          {
+            recibos: {
+              some: { estatus: "VIGENTE", archivoEvidenciaUrl: { not: null } },
+            },
+          },
+        ],
+      },
     },
     select: { descripcionConcepto: true },
   });
@@ -90,7 +69,7 @@ export async function verificarSemanaEditable(
     const nombres = [...new Set(bloqueados.map((b) => b.descripcionConcepto))].join(", ");
     const plural = bloqueados.length === 1 ? "" : "n";
     throw new ValidacionError(
-      `${nombres} ya forma${plural} parte de un corte liquidado y no puede${plural} modificarse.`
+      `${nombres} ya forma${plural} parte de un corte liquidado o con recibo firmado, y no puede${plural} modificarse.`
     );
   }
 }
@@ -293,11 +272,22 @@ async function generarOReconciliarCorte(
         beneficiarioProyectoId: ctx.beneficiarioProyectoId,
       },
     },
-    include: { movimientoSemanal: true, detalle: true },
+    include: {
+      movimientoSemanal: true,
+      detalle: true,
+      recibos: { where: { estatus: "VIGENTE" } },
+    },
   });
 
-  // Financieramente congelado — no se toca nada, ni siquiera el detalle.
-  if (existente?.movimientoSemanal?.estatusPago === "LIQUIDADO") {
+  const reciboVigente = existente?.recibos[0] ?? null;
+
+  // Financieramente congelado — no se toca nada, ni siquiera el detalle. Un
+  // recibo VIGENTE ya firmado cuenta igual que LIQUIDADO (ver
+  // verificarSemanaEditable, mismo criterio).
+  if (
+    existente?.movimientoSemanal?.estatusPago === "LIQUIDADO" ||
+    reciboVigente?.archivoEvidenciaUrl
+  ) {
     return { tipo: "OMITIDO_LIQUIDADO" };
   }
 
@@ -410,6 +400,27 @@ async function generarOReconciliarCorte(
         estatusPago: movimiento.estatusPago,
       },
     });
+
+    // Si había un recibo VIGENTE (sin firmar — si tuviera firma, ni siquiera
+    // habríamos llegado aquí, se habría omitido arriba), ya no refleja el
+    // monto correcto: pasa a SUPERSEDIDO. No se genera uno nuevo solo — eso
+    // requiere una acción explícita de "Generar" para no emitir folios que
+    // nadie pidió.
+    if (reciboVigente) {
+      await tx.reciboPago.update({
+        where: { id: reciboVigente.id },
+        data: { estatus: "SUPERSEDIDO" },
+      });
+      await auditarTx(tx, {
+        empresaId: ctx.empresaId,
+        usuarioId: ctx.usuarioId,
+        entidad: "ReciboPago",
+        entidadId: reciboVigente.id,
+        accion: "CAMBIAR_ESTATUS",
+        valorAnterior: { estatus: "VIGENTE" },
+        valorNuevo: { estatus: "SUPERSEDIDO", motivo: "corte reconciliado" },
+      });
+    }
 
     return { tipo: "RECONCILIADO", montoNeto };
   }

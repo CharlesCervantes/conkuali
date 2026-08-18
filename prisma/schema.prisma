@@ -49,6 +49,21 @@ model Empresa {
   plan            Plan?    @relation(fields: [planId], references: [id])
   planId          String?
 
+  // Recibos de pago (sección "Recibo de Pago" de 02-control-de-obra.md) — el
+  // folio es único por empresa, no por proyecto. `ultimoFolioRecibo` es el
+  // contador atómico (se incrementa con `increment` dentro de la misma
+  // transacción que crea el ReciboPago — Postgres bloquea la fila hasta que
+  // esa transacción termina, así que dos generaciones simultáneas nunca
+  // pueden sacar el mismo folio). Los demás campos son config simple de
+  // marca/leyenda del recibo — no ameritan una entidad de Configuración
+  // aparte, se guardan igual que colorPrimario/colorSecundario/logoUrl.
+  ultimoFolioRecibo    Int     @default(0)
+  reciboTitulo         String  @default("Recibo de pago")
+  reciboLeyenda        String?
+  reciboRazonSocial    String?
+  reciboMostrarDetalle Boolean @default(true)
+  reciboMostrarPU      Boolean @default(true)
+
   dominiosCorreo  DominioCorreo[]
   usuarios        Usuario[]
   registros       RegistroAuditoria[]
@@ -58,6 +73,7 @@ model Empresa {
   avancesConcepto AvanceConcepto[]
   cierresSemana   CierreSemanaProyecto[]
   cortesSemana    CorteSemanal[]
+  recibosPago     ReciboPago[]
 
   @@map("empresas")
 }
@@ -136,6 +152,9 @@ model Usuario {
   cierresSemanaGenerados  CierreSemanaProyecto[] @relation("CierreSemanaGenerado")
   cierresSemanaReabiertos CierreSemanaProyecto[] @relation("CierreSemanaReabierto")
   cortesSemanaGenerados   CorteSemanal[]         @relation("CorteSemanalGenerado")
+
+  recibosGenerados        ReciboPago[] @relation("ReciboPagoGenerado")
+  recibosEvidenciaSubida  ReciboPago[] @relation("ReciboPagoEvidenciaSubida")
 
   @@map("usuarios")
 }
@@ -751,6 +770,7 @@ model CorteSemanal {
   generadoPorId String
 
   detalle CorteSemanalConcepto[]
+  recibos ReciboPago[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -787,4 +807,58 @@ model CorteSemanalConcepto {
 
   @@index([corteSemanalId])
   @@map("corte_semanal_conceptos")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 6: recibos de pago
+// Ver /docs/negocio/02-control-de-obra.md, sección "Recibo de Pago". Decisión
+// de sesión, agosto 2026.
+// ---------------------------------------------------------------------------
+
+// VIGENTE = el recibo actual de ese corte. SUPERSEDIDO = reemplazado por una
+// regeneración (o invalidado por una reconciliación) — se conserva siempre,
+// nunca se borra. Un corte puede acumular varios ReciboPago a lo largo del
+// tiempo, pero como mucho uno VIGENTE — se hace cumplir en el servicio
+// (dentro de una transacción), no con un índice único parcial.
+enum EstatusReciboPago {
+  VIGENTE
+  SUPERSEDIDO
+}
+
+model ReciboPago {
+  id             String       @id @default(cuid())
+  empresa        Empresa      @relation(fields: [empresaId], references: [id])
+  empresaId      String
+  corteSemanal   CorteSemanal @relation(fields: [corteSemanalId], references: [id])
+  corteSemanalId String
+
+  // Folio único por empresa (no por proyecto — sección "Recibo de Pago" de
+  // 02-control-de-obra.md). Se guarda ya formateado ("REC-000001") para que
+  // un cambio futuro de formato nunca reescriba folios ya emitidos.
+  numeroFolio Int
+  folio       String
+
+  estatus EstatusReciboPago @default(VIGENTE)
+
+  // Snapshot de la configuración de recibo de Empresa AL MOMENTO de generar
+  // — el documento histórico se ve igual aunque la configuración cambie
+  // después (título, leyenda, razón social, qué mostrar).
+  configuracionSnapshot Json
+
+  generadoPor   Usuario  @relation("ReciboPagoGenerado", fields: [generadoPorId], references: [id])
+  generadoPorId String
+  createdAt     DateTime @default(now())
+
+  // Evidencia firmada — null hasta que se sube. El estado de pago NO se
+  // duplica aquí: se lee siempre en vivo vía corteSemanal.movimientoSemanal.
+  archivoEvidenciaUrl    String?
+  archivoEvidenciaNombre String?
+  fechaRecepcion         DateTime?
+  subidoPor              Usuario?  @relation("ReciboPagoEvidenciaSubida", fields: [subidoPorId], references: [id])
+  subidoPorId            String?
+  subidoEn               DateTime?
+
+  @@unique([empresaId, folio])
+  @@index([corteSemanalId])
+  @@map("recibos_pago")
 }

@@ -162,7 +162,7 @@ function contratosConConceptos(proyectoId: string) {
       numeroContrato: true,
       descripcion: true,
       beneficiarioProyecto: {
-        select: { beneficiario: { select: { nombre: true } } },
+        select: { id: true, beneficiario: { select: { nombre: true } } },
       },
       conceptos: {
         select: {

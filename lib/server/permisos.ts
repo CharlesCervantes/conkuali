@@ -82,3 +82,14 @@ export function puedeReportarAvance(usuario: UsuarioSesion): boolean {
 export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean {
   return puedeAdministrarProyectos(usuario);
 }
+
+/**
+ * Recibos financieros (expediente de contratista: estimado/pagado acumulado,
+ * saldo, historial de cortes, generar/ver/subir evidencia de recibo) — mismo
+ * rol-set que la información privada de Contrato General. Supervisor no ve
+ * precios de recibo ni puede generar/subir nada (04-modulo-control-de-obra.md,
+ * sección 49.9 y "Recibo de Pago" de 02-control-de-obra.md).
+ */
+export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
+  return puedeAdministrarProyectos(usuario);
+}

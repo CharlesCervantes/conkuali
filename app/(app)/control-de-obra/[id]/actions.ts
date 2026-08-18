@@ -22,6 +22,13 @@ import {
   reabrirSemana,
 } from "@/lib/server/control-de-obra/cierre-semana";
 import {
+  generarRecibo,
+  registrarEvidenciaRecibo,
+  obtenerDetalleCorte,
+  type DetalleCorte,
+} from "@/lib/server/control-de-obra/recibos";
+import { put } from "@vercel/blob";
+import {
   SinPermisoError,
   ProyectoNoEncontradoError,
   ValidacionError,
@@ -382,4 +389,77 @@ export async function reabrirSemanaAction(
   }
   revalidatePath(`/control-de-obra/${proyectoId}/avance`);
   return { reabierta: true };
+}
+
+// ---------------------------------------------------------------------------
+// Recibos de pago
+// ---------------------------------------------------------------------------
+
+export type GenerarReciboFormState =
+  | { error?: string; generado?: boolean; folio?: string }
+  | undefined;
+
+export async function generarReciboAction(
+  corteSemanalId: string,
+  proyectoId: string,
+  _state: GenerarReciboFormState,
+  _formData: FormData
+): Promise<GenerarReciboFormState> {
+  const usuario = await requireSession();
+  try {
+    const recibo = await generarRecibo(usuario, corteSemanalId);
+    revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+    return { generado: true, folio: recibo.folio };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export type SubirEvidenciaReciboFormState = { error?: string; subido?: boolean } | undefined;
+
+// Sube el archivo directo a Vercel Blob (Next.js ya soporta File en
+// FormData nativamente en Server Actions, no hace falta ningún parser de
+// multipart aparte) y solo entonces persiste la URL resultante.
+export async function subirEvidenciaReciboAction(
+  reciboId: string,
+  proyectoId: string,
+  _state: SubirEvidenciaReciboFormState,
+  formData: FormData
+): Promise<SubirEvidenciaReciboFormState> {
+  const usuario = await requireSession();
+
+  const archivo = formData.get("archivo");
+  if (!(archivo instanceof File) || archivo.size === 0) {
+    return { error: "Selecciona un archivo (PDF o imagen)." };
+  }
+
+  try {
+    const blob = await put(`recibos/${reciboId}/${archivo.name}`, archivo, {
+      access: "public",
+      addRandomSuffix: true,
+    });
+    await registrarEvidenciaRecibo(usuario, reciboId, {
+      archivoEvidenciaUrl: blob.url,
+      archivoEvidenciaNombre: archivo.name,
+      fechaRecepcion: opcional(formData.get("fechaRecepcion")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contratistas`);
+  return { subido: true };
+}
+
+// Se llama directamente desde el modal cliente (no vía <form>) — mismo patrón
+// que obtenerConceptoDetalleAction.
+export async function obtenerDetalleCorteAction(
+  corteSemanalId: string
+): Promise<{ detalle: DetalleCorte } | { error: string }> {
+  const usuario = await requireSession();
+  try {
+    const detalle = await obtenerDetalleCorte(usuario, corteSemanalId);
+    return { detalle };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
 }

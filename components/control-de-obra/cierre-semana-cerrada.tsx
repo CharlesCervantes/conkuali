@@ -30,12 +30,14 @@ export function CierreSemanaCerrada({
   numeroSemana,
   resumen,
   puedeReabrir,
+  puedeVerRecibosFinancieros,
 }: {
   proyectoId: string;
   semanaId: string;
   numeroSemana: number;
   resumen: ResumenCierreSemana;
   puedeReabrir: boolean;
+  puedeVerRecibosFinancieros: boolean;
 }) {
   const [modalAbierto, setModalAbierto] = useState(false);
   const cortesActivos = resumen.cortes.filter((c) => c.estatus === "GENERADO");
@@ -89,6 +91,20 @@ export function CierreSemanaCerrada({
           Cerrada por {resumen.cerradoPorNombre}
           {resumen.cerradoEn ? ` · ${formatFecha(resumen.cerradoEn)}` : ""}
         </p>
+      )}
+
+      {puedeVerRecibosFinancieros && cortesActivos.length > 0 && (
+        <div className="mt-4 border-t border-[var(--border)] pt-4">
+          <a
+            href={`/api/control-de-obra/proyectos/${proyectoId}/recibos/semana/${semanaId}/pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Button variant="outline" className="px-3 py-1.5 text-xs">
+              Descargar todos los recibos
+            </Button>
+          </a>
+        </div>
       )}
 
       {modalAbierto && (

@@ -15,6 +15,8 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "@react-pdf/renderer": "^4.6.1",
+    "@vercel/blob": "^2.8.0",
     "lightningcss-win32-x64-msvc": "^1.33.0",
     "lucide-react": "^1.31.0",
     "next": "16.3.0",

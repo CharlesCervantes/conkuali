@@ -11,6 +11,7 @@ import {
   puedeAdministrarProyectos,
   puedeCerrarSemana,
   puedeReabrirSemana,
+  puedeVerRecibosFinancieros,
 } from "@/lib/server/permisos";
 import { ResumenAvance } from "@/components/control-de-obra/resumen-avance";
 import { NavegacionSemana } from "@/components/control-de-obra/navegacion-semana";
@@ -95,6 +96,7 @@ export default async function AvanceObraPage({
           numeroSemana={semana.numero}
           resumen={resumenCierre}
           puedeReabrir={puedeReabrirSemana(usuario)}
+          puedeVerRecibosFinancieros={puedeVerRecibosFinancieros(usuario)}
         />
       ) : (
         <CierreSemanaAbierta
