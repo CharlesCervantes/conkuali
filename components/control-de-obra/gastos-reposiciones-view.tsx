@@ -60,6 +60,7 @@ export function GastosReposicionesView({
   gastos,
   reposiciones,
   beneficiarios,
+  beneficiarioVinculado,
   dashboard,
   puedeAprobar,
   usuarioId,
@@ -69,6 +70,7 @@ export function GastosReposicionesView({
   gastos: FilaGasto[];
   reposiciones: FilaReposicion[];
   beneficiarios: { id: string; nombre: string; tipo: string }[];
+  beneficiarioVinculado: { id: string; nombre: string } | null;
   dashboard: DashboardGastos;
   puedeAprobar: boolean;
   usuarioId: string;
@@ -316,6 +318,7 @@ export function GastosReposicionesView({
           proyectoId={proyectoId}
           semanaId={semanaId}
           beneficiarios={beneficiarios}
+          beneficiarioVinculado={beneficiarioVinculado}
           gasto={gastoEditando}
           onClose={() => {
             setModalNuevoGasto(false);

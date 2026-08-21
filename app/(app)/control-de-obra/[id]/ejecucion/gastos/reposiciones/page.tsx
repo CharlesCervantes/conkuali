@@ -15,6 +15,7 @@ import {
   listarBeneficiariosParaGasto,
 } from "@/lib/server/control-de-obra/gastos";
 import { obtenerReposiciones } from "@/lib/server/control-de-obra/reposiciones";
+import { obtenerBeneficiarioVinculado } from "@/lib/server/catalogos";
 import { NavegacionSemana } from "@/components/control-de-obra/navegacion-semana";
 import { GastosReposicionesView } from "@/components/control-de-obra/gastos-reposiciones-view";
 import { Card } from "@/components/ui/card";
@@ -46,10 +47,11 @@ export default async function ReposicionesPage({
   }
 
   const semana = await obtenerOCrearSemana(usuario.empresa.id, parametroAFecha(fechaParam));
-  const [gastos, reposiciones, beneficiarios] = await Promise.all([
+  const [gastos, reposiciones, beneficiarios, beneficiarioVinculado] = await Promise.all([
     obtenerGastos(usuario, id, semana.id),
     obtenerReposiciones(usuario, id, semana.id),
     listarBeneficiariosParaGasto(usuario),
+    obtenerBeneficiarioVinculado(usuario),
   ]);
   const dashboard = calcularDashboardGastos(gastos);
 
@@ -81,6 +83,7 @@ export default async function ReposicionesPage({
         gastos={gastos}
         reposiciones={reposiciones}
         beneficiarios={beneficiarios}
+        beneficiarioVinculado={beneficiarioVinculado}
         dashboard={dashboard}
         puedeAprobar={puedeAprobarGastos(usuario)}
         usuarioId={usuario.id}

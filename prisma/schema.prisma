@@ -179,6 +179,13 @@ model Usuario {
   ordenesCompraCreadas    OrdenCompra[] @relation("OCCreada")
   ordenesCompraAutorizadas OrdenCompra[] @relation("OCAutorizada")
 
+  // Vínculo opcional con la identidad de pago (Beneficiario) de esta misma
+  // persona — ver Beneficiario.usuarioId para la relación completa. Un
+  // Usuario puede no tener beneficiario relacionado (rol de plataforma,
+  // alguien que nunca recibe pagos) o tenerlo (ej. un Supervisor a quien
+  // también se le reponen gastos personales).
+  beneficiario Beneficiario?
+
   @@map("usuarios")
 }
 
@@ -358,9 +365,10 @@ model Proyecto {
 
 // Identidad única de a quién se le puede pagar, sin importar en cuántos
 // proyectos participe (ver BeneficiarioProyecto para lo específico a cada
-// obra). No tiene relación con Usuario — son conceptos independientes aunque
-// correspondan a la misma persona real (ej. Charles inicia sesión como
-// Usuario, pero cobra sueldo como Beneficiario).
+// obra). Son conceptos independientes de Usuario aunque puedan corresponder
+// a la misma persona real (ej. Charles inicia sesión como Usuario, pero
+// cobra sueldo como Beneficiario) — el vínculo entre ambos es opcional y
+// nunca implícito, ver el campo `usuario` más abajo.
 model Beneficiario {
   id        String           @id @default(cuid())
   empresa   Empresa          @relation(fields: [empresaId], references: [id])
@@ -379,6 +387,15 @@ model Beneficiario {
   reposicionesGastos     ReposicionGastos[]
   ordenesCompra          OrdenCompra[]
 
+  // Vínculo opcional y explícito con el Usuario que inicia sesión como esta
+  // misma persona real (ej. Andrés es Usuario/Supervisor y también
+  // Beneficiario/ADMINISTRACION para que se le puedan reponer gastos
+  // personales sin registrarlo como Contratista). Uno-a-uno en ambos
+  // sentidos vía el @unique — nunca se infiere por nombre/email, solo se
+  // establece explícitamente desde el catálogo de Personal/Administración.
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id])
+  usuarioId String?  @unique
+
   @@index([empresaId, tipo])
   @@map("beneficiarios")
 }
@@ -392,6 +409,10 @@ model Proveedor {
   telefono       String?
   credito        String? // solo informativo, no afecta cálculos
   cuentaBancaria String? // solo informativo, no afecta cálculos
+  // Dato de identidad fiscal — se guarda desde ya sin ninguna validación de
+  // formato ni lógica fiscal asociada; se reutilizará cuando exista el
+  // Estado de Cuenta Fiscal (fuera de alcance de esta etapa).
+  rfc            String?
 
   @@map("proveedores")
 }

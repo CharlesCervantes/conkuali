@@ -214,6 +214,32 @@ export async function resolverContratistaPorConcepto(
   return resultado;
 }
 
+// "Contrato vigente" de un contratista con la estructura nueva = suma de
+// ContratoConcepto (cantidad × precioUnitarioContratista) agrupada por
+// beneficiarioProyectoId — misma fórmula que ya usaba contratistas-view.tsx
+// y obtenerResumenFinancieroContratistas (recibos.ts). Se extrae aquí para
+// que Reporte General la reutilice en vez de recalcularla con otra fuente
+// (BeneficiarioProyecto.montoContrato, el campo legacy — ver reporte-general/
+// queries.ts). Recibe ya el resultado de la consulta (cada llamador decide
+// si escopa por proyecto o por empresa) para no imponer una sola forma de
+// consultar la base de datos.
+export function sumarContratoVigentePorBeneficiario(
+  contratos: {
+    beneficiarioProyectoId: string;
+    conceptos: { cantidad: unknown; precioUnitarioContratista: unknown }[];
+  }[]
+): Map<string, number> {
+  const mapa = new Map<string, number>();
+  for (const c of contratos) {
+    const suma = c.conceptos.reduce(
+      (t, cc) => t + Number(cc.cantidad) * Number(cc.precioUnitarioContratista),
+      0
+    );
+    mapa.set(c.beneficiarioProyectoId, (mapa.get(c.beneficiarioProyectoId) ?? 0) + suma);
+  }
+  return mapa;
+}
+
 export async function listarContratistasDisponibles(usuario: UsuarioSesion) {
   if (!usuario.empresa) throw new SinPermisoError();
   return db.beneficiario.findMany({

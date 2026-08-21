@@ -184,19 +184,26 @@ export async function aprobarReposicion(usuario: UsuarioSesion, reposicionId: st
       throw new ValidacionError("Solo se puede aprobar una reposición enviada a revisión.");
     }
 
-    const beneficiarioProyecto = await tx.beneficiarioProyecto.findUnique({
+    // Si el beneficiario todavía no tiene participación en este proyecto
+    // (típico de una reposición ADMINISTRACION — nunca se le exige entrar
+    // como Contratista para poder reponerle un gasto), se crea aquí mismo.
+    // Idempotente por el @@unique([beneficiarioId, proyectoId]) — mismo
+    // patrón que obtenerOCrearParticipacionContratista en
+    // estructura-contractual.ts. No crea ningún ContratoContratista, así que
+    // nunca hace que este beneficiario aparezca como Contratista.
+    const beneficiarioProyecto = await tx.beneficiarioProyecto.upsert({
       where: {
         beneficiarioId_proyectoId: {
           beneficiarioId: reposicion.beneficiarioId,
           proyectoId: reposicion.proyectoId,
         },
       },
+      update: {},
+      create: {
+        beneficiarioId: reposicion.beneficiarioId,
+        proyectoId: reposicion.proyectoId,
+      },
     });
-    if (!beneficiarioProyecto) {
-      throw new ValidacionError(
-        "El beneficiario de esta reposición no está asignado a este proyecto."
-      );
-    }
 
     const total = reposicion.gastos.reduce((t, g) => t + Number(g.monto), 0);
 

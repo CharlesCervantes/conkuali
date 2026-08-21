@@ -156,3 +156,14 @@ export function puedeAprobarGastos(usuario: UsuarioSesion): boolean {
 export function puedeAutorizarOrdenesCompra(usuario: UsuarioSesion): boolean {
   return puedeCerrarSemana(usuario);
 }
+
+/**
+ * Administrar el catálogo global (Proveedores/Contratistas/Personal y el
+ * vínculo Usuario↔Beneficiario) — mismo rol-set que administrar proyectos;
+ * Supervisor sigue accediendo a catálogos solo a través de los selects ya
+ * existentes dentro de Gastos/OC, sin administrar la pantalla propia
+ * (04-modulo-control-de-obra.md, sección "Catálogos").
+ */
+export function puedeAdministrarCatalogos(usuario: UsuarioSesion): boolean {
+  return puedeAdministrarProyectos(usuario);
+}

@@ -30,16 +30,20 @@ const TRATAMIENTOS_CLIENTE = [
 // campos mínimos, input de archivo con `capture="environment"` para tomar la
 // foto del ticket directo con la cámara (sección 35 del diseño de Gastos de
 // Obra, agosto 2026).
+type QuienPagoModo = "YO" | "OTRO" | "EMPRESA";
+
 export function FormularioGasto({
   proyectoId,
   semanaId,
   beneficiarios,
+  beneficiarioVinculado,
   gasto,
   onClose,
 }: {
   proyectoId: string;
   semanaId: string;
   beneficiarios: { id: string; nombre: string; tipo: string }[];
+  beneficiarioVinculado: { id: string; nombre: string } | null;
   gasto: FilaGasto | null;
   onClose: () => void;
 }) {
@@ -55,6 +59,18 @@ export function FormularioGasto({
     setStateAnterior(state);
     if (state?.guardado) onClose();
   }
+
+  // El modo inicial se infiere del gasto existente para no perder la
+  // selección al editar — pero la resolución real de "YO" siempre vuelve a
+  // ocurrir server-side al enviar (nunca se confía en el id de este campo
+  // para ese caso).
+  const [quienPagoModo, setQuienPagoModo] = useState<QuienPagoModo>(() => {
+    if (!gasto || !gasto.pagadorBeneficiarioId) return "EMPRESA";
+    if (beneficiarioVinculado && gasto.pagadorBeneficiarioId === beneficiarioVinculado.id) {
+      return "YO";
+    }
+    return "OTRO";
+  });
 
   useEffect(() => {
     function alTecla(e: KeyboardEvent) {
@@ -149,19 +165,52 @@ export function FormularioGasto({
             </Campo>
           </div>
 
-          <Campo label="¿Quién pagó? (vacío = lo pagó la empresa directo)">
-            <select
-              name="pagadorBeneficiarioId"
-              defaultValue={gasto?.pagadorBeneficiarioId ?? ""}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
-            >
-              <option value="">La empresa (sin reposición)</option>
-              {beneficiarios.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.nombre}
+          <Campo label="¿Quién pagó?">
+            <input type="hidden" name="quienPagoModo" value={quienPagoModo} />
+            <div className="flex flex-wrap gap-1.5">
+              <BotonModo activo={quienPagoModo === "EMPRESA"} onClick={() => setQuienPagoModo("EMPRESA")}>
+                La empresa
+              </BotonModo>
+              <BotonModo
+                activo={quienPagoModo === "YO"}
+                disabled={!beneficiarioVinculado}
+                onClick={() => setQuienPagoModo("YO")}
+              >
+                Yo pagué
+              </BotonModo>
+              <BotonModo activo={quienPagoModo === "OTRO"} onClick={() => setQuienPagoModo("OTRO")}>
+                Otro beneficiario
+              </BotonModo>
+            </div>
+
+            {quienPagoModo === "YO" && beneficiarioVinculado && (
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                Se registrará como pagado por <strong>{beneficiarioVinculado.nombre}</strong>.
+              </p>
+            )}
+            {!beneficiarioVinculado && (
+              <p className="mt-1.5 text-xs text-[var(--muted)]">
+                Este usuario no tiene un beneficiario de pago relacionado. Configúralo antes de
+                generar la reposición.
+              </p>
+            )}
+            {quienPagoModo === "OTRO" && (
+              <select
+                name="pagadorBeneficiarioId"
+                required
+                defaultValue={gasto?.pagadorBeneficiarioId ?? ""}
+                className="mt-1.5 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+              >
+                <option value="" disabled>
+                  Selecciona…
                 </option>
-              ))}
-            </select>
+                {beneficiarios.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.nombre}
+                  </option>
+                ))}
+              </select>
+            )}
           </Campo>
 
           <Campo label="Proveedor (opcional)">
@@ -259,5 +308,32 @@ function Campo({ label, children }: { label: string; children: React.ReactNode }
       <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">{label}</label>
       {children}
     </div>
+  );
+}
+
+function BotonModo({
+  activo,
+  disabled,
+  onClick,
+  children,
+}: {
+  activo: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-colors duration-150 ease-out disabled:cursor-not-allowed disabled:opacity-40 ${
+        activo
+          ? "border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)]"
+          : "border-[var(--border)] text-[var(--muted)] hover:text-[var(--foreground)]"
+      }`}
+    >
+      {children}
+    </button>
   );
 }

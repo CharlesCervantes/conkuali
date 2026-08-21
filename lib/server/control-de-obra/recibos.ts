@@ -6,7 +6,7 @@ import { puedeVerRecibosFinancieros } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { EstatusPago } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
-import { RegistroNoEncontradoError } from "./estructura-contractual";
+import { RegistroNoEncontradoError, sumarContratoVigentePorBeneficiario } from "./estructura-contractual";
 
 function requerirVerRecibos(usuario: UsuarioSesion): string {
   if (!puedeVerRecibosFinancieros(usuario)) throw new SinPermisoError();
@@ -61,17 +61,7 @@ export async function obtenerResumenFinancieroContratistas(
     }),
   ]);
 
-  const contratoVigentePorBeneficiario = new Map<string, number>();
-  for (const c of contratos) {
-    const suma = c.conceptos.reduce(
-      (t, cc) => t + Number(cc.cantidad) * Number(cc.precioUnitarioContratista),
-      0
-    );
-    contratoVigentePorBeneficiario.set(
-      c.beneficiarioProyectoId,
-      (contratoVigentePorBeneficiario.get(c.beneficiarioProyectoId) ?? 0) + suma
-    );
-  }
+  const contratoVigentePorBeneficiario = sumarContratoVigentePorBeneficiario(contratos);
 
   const estimadoPorBeneficiario = new Map<string, number>();
   const pagadoPorBeneficiario = new Map<string, number>();

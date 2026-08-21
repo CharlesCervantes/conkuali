@@ -5,4 +5,5 @@ export const RUTA_MODULO: Record<string, { href: string | null; label: string }>
   reporte_general: { href: "/reporte-general", label: "Reporte General" },
   control_de_obra: { href: "/control-de-obra", label: "Control de Obra" },
   control_prestamos: { href: null, label: "Control de Préstamos" },
+  catalogos: { href: "/catalogos", label: "Catálogos" },
 };

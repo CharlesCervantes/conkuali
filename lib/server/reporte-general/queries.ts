@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/lib/server/db";
 import { sumarMontos } from "@/lib/dinero";
+import { sumarContratoVigentePorBeneficiario } from "@/lib/server/control-de-obra/estructura-contractual";
 import type {
   EstatusAprobacion,
   EstatusPago,
@@ -77,7 +78,7 @@ export async function obtenerReporteSemana(
   empresaId: string,
   semanaId: string
 ): Promise<ReporteObra[]> {
-  const [proyectos, pagosHistoricos] = await Promise.all([
+  const [proyectos, pagosHistoricos, contratosNuevaEstructura] = await Promise.all([
     db.proyecto.findMany({
       where: { empresaId, estatus: { in: ["ACTIVO", "PAUSADO"] } },
       orderBy: { nombre: "asc" },
@@ -105,6 +106,17 @@ export async function obtenerReporteSemana(
       },
       _sum: { montoEntreSemana: true, montoFinSemana: true },
     }),
+    // Contrato vigente real de un contratista con la estructura nueva — ver
+    // sumarContratoVigentePorBeneficiario. Un beneficiarioProyectoId presente
+    // aquí (con 0 o más conceptos) ya usa la estructura nueva; uno ausente
+    // todavía depende del campo legacy BeneficiarioProyecto.montoContrato.
+    db.contratoContratista.findMany({
+      where: { beneficiarioProyecto: { proyecto: { empresaId } } },
+      select: {
+        beneficiarioProyectoId: true,
+        conceptos: { select: { cantidad: true, precioUnitarioContratista: true } },
+      },
+    }),
   ]);
 
   const pagadoPorParticipacion = new Map<string, number>();
@@ -114,6 +126,8 @@ export async function obtenerReporteSemana(
       sumarMontos(fila._sum.montoEntreSemana, fila._sum.montoFinSemana)
     );
   }
+
+  const contratoVigentePorBeneficiario = sumarContratoVigentePorBeneficiario(contratosNuevaEstructura);
 
   return proyectos.map((proyecto) => {
     const contratistas: FilaContratista[] = [];
@@ -139,10 +153,23 @@ export async function obtenerReporteSemana(
         const origen = movimiento?.origen ?? null;
 
         if (bp.beneficiario.tipo === "CONTRATISTA") {
-          const montoContrato = Number(bp.montoContrato ?? 0);
-          const aditivasAutorizadas = sumarMontos(
-            ...bp.aditivas.map((a) => a.monto)
-          );
+          // Fuente de verdad: si el contratista ya tiene ContratoContratista
+          // (estructura nueva), su Contrato vigente es exactamente el mismo
+          // que muestra Contratistas — nunca el campo legacy
+          // BeneficiarioProyecto.montoContrato, que para estos beneficiarios
+          // nunca se llena y quedaría en $0. Las Aditivas pertenecen al flujo
+          // legacy (ver nota en recibos.ts): un contratista con estructura
+          // nueva ajusta su contrato editando ContratoConcepto directamente,
+          // así que no se sobreponen aquí. Solo un beneficiario SIN ningún
+          // ContratoContratista (proyecto antiguo no migrado) sigue leyendo
+          // montoContrato + aditivas, igual que siempre.
+          const tieneEstructuraNueva = contratoVigentePorBeneficiario.has(bp.id);
+          const montoContrato = tieneEstructuraNueva
+            ? contratoVigentePorBeneficiario.get(bp.id)!
+            : Number(bp.montoContrato ?? 0);
+          const aditivasAutorizadas = tieneEstructuraNueva
+            ? 0
+            : sumarMontos(...bp.aditivas.map((a) => a.monto));
           const montoContractualVigente = montoContrato + aditivasAutorizadas;
           const pagadoHistorico = pagadoPorParticipacion.get(bp.id) ?? 0;
 

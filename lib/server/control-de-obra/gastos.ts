@@ -35,6 +35,11 @@ const DatosGastoSchema = z.object({
   categoria: z.enum(CATEGORIAS_GASTO),
   monto: z.coerce.number().positive("El monto debe ser mayor a cero."),
   metodoPago: z.enum(["EFECTIVO", "TRANSFERENCIA", "TARJETA_DEBITO", "TARJETA_CREDITO"]),
+  // "YO" nunca confía en pagadorBeneficiarioId del cliente — se resuelve
+  // server-side contra el Usuario de la sesión (ver resolverPagadorBeneficiarioId).
+  // "OTRO" sí usa pagadorBeneficiarioId (quien captura no necesariamente
+  // pagó). "EMPRESA" = sin reposición para nadie.
+  quienPagoModo: z.enum(["YO", "OTRO", "EMPRESA"]).default("OTRO"),
   pagadorBeneficiarioId: z.string().trim().optional().nullable(),
   proveedorBeneficiarioId: z.string().trim().optional().nullable(),
   comentario: z.string().trim().optional().nullable(),
@@ -47,6 +52,40 @@ const DatosGastoSchema = z.object({
 });
 
 export type DatosGasto = z.infer<typeof DatosGastoSchema>;
+
+// Resuelve a quién reponerle sin confiar en el cliente para el caso "YO" —
+// el beneficiario vinculado al usuario en sesión se consulta aquí mismo,
+// nunca se toma de un id que venga en el FormData (decisión de sesión,
+// agosto 2026: la semántica "yo pagué" no puede depender de un valor que el
+// cliente podría manipular).
+async function resolverPagadorBeneficiarioId(
+  usuario: UsuarioSesion,
+  empresaId: string,
+  datos: Pick<DatosGasto, "quienPagoModo" | "pagadorBeneficiarioId">
+): Promise<string | null> {
+  if (datos.quienPagoModo === "EMPRESA") return null;
+
+  if (datos.quienPagoModo === "YO") {
+    const usuarioConBeneficiario = await db.usuario.findFirst({
+      where: { id: usuario.id, empresaId },
+      select: { beneficiario: { select: { id: true } } },
+    });
+    if (!usuarioConBeneficiario?.beneficiario) {
+      throw new ValidacionError(
+        "Este usuario no tiene un beneficiario de pago relacionado. Configúralo antes de generar la reposición."
+      );
+    }
+    return usuarioConBeneficiario.beneficiario.id;
+  }
+
+  // "OTRO"
+  if (!datos.pagadorBeneficiarioId) return null;
+  const beneficiario = await db.beneficiario.findFirst({
+    where: { id: datos.pagadorBeneficiarioId, empresaId },
+  });
+  if (!beneficiario) throw new RegistroNoEncontradoError("El beneficiario seleccionado");
+  return beneficiario.id;
+}
 
 export async function crearGasto(
   usuario: UsuarioSesion,
@@ -62,6 +101,8 @@ export async function crearGasto(
   const semana = await db.semana.findFirst({ where: { id: semanaId, empresaId } });
   if (!semana) throw new RegistroNoEncontradoError("La semana");
 
+  const pagadorBeneficiarioId = await resolverPagadorBeneficiarioId(usuario, empresaId, datos);
+
   // Nace siempre PENDIENTE_REVISION, sin importar el rol que captura — misma
   // consistencia que AvanceConcepto: aprobar es siempre una acción explícita
   // separada de capturar (decisión de sesión, agosto 2026).
@@ -75,7 +116,7 @@ export async function crearGasto(
       categoria: datos.categoria,
       monto: datos.monto,
       metodoPago: datos.metodoPago,
-      pagadorBeneficiarioId: datos.pagadorBeneficiarioId || null,
+      pagadorBeneficiarioId,
       proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
       comentario: datos.comentario || null,
       requiereFactura: datos.requiereFactura,
@@ -116,6 +157,8 @@ export async function editarGasto(usuario: UsuarioSesion, gastoId: string, datos
     throw new SinPermisoError();
   }
 
+  const pagadorBeneficiarioId = await resolverPagadorBeneficiarioId(usuario, empresaId, datos);
+
   const gasto = await db.gastoObra.update({
     where: { id: gastoId },
     data: {
@@ -124,7 +167,7 @@ export async function editarGasto(usuario: UsuarioSesion, gastoId: string, datos
       categoria: datos.categoria,
       monto: datos.monto,
       metodoPago: datos.metodoPago,
-      pagadorBeneficiarioId: datos.pagadorBeneficiarioId || null,
+      pagadorBeneficiarioId,
       proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
       comentario: datos.comentario || null,
       requiereFactura: datos.requiereFactura,

@@ -169,19 +169,23 @@ export async function autorizarOrdenCompra(usuario: UsuarioSesion, ocId: string)
       throw new ValidacionError("No se puede autorizar una orden de compra sin importe.");
     }
 
-    const beneficiarioProyecto = await tx.beneficiarioProyecto.findUnique({
+    // El proveedor del catálogo global no necesita haber sido asignado antes
+    // a este proyecto — se crea aquí su participación si hace falta.
+    // Idempotente por el @@unique([beneficiarioId, proyectoId]), mismo
+    // patrón que obtenerOCrearParticipacionContratista/aprobarReposicion.
+    const beneficiarioProyecto = await tx.beneficiarioProyecto.upsert({
       where: {
         beneficiarioId_proyectoId: {
           beneficiarioId: oc.proveedorBeneficiarioId,
           proyectoId: oc.proyectoId,
         },
       },
+      update: {},
+      create: {
+        beneficiarioId: oc.proveedorBeneficiarioId,
+        proyectoId: oc.proyectoId,
+      },
     });
-    if (!beneficiarioProyecto) {
-      throw new ValidacionError(
-        "El proveedor de esta orden de compra no está asignado a este proyecto."
-      );
-    }
 
     const movimiento = await tx.movimientoSemanal.create({
       data: {

@@ -610,6 +610,7 @@ function datosGastoDesdeFormData(formData: FormData) {
     categoria: formData.get("categoria"),
     monto: formData.get("monto"),
     metodoPago: formData.get("metodoPago"),
+    quienPagoModo: formData.get("quienPagoModo") || "EMPRESA",
     pagadorBeneficiarioId: opcional(formData.get("pagadorBeneficiarioId")),
     proveedorBeneficiarioId: opcional(formData.get("proveedorBeneficiarioId")),
     comentario: opcional(formData.get("comentario")),
