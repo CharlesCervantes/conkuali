@@ -88,7 +88,10 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-[var(--border)] p-3">
-        <div className="flex items-center gap-2.5 px-2 py-1.5">
+        <Link
+          href="/perfil"
+          className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors duration-150 ease-out hover:bg-black/[0.04]"
+        >
           <span
             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-[var(--brand-foreground)]"
             style={{ backgroundColor: "var(--brand)" }}
@@ -101,7 +104,7 @@ export function Sidebar({
             </p>
             <p className="truncate text-xs text-[var(--muted)]">{rolLabel}</p>
           </div>
-        </div>
+        </Link>
         <form action={logout} className="mt-1">
           <Button variant="ghost" type="submit" className="w-full justify-start">
             Cerrar sesión

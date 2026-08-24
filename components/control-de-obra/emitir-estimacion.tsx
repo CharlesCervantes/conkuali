@@ -24,6 +24,7 @@ export function EmitirEstimacion({
   emitidoPorNombre,
   emitidoEn,
   puedeEmitir,
+  fondoDisponible,
 }: {
   proyectoId: string;
   estimacionId: string;
@@ -34,6 +35,7 @@ export function EmitirEstimacion({
   emitidoPorNombre: string | null;
   emitidoEn: string | null;
   puedeEmitir: boolean;
+  fondoDisponible: number;
 }) {
   const [modalAbierto, setModalAbierto] = useState(false);
 
@@ -80,6 +82,7 @@ export function EmitirEstimacion({
           estimacionId={estimacionId}
           numero={numero}
           total={total}
+          fondoDisponible={fondoDisponible}
           onClose={() => setModalAbierto(false)}
         />
       )}
@@ -92,12 +95,14 @@ function ModalConfirmarEmision({
   estimacionId,
   numero,
   total,
+  fondoDisponible,
   onClose,
 }: {
   proyectoId: string;
   estimacionId: string;
   numero: number;
   total: number;
+  fondoDisponible: number;
   onClose: () => void;
 }) {
   const action = emitirEstimacionAction.bind(null, proyectoId, estimacionId);
@@ -110,6 +115,13 @@ function ModalConfirmarEmision({
     setStateAnterior(state);
     if (state?.emitida) onClose();
   }
+
+  // Activada por default cuando hay fondo disponible — normalmente sí se
+  // usa (ajuste de sesión, agosto 2026: Administrador/Director decide en
+  // este momento, no automático).
+  const [aplicarFondo, setAplicarFondo] = useState(fondoDisponible > 0);
+  const fondoQueSeAplicara = aplicarFondo ? Math.min(fondoDisponible, total) : 0;
+  const pendienteDespues = total - fondoQueSeAplicara;
 
   useEffect(() => {
     function alTecla(e: KeyboardEvent) {
@@ -136,7 +148,43 @@ function ModalConfirmarEmision({
           corrección después de emitida se maneja aparte.
         </p>
 
+        {fondoDisponible > 0 && (
+          <div className="mt-4 rounded-lg border border-[var(--border)] bg-black/[0.02] p-3.5">
+            <p className="text-sm text-[var(--foreground)]">
+              Fondo disponible: <strong>{formatMoney(fondoDisponible)}</strong>
+            </p>
+            <label className="mt-2 flex items-center gap-2 text-sm text-[var(--foreground)]">
+              <input
+                type="checkbox"
+                checked={aplicarFondo}
+                onChange={(e) => setAplicarFondo(e.target.checked)}
+              />
+              Aplicar fondo disponible a esta estimación
+            </label>
+
+            <dl className="mt-3 space-y-1 border-t border-[var(--border)] pt-2.5 text-sm">
+              <div className="flex justify-between">
+                <dt className="text-[var(--muted)]">Total estimación</dt>
+                <dd className="tabular-nums text-[var(--foreground)]">{formatMoney(total)}</dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-[var(--muted)]">Fondo que se aplicará</dt>
+                <dd className="tabular-nums text-[var(--foreground)]">
+                  {formatMoney(fondoQueSeAplicara)}
+                </dd>
+              </div>
+              <div className="flex justify-between font-semibold">
+                <dt className="text-[var(--foreground)]">Pendiente después de aplicar fondo</dt>
+                <dd className="tabular-nums text-[var(--foreground)]">
+                  {formatMoney(pendienteDespues)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+        )}
+
         <form action={formAction} className="mt-5 flex items-center gap-3">
+          {aplicarFondo && <input type="hidden" name="aplicarFondo" value="on" />}
           <Button type="submit" disabled={pending}>
             {pending ? "Emitiendo…" : "Sí, emitir estimación"}
           </Button>

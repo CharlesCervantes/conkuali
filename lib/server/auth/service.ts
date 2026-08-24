@@ -17,6 +17,13 @@ export class UsuarioInactivoError extends Error {
   }
 }
 
+export class PasswordActualIncorrectaError extends Error {
+  constructor() {
+    super("La contraseña actual no es correcta.");
+    this.name = "PasswordActualIncorrectaError";
+  }
+}
+
 // Hash válido (mismo formato que hashPassword) pero sin contraseña real detrás.
 // Se usa para que verificar un correo inexistente tome el mismo tiempo que
 // verificar uno que sí existe, y así no revelar por temporización qué correos
@@ -48,6 +55,25 @@ export async function autenticar(email: string, password: string) {
 
 export async function cerrarSesion() {
   await deleteSession();
+}
+
+// Cambio de contraseña de Mi perfil — reutiliza exactamente los mismos
+// primitivos que autenticar()/crearUsuario (verifyPassword/hashPassword),
+// nunca un sistema paralelo. Siempre exige la contraseña actual: es la
+// misma verificación que ya hace el login, aplicada aquí como paso de
+// confirmación antes de aceptar la nueva.
+export async function cambiarPassword(
+  usuarioId: string,
+  passwordActual: string,
+  passwordNueva: string
+) {
+  const usuario = await db.usuario.findUniqueOrThrow({ where: { id: usuarioId } });
+
+  const passwordValida = await verifyPassword(passwordActual, usuario.passwordHash);
+  if (!passwordValida) throw new PasswordActualIncorrectaError();
+
+  const passwordHash = await hashPassword(passwordNueva);
+  await db.usuario.update({ where: { id: usuarioId }, data: { passwordHash } });
 }
 
 export async function crearUsuario(datos: {

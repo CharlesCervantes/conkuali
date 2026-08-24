@@ -435,6 +435,7 @@ async function generarOReconciliarCorte(
       beneficiarioProyectoId: ctx.beneficiarioProyectoId,
       semanaId: ctx.semanaId,
       contratoContratistaId,
+      origen: "CORTE_CONTRATISTA",
       montoFinSemana: montoNeto,
       estatusAprobacion: "APROBADO",
       estatusPago: "PENDIENTE_PAGO",

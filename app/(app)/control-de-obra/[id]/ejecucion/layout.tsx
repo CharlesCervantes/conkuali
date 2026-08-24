@@ -13,6 +13,11 @@ export default async function EjecucionLayout({
         tabs={[
           { href: `/control-de-obra/${id}/ejecucion/avance`, label: "Avance de obra" },
           { href: `/control-de-obra/${id}/ejecucion/contratistas`, label: "Contratistas" },
+          {
+            href: `/control-de-obra/${id}/ejecucion/gastos`,
+            label: "Gastos",
+            coincideSubrutas: true,
+          },
         ]}
       />
       {children}

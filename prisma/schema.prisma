@@ -64,6 +64,11 @@ model Empresa {
   reciboMostrarDetalle Boolean @default(true)
   reciboMostrarPU      Boolean @default(true)
 
+  // Gastos de Obra (sección "Gastos de Obra" de 04-modulo-control-de-obra.md)
+  // — mismo mecanismo atómico que ultimoFolioRecibo, folio único por empresa.
+  ultimoFolioReposicion  Int @default(0)
+  ultimoFolioOrdenCompra Int @default(0)
+
   dominiosCorreo      DominioCorreo[]
   usuarios            Usuario[]
   registros           RegistroAuditoria[]
@@ -76,6 +81,9 @@ model Empresa {
   recibosPago         ReciboPago[]
   estimacionesCliente EstimacionCliente[]
   movimientosFinancieros MovimientoFinancieroCliente[]
+  gastosObra          GastoObra[]
+  reposicionesGastos  ReposicionGastos[]
+  ordenesCompra       OrdenCompra[]
 
   @@map("empresas")
 }
@@ -147,6 +155,7 @@ model Usuario {
   movimientosEnviados    MovimientoSemanal[]    @relation("MovimientosEnviados")
   movimientosAprobados   MovimientoSemanal[]    @relation("MovimientosAprobados")
   movimientosFondoPuente MovimientoSemanal[]    @relation("FondoPuente")
+  movimientosLiquidados  MovimientoSemanal[]    @relation("MovimientoLiquidado")
   comentarios            ComentarioMovimiento[]
   avancesRegistrados     AvanceConcepto[]        @relation("AvanceRegistrado")
   avancesAprobados       AvanceConcepto[]        @relation("AvanceAprobado")
@@ -161,6 +170,30 @@ model Usuario {
   estimacionesClienteGeneradas EstimacionCliente[] @relation("EstimacionClienteGenerada")
   estimacionesClienteEmitidas  EstimacionCliente[] @relation("EstimacionClienteEmitida")
   movimientosFinancierosClienteRegistrados MovimientoFinancieroCliente[]
+
+  gastosCapturados GastoObra[] @relation("GastoCapturado")
+  gastosRevisados  GastoObra[] @relation("GastoRevisado")
+
+  reposicionesCreadas  ReposicionGastos[] @relation("ReposicionCreada")
+  reposicionesRevisadas ReposicionGastos[] @relation("ReposicionRevisada")
+
+  ordenesCompraCreadas    OrdenCompra[] @relation("OCCreada")
+  ordenesCompraAutorizadas OrdenCompra[] @relation("OCAutorizada")
+
+  // Vínculo opcional con la identidad de pago (Beneficiario) de esta misma
+  // persona — ver Beneficiario.usuarioId para la relación completa. Un
+  // Usuario puede no tener beneficiario relacionado (rol de plataforma,
+  // alguien que nunca recibe pagos) o tenerlo (ej. un Supervisor a quien
+  // también se le reponen gastos personales).
+  beneficiario Beneficiario?
+
+  // Preferencia personal — restringe temporalmente el acceso a la capa
+  // privada de Control de Obra sin tocar el rol ni sus permisos operativos
+  // (solo Administrador/Director la usan; ver puedeVerInformacionPrivada en
+  // lib/server/permisos.ts). Nunca es una fuente de permiso por sí sola:
+  // combinada siempre con el permiso real de rol, nunca al revés. Default
+  // `true` para que ningún usuario existente pierda acceso al migrar.
+  vistaPrivadaActiva Boolean @default(true)
 
   @@map("usuarios")
 }
@@ -239,6 +272,14 @@ enum EstatusPago {
   LIQUIDADO // Verde
 }
 
+// De dónde sale un MovimientoSemanal — ver el campo `origen` en el modelo.
+enum OrigenMovimientoSemanal {
+  CORTE_CONTRATISTA
+  REPOSICION_GASTOS
+  ORDEN_COMPRA
+  MANUAL
+}
+
 enum EstatusAditiva {
   PENDIENTE
   AUTORIZADA
@@ -257,13 +298,6 @@ enum EstatusSemana {
 enum EsquemaContractual {
   PRECIO_ALZADO
   ADMINISTRACION
-}
-
-// Dimensión independiente de EsquemaContractual — cómo el cliente ENTREGA el
-// dinero, no cómo se calcula el precio. Ver Proyecto.esquemaFinanciamientoCliente.
-enum EsquemaFinanciamientoCliente {
-  FONDO
-  PAGO_POR_ESTIMACION
 }
 
 model Proyecto {
@@ -297,16 +331,6 @@ model Proyecto {
   porcentajeUtilidadDefault      Decimal?            @db.Decimal(5, 2)
   porcentajeAdministracionDefault Decimal?           @db.Decimal(5, 2)
 
-  // Esquema financiero del cliente (sección "Control Contractual" de
-  // 04-modulo-control-de-obra.md) — cómo el cliente ENTREGA el dinero
-  // (Fondo anticipado vs. Pago por estimación), dimensión totalmente
-  // independiente de esquemaContractual (que define cómo se CALCULA el
-  // precio). null = sin definir todavía, nunca se infiere — mismo criterio
-  // que esquemaContractual. Bloqueado en cuanto el proyecto ya tiene
-  // movimientos financieros (ver proyectoTieneMovimientosFinancieros en
-  // proyectos.ts), mismo patrón que el bloqueo de esquemaContractual.
-  esquemaFinanciamientoCliente EsquemaFinanciamientoCliente?
-
   // Contador atómico de Estimación Cliente (sección "Cliente" de
   // 04-modulo-control-de-obra.md) — correlativo POR PROYECTO (a diferencia
   // del folio de Recibos, que es por empresa). Se incrementa con `increment`
@@ -323,6 +347,9 @@ model Proyecto {
   cortesSemana        CorteSemanal[]
   estimacionesCliente EstimacionCliente[]
   movimientosFinancieros MovimientoFinancieroCliente[]
+  gastosObra          GastoObra[]
+  reposicionesGastos  ReposicionGastos[]
+  ordenesCompra       OrdenCompra[]
 
   @@index([empresaId])
   @@map("proyectos")
@@ -330,9 +357,10 @@ model Proyecto {
 
 // Identidad única de a quién se le puede pagar, sin importar en cuántos
 // proyectos participe (ver BeneficiarioProyecto para lo específico a cada
-// obra). No tiene relación con Usuario — son conceptos independientes aunque
-// correspondan a la misma persona real (ej. Charles inicia sesión como
-// Usuario, pero cobra sueldo como Beneficiario).
+// obra). Son conceptos independientes de Usuario aunque puedan corresponder
+// a la misma persona real (ej. Charles inicia sesión como Usuario, pero
+// cobra sueldo como Beneficiario) — el vínculo entre ambos es opcional y
+// nunca implícito, ver el campo `usuario` más abajo.
 model Beneficiario {
   id        String           @id @default(cuid())
   empresa   Empresa          @relation(fields: [empresaId], references: [id])
@@ -346,6 +374,19 @@ model Beneficiario {
   proveedor              Proveedor?
   personalAdministrativo PersonalAdministrativo?
   proyectos              BeneficiarioProyecto[]
+  gastosPagados          GastoObra[]        @relation("GastoPagador")
+  gastosProveedor        GastoObra[]        @relation("GastoProveedor")
+  reposicionesGastos     ReposicionGastos[]
+  ordenesCompra          OrdenCompra[]
+
+  // Vínculo opcional y explícito con el Usuario que inicia sesión como esta
+  // misma persona real (ej. Andrés es Usuario/Supervisor y también
+  // Beneficiario/ADMINISTRACION para que se le puedan reponer gastos
+  // personales sin registrarlo como Contratista). Uno-a-uno en ambos
+  // sentidos vía el @unique — nunca se infiere por nombre/email, solo se
+  // establece explícitamente desde el catálogo de Personal/Administración.
+  usuario   Usuario? @relation(fields: [usuarioId], references: [id])
+  usuarioId String?  @unique
 
   @@index([empresaId, tipo])
   @@map("beneficiarios")
@@ -360,6 +401,10 @@ model Proveedor {
   telefono       String?
   credito        String? // solo informativo, no afecta cálculos
   cuentaBancaria String? // solo informativo, no afecta cálculos
+  // Dato de identidad fiscal — se guarda desde ya sin ninguna validación de
+  // formato ni lógica fiscal asociada; se reutilizará cuando exista el
+  // Estado de Cuenta Fiscal (fuera de alcance de esta etapa).
+  rfc            String?
 
   @@map("proveedores")
 }
@@ -449,6 +494,9 @@ model Semana {
   cierresSemana       CierreSemanaProyecto[]
   cortesSemana        CorteSemanal[]
   estimacionesCliente EstimacionCliente[]
+  gastosObra          GastoObra[]
+  reposicionesGastos  ReposicionGastos[]
+  ordenesCompra       OrdenCompra[]
 
   @@unique([empresaId, numero, anio])
   @@map("semanas")
@@ -476,6 +524,14 @@ model MovimientoSemanal {
   montoEntreSemana Decimal @default(0) @db.Decimal(14, 2)
   montoFinSemana   Decimal @default(0) @db.Decimal(14, 2)
 
+  // De dónde viene este movimiento — un mismo beneficiario puede tener más de
+  // uno en la misma semana si las fuentes son distintas (p. ej. un corte de
+  // contratista Y una reposición de gastos que él mismo pagó). Antes de que
+  // existiera este campo, el único writer de este modelo era Cierre Semanal
+  // (CORTE_CONTRATISTA) — la migración que lo agrega respeta eso para las
+  // filas existentes. Decisión de sesión, agosto 2026 (Gastos de Obra).
+  origen OrigenMovimientoSemanal
+
   estatusAprobacion EstatusAprobacion @default(PENDIENTE_VALIDACION)
   estatusPago       EstatusPago       @default(SIN_MOVIMIENTO)
 
@@ -484,6 +540,18 @@ model MovimientoSemanal {
   cubiertoPorFondoPuente Boolean  @default(false)
   fondoPuenteUsuario     Usuario? @relation("FondoPuente", fields: [fondoPuenteUsuarioId], references: [id])
   fondoPuenteUsuarioId   String?
+
+  // Evidencia mínima del pago — se llenan únicamente al liquidar (Reporte
+  // General), en la misma transacción que cambia estatusPago a LIQUIDADO.
+  // metodoPago reutiliza el mismo enum que Gastos de Obra/Órdenes de Compra
+  // (MetodoPagoGasto) — no se duplica un catálogo de método de pago propio.
+  fechaPago      DateTime?
+  metodoPago     MetodoPagoGasto?
+  referenciaPago String?
+  notasPago      String?
+  liquidadoPor   Usuario?  @relation("MovimientoLiquidado", fields: [liquidadoPorId], references: [id])
+  liquidadoPorId String?
+  liquidadoEn    DateTime?
 
   enviadoPor    Usuario  @relation("MovimientosEnviados", fields: [enviadoPorId], references: [id])
   enviadoPorId  String
@@ -495,8 +563,15 @@ model MovimientoSemanal {
 
   comentarios ComentarioMovimiento[]
   corte       CorteSemanal?
+  reposicionGastos ReposicionGastos?
+  ordenCompra      OrdenCompra?
 
-  @@unique([beneficiarioProyectoId, semanaId])
+  // Antes: @@unique([beneficiarioProyectoId, semanaId]) — un solo movimiento
+  // por beneficiario+semana, sin importar la fuente. Ahora cada `origen`
+  // mantiene su propia fila (Cierre Semanal, Reposición y Orden de Compra
+  // nunca se pisan entre sí), pero cada uno individualmente sigue
+  // garantizado a lo más uno por beneficiario+semana, igual que antes.
+  @@unique([beneficiarioProyectoId, semanaId, origen])
   @@index([semanaId])
   @@map("movimientos_semanales")
 }
@@ -1010,10 +1085,15 @@ model EstimacionClienteConcepto {
 // sesión, agosto 2026.
 // ---------------------------------------------------------------------------
 
+// Toda obra se cobra por Estimación; el fondo es una fuente de recursos
+// opcional (existe si el proyecto tiene al menos una APORTACION_FONDO) que
+// puede cubrir total o parcialmente cualquier estimación emitida — nunca un
+// esquema alternativo excluyente (decisión de sesión, agosto 2026 — rediseño
+// del modelo financiero del cliente).
 enum TipoMovimientoFinancieroCliente {
-  APORTACION_FONDO // entrada — proyecto FONDO, no ligada a una estimación
-  PAGO_ESTIMACION // entrada — proyecto PAGO_POR_ESTIMACION, ligada a una estimación
-  APLICACION_ESTIMACION // salida — proyecto FONDO, se genera solo al emitir (o al asignar FONDO por primera vez, para el histórico — ver materializarAplicacionesFondoHistoricas)
+  APORTACION_FONDO // entrada — no ligada a una estimación específica
+  PAGO_ESTIMACION // entrada — pago directo, ligado a una estimación
+  APLICACION_ESTIMACION // salida — fondo aplicado contra una estimación, al emitir (si se elige) o manualmente después ("Aplicar fondo")
 }
 
 model MovimientoFinancieroCliente {
@@ -1030,11 +1110,14 @@ model MovimientoFinancieroCliente {
   notas      String?
 
   // Obligatorio en PAGO_ESTIMACION y APLICACION_ESTIMACION — una estimación
-  // puede tener varios PAGO_ESTIMACION (pagos parciales) pero como mucho un
-  // APLICACION_ESTIMACION (garantizado por un índice único parcial en la
-  // migración, WHERE tipo = 'APLICACION_ESTIMACION' — no representable en
-  // este DSL de Prisma, ver migration.sql). null en APORTACION_FONDO (una
-  // aportación es del proyecto, no de una estimación específica).
+  // puede tener varios de cada uno (pagos parciales, y ahora también varias
+  // aplicaciones de fondo en fechas distintas — una al emitir si se elige, y
+  // una por cada "Aplicar fondo" manual posterior; el índice único parcial
+  // que antes limitaba a una sola aplicación por estimación se retiró en el
+  // rediseño del modelo financiero, agosto 2026 — la integridad la da el
+  // bloqueo de fila sobre Proyecto al calcular fondo disponible, no un
+  // índice). null en APORTACION_FONDO (una aportación es del proyecto, no de
+  // una estimación específica).
   estimacionCliente   EstimacionCliente? @relation(fields: [estimacionClienteId], references: [id])
   estimacionClienteId String?
 
@@ -1045,4 +1128,260 @@ model MovimientoFinancieroCliente {
   @@index([proyectoId])
   @@index([estimacionClienteId])
   @@map("movimientos_financieros_cliente")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Control de Obra — Etapa 9: Gastos de Obra (Reposiciones + Órdenes de
+// Compra). Ver /docs/negocio/04-modulo-control-de-obra.md. Digitaliza el
+// archivo manual de "Reposición de gastos" — captura individual de gasto,
+// revisión, agrupación por beneficiario+proyecto+semana, y su reflejo
+// automático en Reporte General vía MovimientoSemanal (origen
+// REPOSICION_GASTOS / ORDEN_COMPRA). Decisión de sesión, agosto 2026.
+// ---------------------------------------------------------------------------
+
+enum EstatusGasto {
+  BORRADOR
+  PENDIENTE_REVISION
+  APROBADO
+  RECHAZADO
+  CANCELADO
+}
+
+enum MetodoPagoGasto {
+  EFECTIVO
+  TRANSFERENCIA
+  TARJETA_DEBITO
+  TARJETA_CREDITO
+}
+
+// Si el gasto/OC se cobra al cliente y cómo — independiente de si ya está
+// aprobado internamente. NO_COBRABLE por default: no se asume que todo gasto
+// aprobado se cobra al cliente (precisión explícita de negocio).
+enum TratamientoClienteGasto {
+  INCLUIDO_EN_CONTRATO
+  COBRABLE_EN_ESTIMACION
+  NO_COBRABLE
+}
+
+model GastoObra {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  fecha       DateTime // fecha real del ticket, puede no ser la fecha de captura
+  descripcion String
+  // Catálogo curado en código (lib/control-de-obra/categorias-gasto.ts), no
+  // enum de Postgres — puede crecer sin migración (mismo patrón que
+  // Partida.icono).
+  categoria   String
+  monto       Decimal          @db.Decimal(14, 2)
+  metodoPago  MetodoPagoGasto
+
+  // Quién puso el dinero — null = lo pagó la empresa directamente (no genera
+  // reposición para nadie). No-null = beneficiario personal a reponerle (es
+  // el mismo campo para "quién pagó" y "a quién reponer": son la misma
+  // persona por definición).
+  pagador               Beneficiario? @relation("GastoPagador", fields: [pagadorBeneficiarioId], references: [id])
+  pagadorBeneficiarioId String?
+
+  // A quién se le pagó — opcional, Beneficiario tipo PROVEEDOR existente.
+  proveedor               Beneficiario? @relation("GastoProveedor", fields: [proveedorBeneficiarioId], references: [id])
+  proveedorBeneficiarioId String?
+
+  comentario String?
+
+  requiereFactura Boolean @default(false)
+  facturaUrl      String?
+  facturaNombre   String?
+  // estatusFiscal (NO_APLICA/PENDIENTE_FACTURA/FACTURADO) se DERIVA de
+  // requiereFactura + facturaUrl en el servicio — no es columna.
+
+  tratamientoCliente TratamientoClienteGasto @default(NO_COBRABLE)
+  // Preparado para el enganche futuro con EstimacionCliente — se queda null
+  // en toda esta etapa, ningún servicio lo escribe todavía. El día que exista
+  // esa integración, marcarlo es lo que evita cobrar el mismo gasto dos veces.
+  incluidoEnEstimacionClienteId String?
+
+  ticketUrl    String?
+  ticketNombre String?
+
+  // Trazabilidad de una OC ejecutada — null en el 100% de los gastos
+  // capturados a mano. Ver OrdenCompra.gastosGenerados.
+  ordenCompra   OrdenCompra? @relation(fields: [ordenCompraId], references: [id])
+  ordenCompraId String?
+
+  estatus EstatusGasto @default(PENDIENTE_REVISION)
+
+  capturadoPor   Usuario @relation("GastoCapturado", fields: [capturadoPorId], references: [id])
+  capturadoPorId String
+
+  revisadoPor   Usuario?  @relation("GastoRevisado", fields: [revisadoPorId], references: [id])
+  revisadoPorId String?
+  revisadoEn    DateTime?
+  motivoRechazo String?
+
+  // "Incluido en reposición" se DERIVA (estatus=APROBADO &&
+  // reposicionGastosId != null) — no hay un estado INCLUIDO_EN_REPOSICION
+  // aparte, evita que ese estado se desincronice de la relación real.
+  reposicion          ReposicionGastos? @relation(fields: [reposicionGastosId], references: [id])
+  reposicionGastosId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([proyectoId, semanaId])
+  @@index([pagadorBeneficiarioId])
+  @@index([reposicionGastosId])
+  @@map("gastos_obra")
+}
+
+enum EstatusReposicion {
+  BORRADOR
+  ENVIADA_REVISION
+  APROBADA
+  RECHAZADA
+}
+
+// Agrupación de gastos APROBADOs de un mismo beneficiario/pagador, en un
+// proyecto y semana. El pago real se lee siempre de movimientoSemanal — no
+// hay un estado de pago propio aquí (evita una segunda fuente de verdad).
+model ReposicionGastos {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  folio       String // REP-000123, único por empresa
+  numeroFolio Int
+
+  // El pagador al que se le repone — mismo Beneficiario que
+  // GastoObra.pagadorBeneficiarioId de cada gasto incluido.
+  beneficiario   Beneficiario @relation(fields: [beneficiarioId], references: [id])
+  beneficiarioId String
+
+  estatus EstatusReposicion @default(BORRADOR)
+  // Total NO se persiste como campo editable — se deriva sumando
+  // gastos.monto en cada lectura.
+
+  creadoPor   Usuario @relation("ReposicionCreada", fields: [creadoPorId], references: [id])
+  creadoPorId String
+
+  revisadoPor   Usuario?  @relation("ReposicionRevisada", fields: [revisadoPorId], references: [id])
+  revisadoPorId String?
+  revisadoEn    DateTime?
+  motivoRechazo String?
+
+  // 1:1 — se crea SOLO al aprobar, nunca dos veces (el índice único de esta
+  // FK es la garantía real de idempotencia, no solo un chequeo en código).
+  movimientoSemanal   MovimientoSemanal? @relation(fields: [movimientoSemanalId], references: [id])
+  movimientoSemanalId String?            @unique
+
+  gastos GastoObra[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Una reposición ACTIVA por proyecto+semana+beneficiario (sección 11 del
+  // diseño) — evita que dos reposiciones distintas compitan por los mismos
+  // gastos disponibles del mismo pagador. No es un @@unique normal a
+  // propósito: una RECHAZADA no debe bloquear crear una nueva para la misma
+  // semana (si no, un rechazo dejaría esos gastos sin forma de volver a
+  // agruparse). La garantía real es un índice único PARCIAL en la migración
+  // (WHERE estatus != 'RECHAZADA'), mismo patrón que la unicidad de
+  // APLICACION_ESTIMACION en Control Contractual — no representable en este
+  // DSL de Prisma. crearReposicion() también valida esto antes de insertar,
+  // para un mensaje de error legible en vez de un choque crudo de Postgres.
+  @@map("reposiciones_gastos")
+}
+
+enum EstatusOrdenCompra {
+  BORRADOR
+  PENDIENTE_AUTORIZACION
+  AUTORIZADA
+  RECHAZADA
+  CANCELADA
+}
+
+// Compra planeada/autorizada que Conkuali hace directamente a un proveedor —
+// no representa un gasto ya realizado por una persona (eso es GastoObra vía
+// Reposición). "Pagada" se lee de movimientoSemanal.estatusPago, igual
+// criterio que ReposicionGastos — sin estado de pago propio.
+model OrdenCompra {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+  semana     Semana   @relation(fields: [semanaId], references: [id])
+  semanaId   String
+
+  folio       String // OC-000456, único por empresa
+  numeroFolio Int
+
+  // Proveedor existente, Beneficiario tipo PROVEEDOR — nunca un catálogo
+  // nuevo.
+  proveedor               Beneficiario @relation(fields: [proveedorBeneficiarioId], references: [id])
+  proveedorBeneficiarioId String
+
+  fecha           DateTime
+  estatus         EstatusOrdenCompra @default(PENDIENTE_AUTORIZACION)
+  metodoPago      MetodoPagoGasto? // previsto; puede no saberse hasta pagar
+  requiereFactura Boolean            @default(false)
+  notas           String?
+
+  // Snapshot al autorizar — una OC ya autorizada es una obligación formal, su
+  // total no debe moverse solo porque alguien edite precios del detalle
+  // después (igual criterio que EstimacionCliente.total al emitir). Antes de
+  // autorizar, el total se deriva en vivo sumando el detalle.
+  totalAutorizado Decimal? @db.Decimal(14, 2)
+
+  tratamientoCliente            TratamientoClienteGasto @default(NO_COBRABLE)
+  incluidoEnEstimacionClienteId String?
+
+  cotizacionUrl         String?
+  cotizacionNombre      String?
+  comprobantePagoUrl    String?
+  comprobantePagoNombre String?
+  facturaUrl            String?
+  facturaNombre         String?
+
+  creadoPor       Usuario  @relation("OCCreada", fields: [creadoPorId], references: [id])
+  creadoPorId     String
+  autorizadoPor   Usuario? @relation("OCAutorizada", fields: [autorizadoPorId], references: [id])
+  autorizadoPorId String?
+  autorizadoEn    DateTime?
+
+  movimientoSemanal   MovimientoSemanal? @relation(fields: [movimientoSemanalId], references: [id])
+  movimientoSemanalId String?            @unique
+
+  detalle         OrdenCompraConcepto[]
+  gastosGenerados GastoObra[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("ordenes_compra")
+}
+
+model OrdenCompraConcepto {
+  id            String      @id @default(cuid())
+  ordenCompra   OrdenCompra @relation(fields: [ordenCompraId], references: [id])
+  ordenCompraId String
+
+  concepto       String
+  descripcion    String?
+  unidad         String
+  cantidad       Decimal @db.Decimal(14, 3)
+  precioUnitario Decimal @db.Decimal(14, 2)
+  // importe NO se guarda — cantidad × precioUnitario, siempre derivado.
+
+  @@index([ordenCompraId])
+  @@map("ordenes_compra_conceptos")
 }

@@ -2,7 +2,7 @@ import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
+import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { ConceptoEstatus, EsquemaContractual } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
@@ -214,6 +214,32 @@ export async function resolverContratistaPorConcepto(
   return resultado;
 }
 
+// "Contrato vigente" de un contratista con la estructura nueva = suma de
+// ContratoConcepto (cantidad × precioUnitarioContratista) agrupada por
+// beneficiarioProyectoId — misma fórmula que ya usaba contratistas-view.tsx
+// y obtenerResumenFinancieroContratistas (recibos.ts). Se extrae aquí para
+// que Reporte General la reutilice en vez de recalcularla con otra fuente
+// (BeneficiarioProyecto.montoContrato, el campo legacy — ver reporte-general/
+// queries.ts). Recibe ya el resultado de la consulta (cada llamador decide
+// si escopa por proyecto o por empresa) para no imponer una sola forma de
+// consultar la base de datos.
+export function sumarContratoVigentePorBeneficiario(
+  contratos: {
+    beneficiarioProyectoId: string;
+    conceptos: { cantidad: unknown; precioUnitarioContratista: unknown }[];
+  }[]
+): Map<string, number> {
+  const mapa = new Map<string, number>();
+  for (const c of contratos) {
+    const suma = c.conceptos.reduce(
+      (t, cc) => t + Number(cc.cantidad) * Number(cc.precioUnitarioContratista),
+      0
+    );
+    mapa.set(c.beneficiarioProyectoId, (mapa.get(c.beneficiarioProyectoId) ?? 0) + suma);
+  }
+  return mapa;
+}
+
 export async function listarContratistasDisponibles(usuario: UsuarioSesion) {
   if (!usuario.empresa) throw new SinPermisoError();
   return db.beneficiario.findMany({
@@ -403,9 +429,18 @@ export async function editarConceptoEstructural(
 }
 
 // Concepto completo (todos los campos, operativos y privados) + su
-// bitácora — lo que necesita el modal de edición. Mismo permiso que editar
-// (Administrador/Director/Master); no se separa lectura de escritura porque
-// el modal es de un único uso (ver el concepto = poder editarlo).
+// bitácora — lo que necesita el modal de edición, en sus dos modos
+// ("operativo", abierto desde Contrato General público, y "privado", abierto
+// desde Contrato General Priv.). El gate de aquí (requerirAdmin) es el techo
+// operativo — el mismo para los dos modos, y no cambia con Vista privada:
+// el modal operativo debe seguir funcionando aunque Vista privada esté
+// apagada. Lo que sí depende de Vista privada es el CONTENIDO: los campos
+// *Privado/Indirectos/Herramienta/%utilidad/%administración (todo lo que
+// protege puedeVerContratoGeneralPrivado) y la bitácora de ediciones
+// privadas se podan aquí mismo si el usuario no tiene acceso privado en este
+// momento — mismo patrón que soloOperativo() en estimacion-cliente.ts, para
+// que ese payload nunca llegue al cliente en la pantalla pública (decisión
+// de sesión, agosto 2026 — Vista Privada).
 export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId: string) {
   const empresaId = requerirAdmin(usuario);
   const concepto = await db.concepto.findFirst({
@@ -420,7 +455,7 @@ export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId:
   // propósito para que abrir el modal desde una pestaña nunca muestre eventos
   // de la otra (decisión de sesión, agosto 2026, misma regla que ya aplicaba
   // a qué se puede editar desde cada modo).
-  const [bitacoraOperativo, bitacoraPrivado] = await Promise.all([
+  const [bitacoraOperativo, bitacoraPrivadaCompleta] = await Promise.all([
     db.registroAuditoria.findMany({
       where: { entidad: "Concepto", entidadId: conceptoId },
       orderBy: { createdAt: "desc" },
@@ -433,7 +468,25 @@ export async function obtenerConceptoDetalle(usuario: UsuarioSesion, conceptoId:
     }),
   ]);
 
-  return { concepto, bitacoraOperativo, bitacoraPrivado };
+  const conAccesoPrivado = puedeVerContratoGeneralPrivado(usuario);
+
+  return {
+    concepto: conAccesoPrivado
+      ? concepto
+      : {
+          ...concepto,
+          descripcionPrivado: null,
+          unidadPrivado: null,
+          cantidadContratadaPrivado: null,
+          precioUnitarioContratistaPrivado: null,
+          precioUnitarioIndirectos: null,
+          precioUnitarioHerramienta: null,
+          porcentajeUtilidad: null,
+          porcentajeAdministracion: null,
+        },
+    bitacoraOperativo,
+    bitacoraPrivado: conAccesoPrivado ? bitacoraPrivadaCompleta : [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -464,8 +517,10 @@ const DatosConceptoPrivadoSchema = z.object({
 // precioUnitarioContratista (decisión de sesión, agosto 2026 — editar aquí no
 // debe afectar el Contrato General original). Tampoco toca
 // ContratoConcepto.precioUnitarioContratista, que ya quedó congelado al
-// asignar el contratista (ver asignarConcepto). El mismo rol-set que
-// puedeVerContratoGeneralPrivado (requerirAdmin ya lo verifica hoy).
+// asignar el contratista (ver asignarConcepto). Escribir precios privados es
+// en sí misma una acción de la capa privada — requiere Vista privada activa
+// además del rol (puedeVerContratoGeneralPrivado), no solo requerirAdmin
+// (decisión de sesión, agosto 2026 — Vista Privada).
 //
 // Los campos de costo/porcentaje que NO aplican al esquema actual ni siquiera
 // se incluyen en el `data` del update, así que un valor legado que ya
@@ -476,6 +531,7 @@ export async function editarConceptoPrivado(
   id: string,
   datosCrudos: unknown
 ) {
+  if (!puedeVerContratoGeneralPrivado(usuario)) throw new SinPermisoError();
   const empresaId = requerirAdmin(usuario);
   const anterior = await db.concepto.findFirst({
     where: { id, partida: { proyecto: { empresaId } } },

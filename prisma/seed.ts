@@ -20,6 +20,7 @@ const MODULOS = [
   { clave: "reporte_general", nombre: "Reporte General" },
   { clave: "control_de_obra", nombre: "Control de Obra" },
   { clave: "control_prestamos", nombre: "Control de Préstamos" },
+  { clave: "catalogos", nombre: "Catálogos" },
 ];
 
 // Obras reales de Conkuali (mencionadas por Charles al describir el Reporte
@@ -68,20 +69,24 @@ async function main() {
   const plan = await db.plan.upsert({
     where: { nombre: "Completo" },
     update: {},
-    create: {
-      nombre: "Completo",
-      modulos: {
-        create: MODULOS.map((m) => ({
-          modulo: {
-            connectOrCreate: {
-              where: { clave: m.clave },
-              create: m,
-            },
-          },
-        })),
-      },
-    },
+    create: { nombre: "Completo" },
   });
+
+  // Reconcilia los módulos del plan también cuando el Plan ya existía —
+  // el upsert de arriba, con `update: {}`, no agregaría un módulo nuevo
+  // (como "catalogos") a un Plan "Completo" que ya está en base de datos.
+  for (const m of MODULOS) {
+    const modulo = await db.modulo.upsert({
+      where: { clave: m.clave },
+      update: {},
+      create: m,
+    });
+    await db.planModulo.upsert({
+      where: { planId_moduloId: { planId: plan.id, moduloId: modulo.id } },
+      update: {},
+      create: { planId: plan.id, moduloId: modulo.id },
+    });
+  }
 
   const empresa = await db.empresa.upsert({
     where: { id: "conkuali" },

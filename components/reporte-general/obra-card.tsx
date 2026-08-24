@@ -1,11 +1,47 @@
 import { Card } from "@/components/ui/card";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { EstadoPagoBadge } from "./estado-pago-badge";
+import { BotonLiquidar } from "./boton-liquidar";
 import { GRID_PROYECTOS } from "./grid-proyectos";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatMoneyOrDash } from "@/lib/dinero";
 import { calcularEstadoProyecto } from "@/lib/reporte-general/estado";
 import type { ReporteObra } from "@/lib/server/reporte-general/queries";
+import type { EstatusPago } from "@/lib/generated/prisma/enums";
+
+function formatFechaCorta(iso: string): string {
+  return new Date(iso).toLocaleDateString("es-MX", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// Celda de Estado compartida por las 3 secciones (Contratistas/Proveedores/
+// Administración) — un movimiento LIQUIDADO muestra su fecha discreta debajo
+// del badge; uno PENDIENTE_PAGO ofrece "Liquidar" solo si el usuario tiene
+// permiso, sin llenar la tabla de botones para el resto de los estados.
+function CeldaEstado({
+  fila,
+  puedeLiquidar,
+}: {
+  fila: { estatusPago: EstatusPago | null; fechaPago: string | null; movimientoId: string | null };
+  puedeLiquidar: boolean;
+}) {
+  return (
+    <div>
+      <EstadoPagoBadge estatus={fila.estatusPago} />
+      {fila.estatusPago === "LIQUIDADO" && fila.fechaPago && (
+        <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+          {formatFechaCorta(fila.fechaPago)}
+        </p>
+      )}
+      {fila.estatusPago === "PENDIENTE_PAGO" && puedeLiquidar && fila.movimientoId && (
+        <BotonLiquidar movimientoId={fila.movimientoId} />
+      )}
+    </div>
+  );
+}
 
 const TIPO_LABEL: Record<string, string> = {
   FORMAL: "Obra",
@@ -13,7 +49,34 @@ const TIPO_LABEL: Record<string, string> = {
   OFICINA: "Oficina",
 };
 
-export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) {
+// Solo se muestra cuando el origen NO es el corte de contratista de siempre
+// — la fila normal (95%+ de los casos) no cambia visualmente en nada; esto
+// solo aparece cuando un beneficiario tiene más de un movimiento la misma
+// semana (p. ej. corte + reposición de gastos).
+const ORIGEN_LABEL: Record<string, string> = {
+  REPOSICION_GASTOS: "Reposición",
+  ORDEN_COMPRA: "Orden de compra",
+  MANUAL: "Manual",
+};
+
+function EtiquetaOrigen({ origen }: { origen: string | null }) {
+  if (!origen || origen === "CORTE_CONTRATISTA") return null;
+  return (
+    <span className="ml-1.5 rounded-full bg-black/[0.04] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted)]">
+      {ORIGEN_LABEL[origen] ?? origen}
+    </span>
+  );
+}
+
+export function ObraCard({
+  obra,
+  index,
+  puedeLiquidar,
+}: {
+  obra: ReporteObra;
+  index: number;
+  puedeLiquidar: boolean;
+}) {
   const sinParticipantes =
     obra.contratistas.length === 0 &&
     obra.proveedores.length === 0 &&
@@ -99,8 +162,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.contratistas.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.concepto ?? "—"}
                           </Td>
@@ -144,7 +210,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}
@@ -167,8 +233,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.proveedores.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.giro ?? "—"}
                           </Td>
@@ -179,7 +248,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}
@@ -202,8 +271,11 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                     </Thead>
                     <tbody>
                       {obra.administracion.map((fila) => (
-                        <Tr key={fila.id}>
-                          <Td className="font-medium">{fila.nombre}</Td>
+                        <Tr key={fila.movimientoId ?? fila.id}>
+                          <Td className="font-medium">
+                            {fila.nombre}
+                            <EtiquetaOrigen origen={fila.origen} />
+                          </Td>
                           <Td className="text-[var(--muted)]">
                             {fila.puesto ?? "—"}
                           </Td>
@@ -214,7 +286,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}

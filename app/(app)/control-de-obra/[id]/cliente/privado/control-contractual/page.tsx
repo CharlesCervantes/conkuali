@@ -31,12 +31,11 @@ export default async function ControlContractualPage({
 
   const { id } = await params;
 
-  const [datos, historial] = await Promise.all([
+  const [datos, historial, aportaciones] = await Promise.all([
     obtenerControlContractual(usuario, id),
     obtenerHistorialEstimacionesCliente(usuario, id),
+    obtenerAportacionesFondo(usuario, id),
   ]);
-  const esFondo = datos.proyecto.esquemaFinanciamientoCliente === "FONDO";
-  const aportaciones = esFondo ? await obtenerAportacionesFondo(usuario, id) : [];
 
   const puedeRegistrar = puedeRegistrarMovimientoFinancieroCliente(usuario);
 
@@ -51,14 +50,12 @@ export default async function ControlContractualPage({
 
       <HistorialEstimacionesCliente
         proyectoId={id}
-        esquemaFinanciamientoCliente={datos.proyecto.esquemaFinanciamientoCliente}
+        fondoDisponible={datos.fondo?.disponible ?? 0}
         filas={historial}
-        puedeRegistrarPago={puedeRegistrar}
+        puedeRegistrar={puedeRegistrar}
       />
 
-      {esFondo && (
-        <AportacionesFondo proyectoId={id} aportaciones={aportaciones} puedeRegistrar={puedeRegistrar} />
-      )}
+      <AportacionesFondo proyectoId={id} aportaciones={aportaciones} puedeRegistrar={puedeRegistrar} />
     </div>
   );
 }

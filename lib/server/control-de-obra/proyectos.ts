@@ -43,10 +43,6 @@ const DatosProyectoSchema = z.object({
   esquemaContractual: z.enum(["PRECIO_ALZADO", "ADMINISTRACION"]).optional().nullable(),
   porcentajeUtilidadDefault: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeAdministracionDefault: z.coerce.number().nonnegative().optional().nullable(),
-  // Control Contractual — cómo el cliente ENTREGA el dinero, dimensión
-  // independiente de esquemaContractual (que define cómo se calcula el
-  // precio). null = sin definir todavía, nunca se infiere.
-  esquemaFinanciamientoCliente: z.enum(["FONDO", "PAGO_POR_ESTIMACION"]).optional().nullable(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;
@@ -112,26 +108,6 @@ export async function proyectoTieneInformacionContractual(
   return Boolean(partida || concepto || contrato || asignacion || avance);
 }
 
-// Un proyecto se considera "ya iniciado financieramente" (Control
-// Contractual) si existe cualquier movimiento del ledger, o cualquier
-// EstimacionCliente EMITIDA (sección 5 del diseño de Control Contractual,
-// agosto 2026: EMITIDA es el momento en que una estimación entra al control
-// financiero, aunque en PAGO_POR_ESTIMACION todavía no tenga ningún pago
-// registrado). Mismo checklist que proyectoTieneInformacionContractual, pero
-// para esquemaFinanciamientoCliente en vez de esquemaContractual.
-export async function proyectoTieneMovimientosFinancieros(
-  proyectoId: string
-): Promise<boolean> {
-  const [movimiento, estimacionEmitida] = await Promise.all([
-    db.movimientoFinancieroCliente.findFirst({ where: { proyectoId }, select: { id: true } }),
-    db.estimacionCliente.findFirst({
-      where: { proyectoId, estatus: "EMITIDA" },
-      select: { id: true },
-    }),
-  ]);
-  return Boolean(movimiento || estimacionEmitida);
-}
-
 export async function crearProyecto(usuario: UsuarioSesion, datosCrudos: unknown) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
@@ -170,11 +146,7 @@ export async function editarProyecto(
   // proyecto que ya tiene información contractual — el usuario debe confirmar
   // a propósito que la selección es correcta, porque después queda fija
   // (sección 3 del rediseño). Se valida aquí, no solo en la UI.
-  confirmarEsquemaConDatos = false,
-  // Mismo criterio que arriba, pero para esquemaFinanciamientoCliente — "ya
-  // tiene información" aquí significa "ya tiene movimientos financieros" (ver
-  // proyectoTieneMovimientosFinancieros), no información contractual.
-  confirmarEsquemaFinancieroConDatos = false
+  confirmarEsquemaConDatos = false
 ) {
   const empresaId = requerirAdmin(usuario);
   const datos = DatosProyectoSchema.parse(datosCrudos);
@@ -206,55 +178,9 @@ export async function editarProyecto(
     }
   }
 
-  // Mismo patrón de bloqueo/confirmación que esquemaContractual, aplicado a
-  // esquemaFinanciamientoCliente (Control Contractual, agosto 2026) — nunca
-  // se cambia FONDO <-> PAGO_POR_ESTIMACION una vez que el proyecto ya tiene
-  // movimientos financieros (sección 23.2 del diseño).
-  const cambioEsquemaFinanciero =
-    datos.esquemaFinanciamientoCliente !== anterior.esquemaFinanciamientoCliente;
-  let esAsignacionInicialFinanciera = false;
-  if (cambioEsquemaFinanciero) {
-    esAsignacionInicialFinanciera = anterior.esquemaFinanciamientoCliente === null;
-    const tieneMovimientos = await proyectoTieneMovimientosFinancieros(id);
-
-    if (!esAsignacionInicialFinanciera && tieneMovimientos) {
-      throw new ValidacionError(
-        "El esquema financiero del cliente no puede modificarse porque el proyecto ya tiene movimientos financieros registrados."
-      );
-    }
-    if (esAsignacionInicialFinanciera && tieneMovimientos && !confirmarEsquemaFinancieroConDatos) {
-      throw new ValidacionError(
-        "Este proyecto ya contiene movimientos financieros. Confirma para definir el esquema financiero del cliente."
-      );
-    }
-  }
-
-  const proyecto = await db.$transaction(async (tx) => {
-    const actualizado = await tx.proyecto.update({
-      where: { id },
-      data: datos,
-    });
-
-    // Asignación inicial null -> FONDO: las EstimacionCliente EMITIDA que ya
-    // existían antes de definir el esquema no tienen APLICACION_ESTIMACION
-    // porque esa lógica no corría todavía — se materializan aquí, en la
-    // misma transacción que fija el esquema, para que nunca quede un
-    // proyecto en FONDO con estimaciones emitidas "invisibles" para el
-    // fondo (sección "Integridad financiera" del diseño, agosto 2026).
-    if (
-      cambioEsquemaFinanciero &&
-      esAsignacionInicialFinanciera &&
-      datos.esquemaFinanciamientoCliente === "FONDO"
-    ) {
-      const { materializarAplicacionesFondoHistoricas } = await import("./financiero-cliente");
-      await materializarAplicacionesFondoHistoricas(tx, {
-        empresaId,
-        proyectoId: id,
-        usuarioId: usuario.id,
-      });
-    }
-
-    return actualizado;
+  const proyecto = await db.proyecto.update({
+    where: { id },
+    data: datos,
   });
 
   await registrarAuditoria({
@@ -324,9 +250,18 @@ export async function cambiarEstatusProyecto(
 // registro ELIMINAR — sigue existiendo un rastro de quién eliminó qué
 // proyecto y cuándo, aunque su contenido operativo ya no esté (regla del
 // proyecto: mantener trazabilidad de operaciones importantes).
+// Borra un Proyecto y TODO lo que le pertenece exclusivamente a él (avance,
+// contratos, cortes, recibos, estimaciones al cliente, gastos de obra,
+// reposiciones, órdenes de compra) — nunca datos compartidos entre proyectos:
+// Beneficiario/Proveedor/PersonalAdministrativo (catálogo de empresa, ver
+// lib/server/catalogos.ts) y Semana (ciclo semanal de toda la compañía)
+// sobreviven siempre, aunque queden sin participación en ningún proyecto.
 export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
   const empresaId = requerirEliminar(usuario);
 
+  // Timeout explícito y generoso: son ~20 deleteMany secuenciales, y el
+  // default de Prisma (5s) no alcanza para un proyecto con historial real
+  // (avance, cortes, gastos, estimaciones).
   await db.$transaction(async (tx) => {
     const proyecto = await tx.proyecto.findFirst({ where: { id, empresaId } });
     if (!proyecto) throw new ProyectoNoEncontradoError();
@@ -361,14 +296,61 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
     });
     const asignacionIds = asignaciones.map((a) => a.id);
 
+    const cortes = await tx.corteSemanal.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const corteIds = cortes.map((c) => c.id);
+
+    const estimaciones = await tx.estimacionCliente.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const estimacionIds = estimaciones.map((e) => e.id);
+
+    const gastos = await tx.gastoObra.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const gastoIds = gastos.map((g) => g.id);
+
+    const reposiciones = await tx.reposicionGastos.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const reposicionIds = reposiciones.map((r) => r.id);
+
+    const ordenes = await tx.ordenCompra.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const ordenIds = ordenes.map((o) => o.id);
+
     // Hijos antes que padres, respetando las llaves foráneas.
     // ComentarioMovimiento tiene onDelete: Cascade desde MovimientoSemanal a
     // nivel de base de datos — no hace falta borrarlo aparte.
-    await tx.avanceConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
-    await tx.contratoConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
+    await tx.corteSemanalConcepto.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
+    await tx.reciboPago.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
+    await tx.estimacionClienteConcepto.deleteMany({
+      where: { estimacionClienteId: { in: estimacionIds } },
+    });
+    await tx.ordenCompraConcepto.deleteMany({ where: { ordenCompraId: { in: ordenIds } } });
+    await tx.movimientoFinancieroCliente.deleteMany({ where: { proyectoId: id } });
+    // Gasto antes que Reposición/OC — un gasto puede referenciar cualquiera
+    // de las dos (pagadorBeneficiarioId/proveedorBeneficiarioId apuntan a
+    // Beneficiario, que nunca se toca; ordenCompraId/reposicionGastosId sí
+    // apuntan aquí y deben liberarse primero).
+    await tx.gastoObra.deleteMany({ where: { proyectoId: id } });
+    await tx.reposicionGastos.deleteMany({ where: { proyectoId: id } });
+    await tx.ordenCompra.deleteMany({ where: { proyectoId: id } });
+    await tx.corteSemanal.deleteMany({ where: { proyectoId: id } });
     await tx.movimientoSemanal.deleteMany({
       where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
     });
+    await tx.estimacionCliente.deleteMany({ where: { proyectoId: id } });
+    await tx.cierreSemanaProyecto.deleteMany({ where: { proyectoId: id } });
+    await tx.avanceConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
+    await tx.contratoConcepto.deleteMany({ where: { conceptoId: { in: conceptoIds } } });
     await tx.aditiva.deleteMany({
       where: { beneficiarioProyectoId: { in: beneficiarioProyectoIds } },
     });
@@ -386,6 +368,10 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
           { entidad: { in: ["Concepto", "ConceptoPrivado"] }, entidadId: { in: conceptoIds } },
           { entidad: "ContratoContratista", entidadId: { in: contratoIds } },
           { entidad: "ContratoConcepto", entidadId: { in: asignacionIds } },
+          { entidad: "EstimacionCliente", entidadId: { in: estimacionIds } },
+          { entidad: "GastoObra", entidadId: { in: gastoIds } },
+          { entidad: "ReposicionGastos", entidadId: { in: reposicionIds } },
+          { entidad: "OrdenCompra", entidadId: { in: ordenIds } },
         ],
       },
     });
@@ -402,5 +388,5 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
         valorAnterior: JSON.parse(JSON.stringify(proyecto)),
       },
     });
-  });
+  }, { timeout: 30_000 });
 }

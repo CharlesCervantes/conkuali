@@ -9,10 +9,18 @@ import { EnlaceProtegido } from "./enlace-protegido";
 // /contrato/privado) — sin esto, solo hay match exacto de pathname, que
 // sigue siendo lo correcto para pestañas sin hijos (Resumen, Cliente, y
 // cualquier subpestaña de segundo nivel).
-// `variante`: "secundaria" es el mismo componente con jerarquía visual más
-// discreta (texto más chico, borde más suave) — para el segundo nivel
-// (Contrato General | Contrato General Priv., Avance de obra | Contratistas)
-// sin que compita visualmente con la navegación principal del proyecto.
+//
+// `variante`: "principal" es la ÚNICA navegación que debe sentirse global —
+// barra de ancho completo, subrayada, para las 4 grandes áreas del proyecto
+// (Resumen | Contrato | Ejecución | Cliente). "secundaria" es todo nivel por
+// debajo de esa (Contrato General | Priv., Avance | Contratistas | Gastos,
+// Reposiciones | Órdenes de compra, Cliente | Priv., Estimación | Control
+// contractual) — se renderiza como un segmented control compacto (ancho al
+// contenido, no a la pantalla) para que se perciba como un selector de vista
+// LOCAL del módulo, nunca como otra barra de navegación apilada encima de la
+// anterior (principio de diseño, agosto 2026: solo un nivel de "barra
+// global" en toda la jerarquía del proyecto, sin importar cuántos niveles
+// conceptuales existan debajo).
 export function TabNav({
   tabs,
   variante = "principal",
@@ -22,33 +30,50 @@ export function TabNav({
 }) {
   const pathname = usePathname();
 
-  return (
-    <nav
-      className={cn(
-        "flex gap-1 overflow-x-auto border-b",
-        variante === "principal" ? "border-[var(--border)]" : "border-[var(--border)]/60"
-      )}
-    >
-      {tabs.map((tab) => {
-        const activo =
-          pathname === tab.href ||
-          (tab.coincideSubrutas === true && pathname.startsWith(`${tab.href}/`));
-        return (
+  function activo(tab: { href: string; coincideSubrutas?: boolean }): boolean {
+    return (
+      pathname === tab.href ||
+      (tab.coincideSubrutas === true && pathname.startsWith(`${tab.href}/`))
+    );
+  }
+
+  if (variante === "secundaria") {
+    return (
+      <nav className="inline-flex w-fit flex-wrap items-center gap-0.5 rounded-lg bg-black/[0.04] p-1">
+        {tabs.map((tab) => (
           <EnlaceProtegido
             key={tab.href}
             href={tab.href}
             className={cn(
-              "-mb-px shrink-0 border-b-2 font-medium transition-colors duration-150 ease-out",
-              variante === "principal" ? "px-3 py-2 text-sm" : "px-2.5 py-1.5 text-xs",
-              activo
-                ? "border-[var(--brand)] text-[var(--brand)]"
-                : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+              "rounded-md px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors duration-150 ease-out",
+              activo(tab)
+                ? "bg-[var(--surface)] text-[var(--foreground)] shadow-sm"
+                : "text-[var(--muted)] hover:text-[var(--foreground)]"
             )}
           >
             {tab.label}
           </EnlaceProtegido>
-        );
-      })}
+        ))}
+      </nav>
+    );
+  }
+
+  return (
+    <nav className="flex gap-1 overflow-x-auto border-b border-[var(--border)]">
+      {tabs.map((tab) => (
+        <EnlaceProtegido
+          key={tab.href}
+          href={tab.href}
+          className={cn(
+            "-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors duration-150 ease-out",
+            activo(tab)
+              ? "border-[var(--brand)] text-[var(--brand)]"
+              : "border-transparent text-[var(--muted)] hover:text-[var(--foreground)]"
+          )}
+        >
+          {tab.label}
+        </EnlaceProtegido>
+      ))}
     </nav>
   );
 }

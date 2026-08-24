@@ -47,7 +47,6 @@ function datosDesdeFormData(formData: FormData) {
     porcentajeAdministracionDefault: opcional(
       formData.get("porcentajeAdministracionDefault")
     ),
-    esquemaFinanciamientoCliente: opcional(formData.get("esquemaFinanciamientoCliente")),
   };
 }
 
@@ -74,17 +73,9 @@ export async function editarProyectoAction(
 ): Promise<FormState> {
   const usuario = await requireSession();
   const confirmarEsquemaConDatos = formData.get("confirmarEsquemaConDatos") === "on";
-  const confirmarEsquemaFinancieroConDatos =
-    formData.get("confirmarEsquemaFinancieroConDatos") === "on";
 
   try {
-    await editarProyecto(
-      usuario,
-      id,
-      datosDesdeFormData(formData),
-      confirmarEsquemaConDatos,
-      confirmarEsquemaFinancieroConDatos
-    );
+    await editarProyecto(usuario, id, datosDesdeFormData(formData), confirmarEsquemaConDatos);
   } catch (error) {
     return { error: mensajeError(error) };
   }

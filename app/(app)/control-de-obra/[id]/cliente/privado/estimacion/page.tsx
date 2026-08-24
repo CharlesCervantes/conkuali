@@ -18,6 +18,7 @@ import {
   agruparPorPartida,
   type FilaEstimacion,
 } from "@/lib/server/control-de-obra/estimacion-cliente";
+import { obtenerControlContractual } from "@/lib/server/control-de-obra/financiero-cliente";
 import { NavegacionSemana } from "@/components/control-de-obra/navegacion-semana";
 import { TablaEstimacion, type FilaTablaEstimacion } from "@/components/control-de-obra/tabla-estimacion";
 import { ResumenEstimacionPrivada } from "@/components/control-de-obra/resumen-estimacion";
@@ -75,10 +76,12 @@ export default async function ClientePrivadoEstimacionPage({
   }
 
   const semana = await obtenerOCrearSemana(usuario.empresa.id, parametroAFecha(fechaParam));
-  const [proyecto, resumenCierre] = await Promise.all([
+  const [proyecto, resumenCierre, controlContractual] = await Promise.all([
     obtenerProyecto(usuario, id),
     obtenerResumenCierreSemana(usuario, id, semana.id),
+    obtenerControlContractual(usuario, id),
   ]);
+  const fondoDisponible = controlContractual.fondo?.disponible ?? 0;
   const semanaCerrada = resumenCierre.estatus === "CERRADA";
 
   // congelado === null con semana cerrada significa que nunca se generó un
@@ -172,6 +175,7 @@ export default async function ClientePrivadoEstimacionPage({
               emitidoPorNombre={congelado.estimacion.emitidoPorNombre}
               emitidoEn={congelado.estimacion.emitidoEn}
               puedeEmitir={puedeEmitirEstimacionCliente(usuario)}
+              fondoDisponible={fondoDisponible}
             />
           )}
         </>
