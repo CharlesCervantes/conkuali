@@ -63,6 +63,7 @@ async function cargarUsuarioPorToken(token: string) {
           rol: true,
           activo: true,
           empresaId: true,
+          vistaPrivadaActiva: true,
           empresa: {
             select: {
               id: true,

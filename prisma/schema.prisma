@@ -155,6 +155,7 @@ model Usuario {
   movimientosEnviados    MovimientoSemanal[]    @relation("MovimientosEnviados")
   movimientosAprobados   MovimientoSemanal[]    @relation("MovimientosAprobados")
   movimientosFondoPuente MovimientoSemanal[]    @relation("FondoPuente")
+  movimientosLiquidados  MovimientoSemanal[]    @relation("MovimientoLiquidado")
   comentarios            ComentarioMovimiento[]
   avancesRegistrados     AvanceConcepto[]        @relation("AvanceRegistrado")
   avancesAprobados       AvanceConcepto[]        @relation("AvanceAprobado")
@@ -185,6 +186,14 @@ model Usuario {
   // alguien que nunca recibe pagos) o tenerlo (ej. un Supervisor a quien
   // también se le reponen gastos personales).
   beneficiario Beneficiario?
+
+  // Preferencia personal — restringe temporalmente el acceso a la capa
+  // privada de Control de Obra sin tocar el rol ni sus permisos operativos
+  // (solo Administrador/Director la usan; ver puedeVerInformacionPrivada en
+  // lib/server/permisos.ts). Nunca es una fuente de permiso por sí sola:
+  // combinada siempre con el permiso real de rol, nunca al revés. Default
+  // `true` para que ningún usuario existente pierda acceso al migrar.
+  vistaPrivadaActiva Boolean @default(true)
 
   @@map("usuarios")
 }
@@ -291,13 +300,6 @@ enum EsquemaContractual {
   ADMINISTRACION
 }
 
-// Dimensión independiente de EsquemaContractual — cómo el cliente ENTREGA el
-// dinero, no cómo se calcula el precio. Ver Proyecto.esquemaFinanciamientoCliente.
-enum EsquemaFinanciamientoCliente {
-  FONDO
-  PAGO_POR_ESTIMACION
-}
-
 model Proyecto {
   id          String          @id @default(cuid())
   empresa     Empresa         @relation(fields: [empresaId], references: [id])
@@ -328,16 +330,6 @@ model Proyecto {
   esquemaContractual            EsquemaContractual?
   porcentajeUtilidadDefault      Decimal?            @db.Decimal(5, 2)
   porcentajeAdministracionDefault Decimal?           @db.Decimal(5, 2)
-
-  // Esquema financiero del cliente (sección "Control Contractual" de
-  // 04-modulo-control-de-obra.md) — cómo el cliente ENTREGA el dinero
-  // (Fondo anticipado vs. Pago por estimación), dimensión totalmente
-  // independiente de esquemaContractual (que define cómo se CALCULA el
-  // precio). null = sin definir todavía, nunca se infiere — mismo criterio
-  // que esquemaContractual. Bloqueado en cuanto el proyecto ya tiene
-  // movimientos financieros (ver proyectoTieneMovimientosFinancieros en
-  // proyectos.ts), mismo patrón que el bloqueo de esquemaContractual.
-  esquemaFinanciamientoCliente EsquemaFinanciamientoCliente?
 
   // Contador atómico de Estimación Cliente (sección "Cliente" de
   // 04-modulo-control-de-obra.md) — correlativo POR PROYECTO (a diferencia
@@ -548,6 +540,18 @@ model MovimientoSemanal {
   cubiertoPorFondoPuente Boolean  @default(false)
   fondoPuenteUsuario     Usuario? @relation("FondoPuente", fields: [fondoPuenteUsuarioId], references: [id])
   fondoPuenteUsuarioId   String?
+
+  // Evidencia mínima del pago — se llenan únicamente al liquidar (Reporte
+  // General), en la misma transacción que cambia estatusPago a LIQUIDADO.
+  // metodoPago reutiliza el mismo enum que Gastos de Obra/Órdenes de Compra
+  // (MetodoPagoGasto) — no se duplica un catálogo de método de pago propio.
+  fechaPago      DateTime?
+  metodoPago     MetodoPagoGasto?
+  referenciaPago String?
+  notasPago      String?
+  liquidadoPor   Usuario?  @relation("MovimientoLiquidado", fields: [liquidadoPorId], references: [id])
+  liquidadoPorId String?
+  liquidadoEn    DateTime?
 
   enviadoPor    Usuario  @relation("MovimientosEnviados", fields: [enviadoPorId], references: [id])
   enviadoPorId  String
@@ -1081,10 +1085,15 @@ model EstimacionClienteConcepto {
 // sesión, agosto 2026.
 // ---------------------------------------------------------------------------
 
+// Toda obra se cobra por Estimación; el fondo es una fuente de recursos
+// opcional (existe si el proyecto tiene al menos una APORTACION_FONDO) que
+// puede cubrir total o parcialmente cualquier estimación emitida — nunca un
+// esquema alternativo excluyente (decisión de sesión, agosto 2026 — rediseño
+// del modelo financiero del cliente).
 enum TipoMovimientoFinancieroCliente {
-  APORTACION_FONDO // entrada — proyecto FONDO, no ligada a una estimación
-  PAGO_ESTIMACION // entrada — proyecto PAGO_POR_ESTIMACION, ligada a una estimación
-  APLICACION_ESTIMACION // salida — proyecto FONDO, se genera solo al emitir (o al asignar FONDO por primera vez, para el histórico — ver materializarAplicacionesFondoHistoricas)
+  APORTACION_FONDO // entrada — no ligada a una estimación específica
+  PAGO_ESTIMACION // entrada — pago directo, ligado a una estimación
+  APLICACION_ESTIMACION // salida — fondo aplicado contra una estimación, al emitir (si se elige) o manualmente después ("Aplicar fondo")
 }
 
 model MovimientoFinancieroCliente {
@@ -1101,11 +1110,14 @@ model MovimientoFinancieroCliente {
   notas      String?
 
   // Obligatorio en PAGO_ESTIMACION y APLICACION_ESTIMACION — una estimación
-  // puede tener varios PAGO_ESTIMACION (pagos parciales) pero como mucho un
-  // APLICACION_ESTIMACION (garantizado por un índice único parcial en la
-  // migración, WHERE tipo = 'APLICACION_ESTIMACION' — no representable en
-  // este DSL de Prisma, ver migration.sql). null en APORTACION_FONDO (una
-  // aportación es del proyecto, no de una estimación específica).
+  // puede tener varios de cada uno (pagos parciales, y ahora también varias
+  // aplicaciones de fondo en fechas distintas — una al emitir si se elige, y
+  // una por cada "Aplicar fondo" manual posterior; el índice único parcial
+  // que antes limitaba a una sola aplicación por estimación se retiró en el
+  // rediseño del modelo financiero, agosto 2026 — la integridad la da el
+  // bloqueo de fila sobre Proyecto al calcular fondo disponible, no un
+  // índice). null en APORTACION_FONDO (una aportación es del proyecto, no de
+  // una estimación específica).
   estimacionCliente   EstimacionCliente? @relation(fields: [estimacionClienteId], references: [id])
   estimacionClienteId String?
 

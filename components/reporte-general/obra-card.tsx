@@ -1,11 +1,47 @@
 import { Card } from "@/components/ui/card";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { EstadoPagoBadge } from "./estado-pago-badge";
+import { BotonLiquidar } from "./boton-liquidar";
 import { GRID_PROYECTOS } from "./grid-proyectos";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatMoneyOrDash } from "@/lib/dinero";
 import { calcularEstadoProyecto } from "@/lib/reporte-general/estado";
 import type { ReporteObra } from "@/lib/server/reporte-general/queries";
+import type { EstatusPago } from "@/lib/generated/prisma/enums";
+
+function formatFechaCorta(iso: string): string {
+  return new Date(iso).toLocaleDateString("es-MX", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// Celda de Estado compartida por las 3 secciones (Contratistas/Proveedores/
+// Administración) — un movimiento LIQUIDADO muestra su fecha discreta debajo
+// del badge; uno PENDIENTE_PAGO ofrece "Liquidar" solo si el usuario tiene
+// permiso, sin llenar la tabla de botones para el resto de los estados.
+function CeldaEstado({
+  fila,
+  puedeLiquidar,
+}: {
+  fila: { estatusPago: EstatusPago | null; fechaPago: string | null; movimientoId: string | null };
+  puedeLiquidar: boolean;
+}) {
+  return (
+    <div>
+      <EstadoPagoBadge estatus={fila.estatusPago} />
+      {fila.estatusPago === "LIQUIDADO" && fila.fechaPago && (
+        <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+          {formatFechaCorta(fila.fechaPago)}
+        </p>
+      )}
+      {fila.estatusPago === "PENDIENTE_PAGO" && puedeLiquidar && fila.movimientoId && (
+        <BotonLiquidar movimientoId={fila.movimientoId} />
+      )}
+    </div>
+  );
+}
 
 const TIPO_LABEL: Record<string, string> = {
   FORMAL: "Obra",
@@ -32,7 +68,15 @@ function EtiquetaOrigen({ origen }: { origen: string | null }) {
   );
 }
 
-export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) {
+export function ObraCard({
+  obra,
+  index,
+  puedeLiquidar,
+}: {
+  obra: ReporteObra;
+  index: number;
+  puedeLiquidar: boolean;
+}) {
   const sinParticipantes =
     obra.contratistas.length === 0 &&
     obra.proveedores.length === 0 &&
@@ -166,7 +210,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}
@@ -204,7 +248,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}
@@ -242,7 +286,7 @@ export function ObraCard({ obra, index }: { obra: ReporteObra; index: number }) 
                             {formatMoneyOrDash(fila.montoFinSemana)}
                           </Td>
                           <Td>
-                            <EstadoPagoBadge estatus={fila.estatusPago} />
+                            <CeldaEstado fila={fila} puedeLiquidar={puedeLiquidar} />
                           </Td>
                         </Tr>
                       ))}

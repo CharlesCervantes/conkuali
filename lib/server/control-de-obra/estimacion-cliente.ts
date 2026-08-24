@@ -594,17 +594,33 @@ export async function materializarEstimacionHistorica(
 // vuelve a tocar — ver generarOReconciliarEstimacionBorrador).
 // ---------------------------------------------------------------------------
 
-export async function emitirEstimacion(usuario: UsuarioSesion, estimacionId: string) {
+// `aplicarFondo`: viene explícito de la casilla del modal de emisión (activada
+// por default cuando hay fondo disponible) — toda obra se cobra por
+// Estimación, y el fondo es una fuente de recursos opcional que puede
+// cubrirla total o parcialmente si así se decide en ese momento (rediseño
+// del modelo financiero del cliente, agosto 2026). Nunca automático por
+// esquema de proyecto — ese concepto ya no existe.
+export async function emitirEstimacion(
+  usuario: UsuarioSesion,
+  estimacionId: string,
+  aplicarFondo: boolean
+) {
   if (!puedeEmitirEstimacionCliente(usuario)) throw new SinPermisoError();
   const empresaId = requerirEmpresa(usuario);
 
+  const referencia = await db.estimacionCliente.findFirst({
+    where: { id: estimacionId, empresaId },
+    select: { proyectoId: true },
+  });
+  if (!referencia) throw new RegistroNoEncontradoError("La estimación");
+
   return db.$transaction(async (tx) => {
-    // Bloqueo de fila — un doble clic en "Emitir" (o dos requests
-    // concurrentes) nunca puede pasar dos veces la validación "todavía no
-    // está emitida" y generar dos aplicaciones a fondo (el índice único
-    // parcial de MovimientoFinancieroCliente ya lo impediría a nivel de
-    // base, pero este candado evita además el error de carrera visible al
-    // usuario — sección "Integridad financiera" del diseño, agosto 2026).
+    // Mismo orden de bloqueo que registrarPagoEstimacion/aplicarFondoAEstimacion
+    // (proyecto primero, luego la estimación) — un doble clic en "Emitir" (o
+    // dos requests concurrentes) nunca puede pasar dos veces la validación
+    // "todavía no está emitida" ni aplicar fondo dos veces contra el mismo
+    // proyecto simultáneamente.
+    await tx.$queryRaw`SELECT id FROM proyectos WHERE id = ${referencia.proyectoId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM estimaciones_cliente WHERE id = ${estimacionId} FOR UPDATE`;
 
     const estimacion = await tx.estimacionCliente.findFirst({
@@ -633,17 +649,12 @@ export async function emitirEstimacion(usuario: UsuarioSesion, estimacionId: str
       valorNuevo: { estatus: "EMITIDA" },
     });
 
-    // Control Contractual — en proyectos FONDO, esta estimación se refleja
-    // de inmediato como una aplicación contra el fondo (nunca en
-    // PAGO_POR_ESTIMACION, donde queda pendiente de cobro sin generar
-    // ningún movimiento todavía — sección 5/9 del diseño).
-    const proyecto = await tx.proyecto.findFirst({ where: { id: estimacion.proyectoId } });
-    if (proyecto?.esquemaFinanciamientoCliente === "FONDO") {
-      const { aplicarEstimacionAFondoSiCorresponde } = await import("./financiero-cliente");
-      await aplicarEstimacionAFondoSiCorresponde(
+    if (aplicarFondo) {
+      const { aplicarFondoAEstimacionTx } = await import("./financiero-cliente");
+      await aplicarFondoAEstimacionTx(
         tx,
         { empresaId, proyectoId: estimacion.proyectoId, usuarioId: usuario.id },
-        actualizada
+        actualizada.id
       );
     }
 

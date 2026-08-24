@@ -34,6 +34,7 @@ import {
 import {
   registrarAportacionFondo,
   registrarPagoEstimacion,
+  aplicarFondoAEstimacion,
 } from "@/lib/server/control-de-obra/financiero-cliente";
 import {
   crearGasto,
@@ -507,11 +508,11 @@ export async function emitirEstimacionAction(
   proyectoId: string,
   estimacionId: string,
   _state: EmitirEstimacionFormState,
-  _formData: FormData
+  formData: FormData
 ): Promise<EmitirEstimacionFormState> {
   const usuario = await requireSession();
   try {
-    await emitirEstimacion(usuario, estimacionId);
+    await emitirEstimacion(usuario, estimacionId, formData.get("aplicarFondo") === "on");
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -590,6 +591,32 @@ export async function registrarPagoEstimacionAction(
   }
   revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
   return { registrado: true };
+}
+
+export type AplicarFondoFormState = { error?: string; aplicado?: number } | undefined;
+
+// Acción manual "Aplicar fondo" — decisión explícita de Administrador/
+// Director, nunca automática (ver aplicarFondoAEstimacion). `monto` vacío =
+// aplicar el máximo posible.
+export async function aplicarFondoEstimacionAction(
+  proyectoId: string,
+  estimacionId: string,
+  _state: AplicarFondoFormState,
+  formData: FormData
+): Promise<AplicarFondoFormState> {
+  const usuario = await requireSession();
+  let resultado;
+  try {
+    resultado = await aplicarFondoAEstimacion(
+      usuario,
+      estimacionId,
+      opcional(formData.get("monto")) ?? undefined
+    );
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  return { aplicado: resultado.aplicado };
 }
 
 // ---------------------------------------------------------------------------

@@ -72,45 +72,79 @@ export function puedeReportarAvance(usuario: UsuarioSesion): boolean {
 }
 
 /**
+ * Techo de ROL para toda la capa privada (Contrato General Privado, Cliente
+ * Priv./Control Contractual, Recibos financieros) — exclusivo de
+ * Administrador/Director. Deliberadamente NO es puedeAdministrarProyectos
+ * (que incluye Master): Master es un rol de plataforma, no un administrador
+ * operativo de una empresa, y no debe obtener acceso a la capa privada de
+ * una empresa por este mecanismo — ese alcance se define más adelante, con
+ * Administración de Empresas/Master (decisión de sesión, agosto 2026 — Vista
+ * Privada). También decide si el switch "Vista privada" existe siquiera
+ * para este usuario (Mi perfil → Privacidad).
+ */
+export function puedeConfigurarVistaPrivada(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
+}
+
+/**
+ * Único punto de verdad de "¿tiene HOY acceso a la capa privada?": combina
+ * el permiso real de rol (nunca cambia) con la preferencia personal Vista
+ * privada, que un Administrador/Director puede apagar temporalmente desde Mi
+ * perfil para presentar el sistema sin riesgo de mostrar información
+ * sensible — sin tocar su rol ni sus permisos operativos. Nunca al revés:
+ * sin el permiso de rol, vistaPrivadaActiva no otorga nada por sí sola.
+ * Supervisor y Master nunca pasan de aquí, sin importar el valor guardado en
+ * BD (decisión de sesión, agosto 2026 — Vista Privada).
+ */
+export function puedeVerInformacionPrivada(usuario: UsuarioSesion): boolean {
+  return puedeConfigurarVistaPrivada(usuario) && usuario.vistaPrivadaActiva;
+}
+
+/**
  * Contrato General Privado (Indirectos, Herramienta, % utilidad/administración,
- * precio final al cliente, márgenes comerciales) — mismo rol-set que
- * puedeAdministrarProyectos, con nombre propio para dejar explícito qué
- * protege esta verificación (04-modulo-control-de-obra.md, sección 49.9).
- * Supervisor SÍ ve el Contrato General operativo (presupuesto de contratista
- * y materiales, cantidades, avance) — lo que no ve es esto.
+ * precio final al cliente, márgenes comerciales) — nombre propio para dejar
+ * explícito qué protege esta verificación (04-modulo-control-de-obra.md,
+ * sección 49.9). Supervisor SÍ ve el Contrato General operativo (presupuesto
+ * de contratista y materiales, cantidades, avance) — lo que no ve es esto.
  */
 export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean {
-  return puedeAdministrarProyectos(usuario);
+  return puedeVerInformacionPrivada(usuario);
 }
 
 /**
  * Recibos financieros (expediente de contratista: estimado/pagado acumulado,
- * saldo, historial de cortes, generar/ver/subir evidencia de recibo) — mismo
- * rol-set que la información privada de Contrato General. Supervisor no ve
- * precios de recibo ni puede generar/subir nada (04-modulo-control-de-obra.md,
- * sección 49.9 y "Recibo de Pago" de 02-control-de-obra.md).
+ * saldo, historial de cortes, generar/ver/subir evidencia de recibo) — misma
+ * capa de información privada que Contrato General Privado, aunque viva
+ * dentro de Avance/Contratistas en vez de una ruta /privado/ propia
+ * (04-modulo-control-de-obra.md, sección 49.9 y "Recibo de Pago" de
+ * 02-control-de-obra.md). Supervisor no ve precios de recibo ni puede
+ * generar/subir nada.
  */
 export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
-  return puedeAdministrarProyectos(usuario);
+  return puedeVerInformacionPrivada(usuario);
 }
 
 /**
  * Emitir una Estimación Cliente la congela para siempre — mismo criterio
  * financieramente sensible que cerrar/reabrir semana y eliminar proyectos,
- * sin Master (04-modulo-control-de-obra.md, sección "Cliente").
+ * sin Master (04-modulo-control-de-obra.md, sección "Cliente"). También
+ * respeta Vista privada — emitir es una acción de la capa privada del
+ * cliente (puedeCerrarSemana ya excluye Master, así que no hace falta pasar
+ * por puedeConfigurarVistaPrivada).
  */
 export function puedeEmitirEstimacionCliente(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario);
+  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
 }
 
 /**
  * Materializar retroactivamente la EstimacionCliente de una semana que ya
  * estaba cerrada antes de que este módulo existiera — mismo criterio
  * financieramente sensible que cerrar semana/emitir, sin Master
- * (04-modulo-control-de-obra.md, sección "Cliente").
+ * (04-modulo-control-de-obra.md, sección "Cliente"). Respeta Vista privada
+ * igual que puedeEmitirEstimacionCliente.
  */
 export function puedeMaterializarEstimacionHistorica(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario);
+  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
 }
 
 /**
@@ -126,10 +160,11 @@ export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
 /**
  * Registrar movimientos financieros del cliente (aportación al fondo, pago de
  * una estimación) — mismo criterio financieramente sensible que cerrar
- * semana/emitir/materializar histórico, sin Master.
+ * semana/emitir/materializar histórico, sin Master. Respeta Vista privada
+ * igual que puedeEmitirEstimacionCliente.
  */
 export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario);
+  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
 }
 
 /**
@@ -166,4 +201,16 @@ export function puedeAutorizarOrdenesCompra(usuario: UsuarioSesion): boolean {
  */
 export function puedeAdministrarCatalogos(usuario: UsuarioSesion): boolean {
   return puedeAdministrarProyectos(usuario);
+}
+
+/**
+ * Liquidar un movimiento de Reporte General (marcar PENDIENTE_PAGO como
+ * pagado, con evidencia) — financieramente sensible, mismo criterio que
+ * cerrar semana/aprobar gastos/autorizar OC: Administrador y Director,
+ * nunca Master (rol de plataforma, no participa en la operación financiera
+ * de una empresa) ni Supervisor. Sin relación con Vista privada — liquidar
+ * no es información privada del cliente, es una acción operativa de pagos.
+ */
+export function puedeLiquidarPagos(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
 }

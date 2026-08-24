@@ -30,6 +30,7 @@ export type FilaContratista = {
   montoFinSemana: number;
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
+  fechaPago: string | null;
 };
 
 export type FilaProveedor = {
@@ -42,6 +43,7 @@ export type FilaProveedor = {
   montoFinSemana: number;
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
+  fechaPago: string | null;
 };
 
 export type FilaAdministracion = {
@@ -54,6 +56,7 @@ export type FilaAdministracion = {
   montoFinSemana: number;
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
+  fechaPago: string | null;
 };
 
 export type ReporteObra = {
@@ -151,6 +154,7 @@ export async function obtenerReporteSemana(
         const estatusPago = movimiento?.estatusPago ?? null;
         const movimientoId = movimiento?.id ?? null;
         const origen = movimiento?.origen ?? null;
+        const fechaPago = movimiento?.fechaPago ? movimiento.fechaPago.toISOString() : null;
 
         if (bp.beneficiario.tipo === "CONTRATISTA") {
           // Fuente de verdad: si el contratista ya tiene ContratoContratista
@@ -188,6 +192,7 @@ export async function obtenerReporteSemana(
             montoFinSemana,
             estatusAprobacion,
             estatusPago,
+            fechaPago,
           });
         } else if (bp.beneficiario.tipo === "PROVEEDOR") {
           proveedores.push({
@@ -200,6 +205,7 @@ export async function obtenerReporteSemana(
             montoFinSemana,
             estatusAprobacion,
             estatusPago,
+            fechaPago,
           });
         } else {
           administracion.push({
@@ -212,6 +218,7 @@ export async function obtenerReporteSemana(
             montoFinSemana,
             estatusAprobacion,
             estatusPago,
+            fechaPago,
           });
         }
       }
