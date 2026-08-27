@@ -1,13 +1,14 @@
 import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { registrarAuditoria } from "@/lib/server/auditoria";
 import { puedeReportarAvance, puedeAdministrarProyectos } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { EstatusAprobacionAvance } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import {
-  partidasConConceptos,
+  partidasConConceptosOperativo,
   resolverContratistaPorConcepto,
   RegistroNoEncontradoError,
 } from "./estructura-contractual";
@@ -56,40 +57,31 @@ function calcularAvance(cantidadTotal: number, acumulado: number): AvanceCalcula
 // ---------------------------------------------------------------------------
 
 type ConceptoBase = Awaited<
-  ReturnType<typeof partidasConConceptos>
+  ReturnType<typeof partidasConConceptosOperativo>
 >[number]["conceptos"][number];
 
-// Campos Decimal de Concepto (presupuesto de Contrato General) — se
-// convierten explícitamente a number antes de devolverse, porque esta forma
-// cruza hacia FormAvanceSemanal ("use client") y las instancias de
-// Prisma.Decimal no son serializables de Server a Client Component. No
-// afecta lo que se guarda en Postgres/Prisma, solo esta lectura.
+// Campos Decimal de Concepto (presupuesto de Contrato General, capa
+// operativa) — se convierten explícitamente a number antes de devolverse,
+// porque esta forma cruza hacia FormAvanceSemanal ("use client") y las
+// instancias de Prisma.Decimal no son serializables de Server a Client
+// Component. No afecta lo que se guarda en Postgres/Prisma, solo esta
+// lectura. Indirectos/Herramienta/%Utilidad/P.U.Privado/CantidadPrivado ya NO
+// se seleccionan de la base de datos (partidasConConceptosOperativo, no
+// partidasConConceptos) — confirmado que Avance de obra nunca los usa ni los
+// muestra (auditoría de rendimiento, agosto 2026): antes viajaban sin usarse,
+// incluyendo hacia el navegador de un Supervisor.
 type CamposDecimalConcepto =
   | "cantidadContratada"
   | "precioUnitarioContratista"
   | "precioUnitarioMateriales"
-  | "precioUnitarioIndirectos"
-  | "precioUnitarioHerramienta"
-  | "porcentajeUtilidad"
-  | "porcentajeAdministracion"
-  | "precioUnitarioContratistaPrivado"
-  | "cantidadContratadaPrivado";
+  | "porcentajeAdministracion";
 
 export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
   AvanceCalculado & {
     cantidadContratada: number;
     precioUnitarioContratista: number | null;
     precioUnitarioMateriales: number | null;
-    precioUnitarioIndirectos: number | null;
-    precioUnitarioHerramienta: number | null;
-    porcentajeUtilidad: number | null;
     porcentajeAdministracion: number | null;
-    // No se usan en esta vista (operativo, no Privado) pero igual hay que
-    // convertirlos — `...concepto` los arrastra sin tocarlos, y un
-    // Prisma.Decimal crudo no es serializable de Server a Client Component
-    // (rompía obtenerAvanceSemanal desde que se agregaron estos campos).
-    precioUnitarioContratistaPrivado: number | null;
-    cantidadContratadaPrivado: number | null;
     anterior: number;
     estaSemana: number;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
@@ -118,7 +110,7 @@ export async function obtenerAvanceSemanal(
   // proyectoId directamente) — va en la primera fase junto con partidas, no
   // en la segunda, donde tendría que esperar sin necesidad.
   const [partidas, resolucionContratista] = await Promise.all([
-    partidasConConceptos(proyectoId),
+    partidasConConceptosOperativo(proyectoId),
     resolverContratistaPorConcepto(proyectoId),
   ]);
   const conceptoIds = partidas.flatMap((p) => p.conceptos.map((c) => c.id));
@@ -152,12 +144,7 @@ export async function obtenerAvanceSemanal(
         cantidadContratada: Number(concepto.cantidadContratada),
         precioUnitarioContratista: numOrNull(concepto.precioUnitarioContratista),
         precioUnitarioMateriales: numOrNull(concepto.precioUnitarioMateriales),
-        precioUnitarioIndirectos: numOrNull(concepto.precioUnitarioIndirectos),
-        precioUnitarioHerramienta: numOrNull(concepto.precioUnitarioHerramienta),
-        porcentajeUtilidad: numOrNull(concepto.porcentajeUtilidad),
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
-        precioUnitarioContratistaPrivado: numOrNull(concepto.precioUnitarioContratistaPrivado),
-        cantidadContratadaPrivado: numOrNull(concepto.cantidadContratadaPrivado),
         anterior,
         estaSemana,
         estatusAprobacion: estatusSemana,
@@ -300,51 +287,138 @@ export async function guardarAvanceSemanal(
     });
   }
 
+  if (porGuardar.length === 0) return { guardados: 0 };
+
   // Candado fino: aunque la semana esté abierta (nunca se cerró, o se
   // reabrió), un concepto que ya forma parte de un corte LIQUIDADO queda
-  // protegido — solo se revisa contra lo que de verdad va a cambiar.
+  // protegido — solo se revisa contra lo que de verdad va a cambiar. Se
+  // revisa ANTES de escribir nada, con el mismo criterio de "validar todo,
+  // escribir después" del resto de la función.
   await verificarSemanaEditable(
     proyectoId,
     semana.id,
     porGuardar.map((f) => f.conceptoId)
   );
 
-  // Pase 2: escribir + auditar (upsert nunca duplica; cada semana conserva su
-  // propia fila, nunca se sobreescribe el histórico de semanas anteriores).
-  // Cualquier guardado — sea de Supervisor o de quien ya lo había aprobado —
-  // regresa el registro a PENDIENTE: aprobar es siempre una acción explícita
-  // aparte, nunca implícita al editar (decisión de sesión, agosto 2026).
-  for (const fila of porGuardar) {
-    const avance = await db.avanceConcepto.upsert({
-      where: {
-        conceptoId_semanaId: { conceptoId: fila.conceptoId, semanaId: semana.id },
-      },
-      update: {
-        cantidadEjecutada: fila.cantidadEjecutada,
-        registradoPorId: usuario.id,
-        estatusAprobacion: "PENDIENTE",
-        aprobadoPorId: null,
-        fechaAprobacion: null,
-      },
-      create: {
-        empresaId,
-        conceptoId: fila.conceptoId,
-        semanaId: semana.id,
-        cantidadEjecutada: fila.cantidadEjecutada,
-        registradoPorId: usuario.id,
-        estatusAprobacion: "PENDIENTE",
-      },
-    });
+  // Pase 2: escribir + auditar en una sola transacción, agrupado en un
+  // puñado de queries en vez de 2×N (antes: un upsert + un registrarAuditoria
+  // por fila, secuenciales — confirmado con evidencia real que esto escala
+  // linealmente, ~96ms por concepto adicional; auditoría de rendimiento,
+  // agosto 2026, Etapa B). "Cualquier guardado regresa el registro a
+  // PENDIENTE" (aprobar sigue siendo una acción explícita aparte) se
+  // conserva exactamente igual, tanto para lo nuevo como para lo editado.
+  const paraCrear = porGuardar.filter((f) => !f.existenteId);
+  const paraActualizar = porGuardar.filter(
+    (f): f is typeof f & { existenteId: string } => f.existenteId !== undefined
+  );
 
-    await registrarAuditoria({
-      empresaId,
-      usuarioId: usuario.id,
-      entidad: "AvanceConcepto",
-      entidadId: avance.id,
-      accion: fila.existenteId ? "EDITAR" : "CREAR",
-      valorAnterior: fila.existenteId ? { cantidadEjecutada: fila.valorPrevio } : null,
-      valorNuevo: { cantidadEjecutada: fila.cantidadEjecutada },
+  type AuditoriaPendiente = {
+    entidadId: string;
+    accion: "CREAR" | "EDITAR";
+    valorAnterior: Record<string, unknown> | null;
+    valorNuevo: Record<string, unknown>;
+  };
+
+  try {
+    await db.$transaction(async (tx) => {
+      const auditorias: AuditoriaPendiente[] = [];
+
+      // Nuevo: una sola sentencia INSERT ... VALUES (...), (...), ... para
+      // todas las filas nuevas — createManyAndReturn regresa los ids
+      // generados, necesarios para auditar cada uno por separado después.
+      if (paraCrear.length > 0) {
+        const creados = await tx.avanceConcepto.createManyAndReturn({
+          data: paraCrear.map((f) => ({
+            empresaId,
+            conceptoId: f.conceptoId,
+            semanaId: semana.id,
+            cantidadEjecutada: f.cantidadEjecutada,
+            registradoPorId: usuario.id,
+            estatusAprobacion: "PENDIENTE",
+          })),
+          select: { id: true, conceptoId: true },
+        });
+        const idPorConcepto = new Map(creados.map((c) => [c.conceptoId, c.id]));
+        for (const f of paraCrear) {
+          const id = idPorConcepto.get(f.conceptoId);
+          if (!id) continue; // createManyAndReturn siempre regresa lo insertado; defensivo
+          auditorias.push({
+            entidadId: id,
+            accion: "CREAR",
+            valorAnterior: null,
+            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada },
+          });
+        }
+      }
+
+      // Existente: una sola sentencia UPDATE ... FROM (VALUES ...) — Postgres
+      // actualiza cada fila con su propio valor de cantidad en un solo
+      // round-trip, en vez de N UPDATE separados. Los ids interpolados vienen
+      // de `existenteId` (ids ya resueltos server-side contra este proyecto/
+      // semana, nunca del input crudo del usuario) y cada valor pasa por el
+      // mecanismo de parámetros de Prisma (tagged template + Prisma.sql/
+      // Prisma.join) — nunca concatenación de texto, cero riesgo de
+      // inyección SQL.
+      if (paraActualizar.length > 0) {
+        const valores = Prisma.join(
+          paraActualizar.map(
+            (f) => Prisma.sql`(${f.existenteId}::text, ${f.cantidadEjecutada}::numeric)`
+          ),
+          ", "
+        );
+        await tx.$executeRaw`
+          UPDATE avance_conceptos AS a
+          SET
+            "cantidadEjecutada" = v.cantidad,
+            "registradoPorId" = ${usuario.id},
+            "estatusAprobacion" = 'PENDIENTE'::"EstatusAprobacionAvance",
+            "aprobadoPorId" = NULL,
+            "fechaAprobacion" = NULL,
+            "updatedAt" = now()
+          FROM (VALUES ${valores}) AS v(id, cantidad)
+          WHERE a.id = v.id
+        `;
+        for (const f of paraActualizar) {
+          auditorias.push({
+            entidadId: f.existenteId,
+            accion: "EDITAR",
+            valorAnterior: { cantidadEjecutada: f.valorPrevio },
+            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada },
+          });
+        }
+      }
+
+      // Auditoría: un registro por concepto (nunca uno global) en una sola
+      // sentencia INSERT — mismo contenido que registrarAuditoria/Tx
+      // generarían fila por fila, solo agrupado.
+      if (auditorias.length > 0) {
+        await tx.registroAuditoria.createMany({
+          data: auditorias.map((a) => ({
+            empresaId,
+            usuarioId: usuario.id,
+            entidad: "AvanceConcepto",
+            entidadId: a.entidadId,
+            accion: a.accion,
+            valorAnterior: a.valorAnterior
+              ? (JSON.parse(JSON.stringify(a.valorAnterior)) as Prisma.InputJsonValue)
+              : undefined,
+            valorNuevo: JSON.parse(JSON.stringify(a.valorNuevo)) as Prisma.InputJsonValue,
+          })),
+        });
+      }
     });
+  } catch (error) {
+    // Carrera real: dos requests intentando CREAR (nunca antes capturado)
+    // avance para el mismo concepto+semana al mismo tiempo — el @@unique lo
+    // impide a nivel de base de datos, la segunda transacción completa se
+    // revierte (nunca una escritura parcial) y se le pide reintentar con
+    // datos frescos, en vez de pisar en silencio lo que la primera ya guardó.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      throw new ValidacionError(
+        "Alguien más acaba de capturar avance para uno de estos conceptos en esta semana. Actualiza la página e intenta de nuevo."
+      );
+    }
+    throw error;
   }
 
   return { guardados: porGuardar.length };

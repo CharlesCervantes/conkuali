@@ -249,9 +249,38 @@ export async function obtenerResumenCierreSemana(
 // MovimientoSemanal, dentro de una sola transacción atómica.
 // ---------------------------------------------------------------------------
 
+// Auditoría pendiente — se acumula durante el loop de contratistas y se
+// escribe en una sola sentencia INSERT al final (ver cerrarSemana), en vez de
+// 2-3 INSERT por contratista. Un registro por entidad modificada, igual que
+// antes — nunca uno global (Etapa C, auditoría de rendimiento, agosto 2026).
+type AuditoriaPendiente = {
+  entidad: string;
+  entidadId: string;
+  accion: "CREAR" | "EDITAR" | "CAMBIAR_ESTATUS";
+  valorAnterior: Record<string, unknown> | null;
+  valorNuevo: Record<string, unknown>;
+};
+
 type ResultadoCorte =
-  | { tipo: "OMITIDO_LIQUIDADO" }
-  | { tipo: "CREADO" | "RECONCILIADO" | "SIN_CAMBIOS"; montoNeto: number };
+  | { tipo: "OMITIDO_LIQUIDADO"; auditorias: AuditoriaPendiente[] }
+  | { tipo: "CREADO" | "RECONCILIADO" | "SIN_CAMBIOS"; montoNeto: number; auditorias: AuditoriaPendiente[] };
+
+// Todos los cortes ya existentes de este proyecto+semana, con su movimiento,
+// detalle anterior y recibo vigente — en UNA consulta (batch, decompuesta por
+// Prisma en un puñado de queries por relación, nunca una por contratista),
+// en vez de un findUnique con include por cada contratista dentro del loop.
+async function precargarCortesExistentes(tx: Cliente, proyectoId: string, semanaId: string) {
+  return tx.corteSemanal.findMany({
+    where: { proyectoId, semanaId },
+    include: {
+      movimientoSemanal: true,
+      detalle: true,
+      recibos: { where: { estatus: "VIGENTE" } },
+    },
+  });
+}
+
+type CorteExistente = Awaited<ReturnType<typeof precargarCortesExistentes>>[number];
 
 async function generarOReconciliarCorte(
   tx: Cliente,
@@ -263,23 +292,10 @@ async function generarOReconciliarCorte(
     beneficiarioProyectoId: string;
     usuarioId: string;
   },
-  lineas: LineaAvanceParaCierre[]
+  lineas: LineaAvanceParaCierre[],
+  existente: CorteExistente | null,
+  numeroParaCrear: number
 ): Promise<ResultadoCorte> {
-  const existente = await tx.corteSemanal.findUnique({
-    where: {
-      proyectoId_semanaId_beneficiarioProyectoId: {
-        proyectoId: ctx.proyectoId,
-        semanaId: ctx.semanaId,
-        beneficiarioProyectoId: ctx.beneficiarioProyectoId,
-      },
-    },
-    include: {
-      movimientoSemanal: true,
-      detalle: true,
-      recibos: { where: { estatus: "VIGENTE" } },
-    },
-  });
-
   const reciboVigente = existente?.recibos[0] ?? null;
 
   // Financieramente congelado — no se toca nada, ni siquiera el detalle. Un
@@ -289,7 +305,7 @@ async function generarOReconciliarCorte(
     existente?.movimientoSemanal?.estatusPago === "LIQUIDADO" ||
     reciboVigente?.archivoEvidenciaUrl
   ) {
-    return { tipo: "OMITIDO_LIQUIDADO" };
+    return { tipo: "OMITIDO_LIQUIDADO", auditorias: [] };
   }
 
   const montoBruto = lineas.reduce(
@@ -339,7 +355,7 @@ async function generarOReconciliarCorte(
           Number(d.precioUnitarioContratista) === nuevoOrdenado[i].precioUnitarioContratista
       );
 
-    if (sinCambios) return { tipo: "SIN_CAMBIOS", montoNeto };
+    if (sinCambios) return { tipo: "SIN_CAMBIOS", montoNeto, auditorias: [] };
 
     const valorAnterior = {
       montoBruto: Number(existente.montoBruto),
@@ -355,15 +371,19 @@ async function generarOReconciliarCorte(
     };
 
     await tx.corteSemanalConcepto.deleteMany({ where: { corteSemanalId: existente.id } });
+    // `detalle` fuera del `data` de update — un update con relación anidada
+    // obliga a Prisma a hacer un SELECT de reconfirmación después (medido:
+    // Etapa C, auditoría de rendimiento, agosto 2026); separarlo en un
+    // createMany aparte lo evita, sin cambiar qué queda guardado.
     const corte = await tx.corteSemanal.update({
       where: { id: existente.id },
-      data: {
-        montoBruto,
-        montoNeto,
-        estatus: nuevoEstatusCorte,
-        detalle: { create: datosDetalle },
-      },
+      data: { montoBruto, montoNeto, estatus: nuevoEstatusCorte },
     });
+    if (datosDetalle.length > 0) {
+      await tx.corteSemanalConcepto.createMany({
+        data: datosDetalle.map((d) => ({ ...d, corteSemanalId: corte.id })),
+      });
+    }
 
     const movimientoAnterior = existente.movimientoSemanal!;
     const movimiento = await tx.movimientoSemanal.update({
@@ -375,32 +395,30 @@ async function generarOReconciliarCorte(
       },
     });
 
-    await auditarTx(tx, {
-      empresaId: ctx.empresaId,
-      usuarioId: ctx.usuarioId,
-      entidad: "CorteSemanal",
-      entidadId: corte.id,
-      accion: "EDITAR",
-      valorAnterior,
-      valorNuevo: { montoBruto, montoNeto, estatus: nuevoEstatusCorte, detalle: datosDetalle },
-    });
-    await auditarTx(tx, {
-      empresaId: ctx.empresaId,
-      usuarioId: ctx.usuarioId,
-      entidad: "MovimientoSemanal",
-      entidadId: movimiento.id,
-      accion: "EDITAR",
-      valorAnterior: {
-        montoFinSemana: Number(movimientoAnterior.montoFinSemana),
-        estatusAprobacion: movimientoAnterior.estatusAprobacion,
-        estatusPago: movimientoAnterior.estatusPago,
+    const auditorias: AuditoriaPendiente[] = [
+      {
+        entidad: "CorteSemanal",
+        entidadId: corte.id,
+        accion: "EDITAR",
+        valorAnterior,
+        valorNuevo: { montoBruto, montoNeto, estatus: nuevoEstatusCorte, detalle: datosDetalle },
       },
-      valorNuevo: {
-        montoFinSemana: montoNeto,
-        estatusAprobacion: movimiento.estatusAprobacion,
-        estatusPago: movimiento.estatusPago,
+      {
+        entidad: "MovimientoSemanal",
+        entidadId: movimiento.id,
+        accion: "EDITAR",
+        valorAnterior: {
+          montoFinSemana: Number(movimientoAnterior.montoFinSemana),
+          estatusAprobacion: movimientoAnterior.estatusAprobacion,
+          estatusPago: movimientoAnterior.estatusPago,
+        },
+        valorNuevo: {
+          montoFinSemana: montoNeto,
+          estatusAprobacion: movimiento.estatusAprobacion,
+          estatusPago: movimiento.estatusPago,
+        },
       },
-    });
+    ];
 
     // Si había un recibo VIGENTE (sin firmar — si tuviera firma, ni siquiera
     // habríamos llegado aquí, se habría omitido arriba), ya no refleja el
@@ -412,9 +430,7 @@ async function generarOReconciliarCorte(
         where: { id: reciboVigente.id },
         data: { estatus: "SUPERSEDIDO" },
       });
-      await auditarTx(tx, {
-        empresaId: ctx.empresaId,
-        usuarioId: ctx.usuarioId,
+      auditorias.push({
         entidad: "ReciboPago",
         entidadId: reciboVigente.id,
         accion: "CAMBIAR_ESTATUS",
@@ -423,13 +439,13 @@ async function generarOReconciliarCorte(
       });
     }
 
-    return { tipo: "RECONCILIADO", montoNeto };
+    return { tipo: "RECONCILIADO", montoNeto, auditorias };
   }
 
   // No existe corte todavía — nace GENERADO siempre, aunque el monto diera 0
-  // no tiene sentido nacer ya anulado (no hay nada previo que congelar).
-  const numero = (await tx.corteSemanal.count({ where: { proyectoId: ctx.proyectoId } })) + 1;
-
+  // no tiene sentido nacer ya anulado (no hay nada previo que congelar). El
+  // número correlativo llega precalculado (ver cerrarSemana) — ya no se
+  // recuenta con un COUNT por contratista dentro del loop.
   const movimiento = await tx.movimientoSemanal.create({
     data: {
       beneficiarioProyectoId: ctx.beneficiarioProyectoId,
@@ -444,6 +460,8 @@ async function generarOReconciliarCorte(
     },
   });
 
+  // `detalle` fuera del `data` de create, mismo motivo que en el update de
+  // arriba — evita el SELECT de reconfirmación posterior al insert anidado.
   const corte = await tx.corteSemanal.create({
     data: {
       empresaId: ctx.empresaId,
@@ -451,40 +469,44 @@ async function generarOReconciliarCorte(
       semanaId: ctx.semanaId,
       cierreSemanaProyectoId: ctx.cierreSemanaProyectoId,
       beneficiarioProyectoId: ctx.beneficiarioProyectoId,
-      numero,
+      numero: numeroParaCrear,
       montoBruto,
       montoNeto,
       estatus: "GENERADO",
       movimientoSemanalId: movimiento.id,
       generadoPorId: ctx.usuarioId,
-      detalle: { create: datosDetalle },
     },
   });
+  if (datosDetalle.length > 0) {
+    await tx.corteSemanalConcepto.createMany({
+      data: datosDetalle.map((d) => ({ ...d, corteSemanalId: corte.id })),
+    });
+  }
 
-  await auditarTx(tx, {
-    empresaId: ctx.empresaId,
-    usuarioId: ctx.usuarioId,
-    entidad: "CorteSemanal",
-    entidadId: corte.id,
-    accion: "CREAR",
-    valorNuevo: { montoBruto, montoNeto, estatus: "GENERADO", detalle: datosDetalle },
-  });
-  await auditarTx(tx, {
-    empresaId: ctx.empresaId,
-    usuarioId: ctx.usuarioId,
-    entidad: "MovimientoSemanal",
-    entidadId: movimiento.id,
-    accion: "CREAR",
-    valorNuevo: {
-      beneficiarioProyectoId: ctx.beneficiarioProyectoId,
-      semanaId: ctx.semanaId,
-      montoFinSemana: montoNeto,
-      estatusAprobacion: "APROBADO",
-      estatusPago: "PENDIENTE_PAGO",
+  const auditorias: AuditoriaPendiente[] = [
+    {
+      entidad: "CorteSemanal",
+      entidadId: corte.id,
+      accion: "CREAR",
+      valorAnterior: null,
+      valorNuevo: { montoBruto, montoNeto, estatus: "GENERADO", detalle: datosDetalle },
     },
-  });
+    {
+      entidad: "MovimientoSemanal",
+      entidadId: movimiento.id,
+      accion: "CREAR",
+      valorAnterior: null,
+      valorNuevo: {
+        beneficiarioProyectoId: ctx.beneficiarioProyectoId,
+        semanaId: ctx.semanaId,
+        montoFinSemana: montoNeto,
+        estatusAprobacion: "APROBADO",
+        estatusPago: "PENDIENTE_PAGO",
+      },
+    },
+  ];
 
-  return { tipo: "CREADO", montoNeto };
+  return { tipo: "CREADO", montoNeto, auditorias };
 }
 
 export type ResultadoCierreSemana = {
@@ -588,29 +610,37 @@ export async function cerrarSemana(
           porContratista.set(linea.beneficiarioProyectoId!, grupo);
         }
 
-        // Contratistas que YA tenían un corte vigente en un cierre anterior
-        // pero que esta vez no aparecen en `lineas` (su avance aprobado bajó
-        // a 0 tras una reapertura) — hay que reconciliarlos igual, para que
-        // su corte pase a ANULADO en vez de quedar con un monto obsoleto.
-        const cortesVigentesSinLineas = await tx.corteSemanal.findMany({
-          where: {
-            proyectoId,
-            semanaId,
-            estatus: "GENERADO",
-            beneficiarioProyectoId: { notIn: [...porContratista.keys()] },
-          },
-          select: { beneficiarioProyectoId: true },
-        });
-        for (const c of cortesVigentesSinLineas) {
-          if (!porContratista.has(c.beneficiarioProyectoId)) {
+        // Precarga — todos los cortes ya existentes de este proyecto+semana,
+        // con movimiento/detalle/recibo vigente, en una sola consulta batch
+        // (antes: un findUnique con include por cada contratista, dentro del
+        // loop). También resuelve, sin query aparte, qué contratistas tenían
+        // corte vigente en un cierre anterior pero ya no aparecen en `lineas`
+        // (avance aprobado bajó a 0 tras una reapertura) — hay que
+        // reconciliarlos igual, para que su corte pase a ANULADO en vez de
+        // quedar con un monto obsoleto.
+        const cortesExistentes = await precargarCortesExistentes(tx, proyectoId, semanaId);
+        const existentePorBeneficiario = new Map(
+          cortesExistentes.map((c) => [c.beneficiarioProyectoId, c])
+        );
+        for (const c of cortesExistentes) {
+          if (c.estatus === "GENERADO" && !porContratista.has(c.beneficiarioProyectoId)) {
             porContratista.set(c.beneficiarioProyectoId, []);
           }
         }
+
+        // Correlativo de CorteSemanal.numero — antes se recalculaba con un
+        // COUNT por contratista dentro del loop. Toda la operación ocurre
+        // dentro de esta misma transacción atómica, así que nadie más puede
+        // insertar un corte de este proyecto mientras tanto: precalcularlo
+        // una vez y llevarlo en memoria da exactamente los mismos números,
+        // en el mismo orden que antes.
+        let siguienteNumero = (await tx.corteSemanal.count({ where: { proyectoId } })) + 1;
 
         let cortesGenerados = 0;
         let cortesReconciliados = 0;
         let cortesOmitidosPorLiquidado = 0;
         let montoTotalGenerado = 0;
+        const todasLasAuditorias: AuditoriaPendiente[] = [];
 
         for (const [beneficiarioProyectoId, grupoLineas] of porContratista) {
           const resultado = await generarOReconciliarCorte(
@@ -623,15 +653,41 @@ export async function cerrarSemana(
               beneficiarioProyectoId,
               usuarioId: usuario.id,
             },
-            grupoLineas
+            grupoLineas,
+            existentePorBeneficiario.get(beneficiarioProyectoId) ?? null,
+            siguienteNumero
           );
+          todasLasAuditorias.push(...resultado.auditorias);
           if (resultado.tipo === "OMITIDO_LIQUIDADO") {
             cortesOmitidosPorLiquidado++;
           } else {
-            if (resultado.tipo === "CREADO") cortesGenerados++;
+            if (resultado.tipo === "CREADO") {
+              cortesGenerados++;
+              siguienteNumero++;
+            }
             if (resultado.tipo === "RECONCILIADO") cortesReconciliados++;
             montoTotalGenerado += resultado.montoNeto;
           }
+        }
+
+        // Auditoría de todos los cortes/movimientos/recibos tocados en el
+        // loop, en una sola sentencia INSERT — un registro por entidad
+        // modificada (nunca uno global), igual trazabilidad que antes, sin
+        // 2-3 queries de auditoría por contratista.
+        if (todasLasAuditorias.length > 0) {
+          await tx.registroAuditoria.createMany({
+            data: todasLasAuditorias.map((a) => ({
+              empresaId,
+              usuarioId: usuario.id,
+              entidad: a.entidad,
+              entidadId: a.entidadId,
+              accion: a.accion,
+              valorAnterior: a.valorAnterior
+                ? (JSON.parse(JSON.stringify(a.valorAnterior)) as Prisma.InputJsonValue)
+                : undefined,
+              valorNuevo: JSON.parse(JSON.stringify(a.valorNuevo)) as Prisma.InputJsonValue,
+            })),
+          });
         }
 
         // Estimación Cliente — una sola vez por proyecto+semana (no por

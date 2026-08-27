@@ -87,7 +87,11 @@ export async function obtenerPartidasProyectoPrivado(
   return partidasConConceptos(proyectoId);
 }
 
-function partidasConConceptosOperativo(proyectoId: string) {
+// Exportado: lo reutiliza también lib/server/control-de-obra/avance.ts —
+// Avance de obra es una pantalla operativa (visible a Supervisor incluido),
+// nunca debe traer columnas privadas de Concepto (auditoría de rendimiento,
+// agosto 2026: antes reusaba partidasConConceptos, que trae todo).
+export function partidasConConceptosOperativo(proyectoId: string) {
   return db.partida.findMany({
     where: { proyectoId },
     // `orden` casi siempre es 0 (nada en la UI lo captura hoy) — sin un
@@ -132,8 +136,12 @@ export async function obtenerContratistasProyecto(
 ) {
   await obtenerProyecto(usuario, proyectoId);
 
+  // Contratistas solo usa partidas/conceptos para el selector "asignar
+  // concepto existente" (nombre/unidad/id) — nunca precio ni nada privado
+  // (auditoría de rendimiento, agosto 2026: antes reusaba partidasConConceptos,
+  // que trae toda la capa privada de Concepto).
   const [partidas, contratos] = await Promise.all([
-    partidasConConceptos(proyectoId),
+    partidasConConceptosOperativo(proyectoId),
     contratosConConceptos(proyectoId),
   ]);
 
