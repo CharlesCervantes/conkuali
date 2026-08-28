@@ -1,4 +1,6 @@
 import { Card } from "@/components/ui/card";
+import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
+import { BarraAvance } from "@/components/control-de-obra/barra-avance";
 import { formatMoney, formatMoneyOrDash } from "@/lib/dinero";
 
 // Fila normalizada, ya elegida a la capa correspondiente (operativo o
@@ -24,12 +26,25 @@ export type FilaTablaEstimacion = {
   porcentajeAplicado?: number | null;
 };
 
+function formatCantidad(n: number): string {
+  return n.toLocaleString("es-MX", { maximumFractionDigits: 3 });
+}
+
+// Rediseño de lectura horizontal (Contratado → Anterior → Esta semana →
+// Acumulado → Avance) — de 10 columnas agrupadas por encabezados a 6
+// columnas, cada una con su propia jerarquía tipográfica interna en vez de
+// subcolumnas separadas (agosto 2026). `etiquetaPorcentajeAplicado` es
+// "ADM"/"UTIL" — quién llama ya sabe cuál de las dos aplica según el esquema
+// del proyecto, esta tabla solo lo pinta junto a la unidad, sin ensuciar la
+// descripción del concepto.
 export function TablaEstimacion({
   partidas,
   mostrarPorcentajeAplicado,
+  etiquetaPorcentajeAplicado = "%",
 }: {
   partidas: { partidaNombre: string; conceptos: FilaTablaEstimacion[] }[];
   mostrarPorcentajeAplicado?: boolean;
+  etiquetaPorcentajeAplicado?: string;
 }) {
   if (partidas.length === 0) {
     return (
@@ -70,110 +85,96 @@ export function TablaEstimacion({
                 </span>
               </summary>
 
-              <div className="overflow-x-auto border-t border-[var(--border)]">
-                <table className="w-full min-w-[900px] text-sm">
-                  <thead>
-                    <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--muted)]">
-                      <th className="px-4 py-2 font-medium" rowSpan={2}>
-                        Concepto
-                      </th>
-                      <th className="px-3 py-2 text-center font-medium" colSpan={3}>
-                        Contrato
-                      </th>
-                      <th className="px-3 py-2 text-center font-medium" colSpan={2}>
-                        Esta semana
-                      </th>
-                      <th className="px-3 py-2 text-center font-medium" colSpan={3}>
-                        Acumulado
-                      </th>
-                      <th className="px-3 py-2 text-center font-medium" colSpan={2}>
-                        Por ejercer
-                      </th>
-                    </tr>
-                    <tr className="border-b border-[var(--border)] text-right text-xs text-[var(--muted)]">
-                      <th className="px-3 py-1.5 font-medium">Cant.</th>
-                      <th className="px-3 py-1.5 font-medium">P.U.</th>
-                      <th className="px-3 py-1.5 font-medium">Importe</th>
-                      <th className="px-3 py-1.5 font-medium">Cant.</th>
-                      <th className="px-3 py-1.5 font-medium">Importe</th>
-                      <th className="px-3 py-1.5 font-medium">Anterior</th>
-                      <th className="px-3 py-1.5 font-medium">Nuevo</th>
-                      <th className="px-3 py-1.5 font-medium">Importe</th>
-                      <th className="px-3 py-1.5 font-medium">Importe</th>
-                      <th className="px-3 py-1.5 font-medium">%</th>
-                    </tr>
-                  </thead>
+              <div className="border-t border-[var(--border)]">
+                <Table>
+                  <Thead>
+                    <Tr>
+                      <Th className="w-[26%]">Concepto</Th>
+                      <Th className="w-[17%] text-right">Contratado</Th>
+                      <Th className="w-[12%] text-right">Anterior</Th>
+                      <Th className="w-[17%] text-right">Esta semana</Th>
+                      <Th className="w-[17%] text-right">Acumulado</Th>
+                      <Th className="w-[11%] text-right">Avance</Th>
+                    </Tr>
+                  </Thead>
                   <tbody>
                     {partida.conceptos.map((c) => (
-                      <tr
-                        key={c.conceptoId}
-                        className="border-b border-[var(--border)]/60 last:border-0"
-                      >
-                        <td className="px-4 py-2">
+                      <Tr key={c.conceptoId}>
+                        <Td>
                           <p className="text-[var(--foreground)]">{c.descripcionConcepto}</p>
-                          <p className="text-xs text-[var(--muted)]">
+                          <p className="mt-0.5 text-xs text-[var(--muted)]">
                             {c.unidad}
-                            {mostrarPorcentajeAplicado && c.porcentajeAplicado !== null && c.porcentajeAplicado !== undefined
-                              ? ` · ${c.porcentajeAplicado.toLocaleString("es-MX")}%`
-                              : ""}
+                            {mostrarPorcentajeAplicado &&
+                              c.porcentajeAplicado !== null &&
+                              c.porcentajeAplicado !== undefined && (
+                                <span className="ml-1.5 rounded bg-black/[0.04] px-1 py-0.5 text-[10px] font-medium">
+                                  {etiquetaPorcentajeAplicado}{" "}
+                                  {c.porcentajeAplicado.toLocaleString("es-MX")}%
+                                </span>
+                              )}
                           </p>
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {c.cantidadContratada.toLocaleString("es-MX")}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatMoneyOrDash(c.precioUnitario)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatMoneyOrDash(c.importeContratado)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {c.cantidadEstaSemana.toLocaleString("es-MX")}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-medium text-[var(--foreground)]">
-                          {formatMoneyOrDash(c.importeEstaSemana)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {c.cantidadAnterior.toLocaleString("es-MX")}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {c.cantidadAcumulada.toLocaleString("es-MX")}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatMoneyOrDash(c.importeAcumulado)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {formatMoneyOrDash(c.importePorEjercer)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          {c.avancePorcentaje.toLocaleString("es-MX", { maximumFractionDigits: 1 })}%
-                        </td>
-                      </tr>
+                        </Td>
+                        <Td className="text-right">
+                          <p className="font-medium tabular-nums text-[var(--foreground)]">
+                            {formatCantidad(c.cantidadContratada)} {c.unidad}
+                          </p>
+                          <p className="text-xs tabular-nums text-[var(--muted)]">
+                            P.U. {formatMoneyOrDash(c.precioUnitario)}
+                          </p>
+                          <p className="text-xs tabular-nums text-[var(--muted)]">
+                            {formatMoneyOrDash(c.importeContratado)}
+                          </p>
+                        </Td>
+                        <Td className="text-right">
+                          <p className="tabular-nums text-[var(--muted)]">
+                            {formatCantidad(c.cantidadAnterior)} {c.unidad}
+                          </p>
+                        </Td>
+                        <Td className="text-right">
+                          <p className="font-medium tabular-nums text-[var(--foreground)]">
+                            {formatCantidad(c.cantidadEstaSemana)} {c.unidad}
+                          </p>
+                          <p className="text-xs tabular-nums text-[var(--muted)]">
+                            {formatMoneyOrDash(c.importeEstaSemana)}
+                          </p>
+                        </Td>
+                        <Td className="text-right">
+                          <p className="font-medium tabular-nums text-[var(--foreground)]">
+                            {formatCantidad(c.cantidadAcumulada)} / {formatCantidad(c.cantidadContratada)}{" "}
+                            {c.unidad}
+                          </p>
+                          <p className="text-xs tabular-nums text-[var(--muted)]">
+                            {formatMoneyOrDash(c.importeAcumulado)}
+                          </p>
+                        </Td>
+                        <Td>
+                          <BarraAvance porcentaje={c.avancePorcentaje} />
+                          <p className="mt-1 text-right text-xs text-[var(--muted)]">
+                            Saldo: {formatMoney(c.importePorEjercer)}
+                          </p>
+                        </Td>
+                      </Tr>
                     ))}
                   </tbody>
                   <tfoot>
-                    <tr className="text-xs font-semibold text-[var(--foreground)]">
-                      <td className="px-4 py-2">Subtotal de partida</td>
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2 text-right tabular-nums">
+                    <Tr className="border-b-0 bg-black/[0.015] font-semibold text-[var(--foreground)]">
+                      <Td className="text-xs">Subtotal de partida</Td>
+                      <Td className="text-right text-xs tabular-nums">
                         {formatMoneyOrDash(subtotalContratado)}
-                      </td>
-                      <td className="px-3 py-2" />
-                      <td className="px-3 py-2 text-right tabular-nums">
+                      </Td>
+                      <Td />
+                      <Td className="text-right text-xs tabular-nums">
                         {formatMoneyOrDash(subtotalEstaSemana)}
-                      </td>
-                      <td className="px-3 py-2" colSpan={2} />
-                      <td className="px-3 py-2 text-right tabular-nums">
+                      </Td>
+                      <Td className="text-right text-xs tabular-nums">
                         {formatMoneyOrDash(subtotalAcumulado)}
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        {formatMoneyOrDash(subtotalPorEjercer)}
-                      </td>
-                      <td className="px-3 py-2" />
-                    </tr>
+                      </Td>
+                      <Td className="text-right text-xs tabular-nums">
+                        Saldo: {formatMoneyOrDash(subtotalPorEjercer)}
+                      </Td>
+                    </Tr>
                   </tfoot>
-                </table>
+                </Table>
               </div>
             </details>
           </Card>

@@ -11,7 +11,7 @@ import {
   crearPersonalAdministrativo,
   editarPersonalAdministrativo,
   cambiarEstatusBeneficiario,
-  vincularUsuarioBeneficiario,
+  eliminarBeneficiario,
 } from "@/lib/server/catalogos";
 import { SinPermisoError, ValidacionError } from "@/lib/server/control-de-obra/proyectos";
 import { RegistroNoEncontradoError } from "@/lib/server/control-de-obra/estructura-contractual";
@@ -51,6 +51,7 @@ function datosProveedorDesdeFormData(formData: FormData) {
     credito: opcional(formData.get("credito")),
     cuentaBancaria: opcional(formData.get("cuentaBancaria")),
     rfc: opcional(formData.get("rfc")),
+    mismaPersonaQueId: opcional(formData.get("mismaPersonaQueId")),
   };
 }
 
@@ -93,7 +94,10 @@ export async function crearContratistaAction(
 ): Promise<CatalogoFormState> {
   const usuario = await requireSession();
   try {
-    await crearContratista(usuario, { nombre: formData.get("nombre") });
+    await crearContratista(usuario, {
+      nombre: formData.get("nombre"),
+      descripcion: opcional(formData.get("descripcion")),
+    });
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -108,7 +112,11 @@ export async function editarContratistaAction(
 ): Promise<CatalogoFormState> {
   const usuario = await requireSession();
   try {
-    await editarContratista(usuario, beneficiarioId, { nombre: formData.get("nombre") });
+    await editarContratista(usuario, beneficiarioId, {
+      nombre: formData.get("nombre"),
+      descripcion: opcional(formData.get("descripcion")),
+      mismaPersonaQueId: opcional(formData.get("mismaPersonaQueId")),
+    });
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -125,24 +133,24 @@ function datosPersonalDesdeFormData(formData: FormData) {
     nombre: formData.get("nombre"),
     nss: opcional(formData.get("nss")),
     fechaNacimiento: opcional(formData.get("fechaNacimiento")),
+    mismaPersonaQueId: opcional(formData.get("mismaPersonaQueId")),
   };
 }
 
 // El formulario de Personal/Administración guarda identidad y vínculo de
-// Usuario en un solo envío — dos escrituras server-side (una por servicio,
-// cada una con su propia validación) pero una sola experiencia de "Guardar"
-// para quien administra el catálogo.
+// Usuario en un solo envío — una sola transacción server-side (ver
+// crearPersonalAdministrativo/editarPersonalAdministrativo en
+// lib/server/catalogos.ts): si el vínculo falla, la identidad tampoco queda
+// creada/editada a medias (corrección de integridad, auditoría de
+// rendimiento, agosto 2026 — antes eran dos escrituras separadas).
 export async function crearPersonalAction(
   _state: CatalogoFormState,
   formData: FormData
 ): Promise<CatalogoFormState> {
   const usuario = await requireSession();
   try {
-    const beneficiario = await crearPersonalAdministrativo(usuario, datosPersonalDesdeFormData(formData));
     const usuarioVinculadoId = opcional(formData.get("usuarioVinculadoId"));
-    if (usuarioVinculadoId) {
-      await vincularUsuarioBeneficiario(usuario, beneficiario.id, usuarioVinculadoId);
-    }
+    await crearPersonalAdministrativo(usuario, datosPersonalDesdeFormData(formData), usuarioVinculadoId);
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -157,9 +165,8 @@ export async function editarPersonalAction(
 ): Promise<CatalogoFormState> {
   const usuario = await requireSession();
   try {
-    await editarPersonalAdministrativo(usuario, beneficiarioId, datosPersonalDesdeFormData(formData));
     const usuarioVinculadoId = opcional(formData.get("usuarioVinculadoId"));
-    await vincularUsuarioBeneficiario(usuario, beneficiarioId, usuarioVinculadoId);
+    await editarPersonalAdministrativo(usuario, beneficiarioId, datosPersonalDesdeFormData(formData), usuarioVinculadoId);
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -179,4 +186,28 @@ export async function cambiarEstatusBeneficiarioAction(
   const usuario = await requireSession();
   await cambiarEstatusBeneficiario(usuario, beneficiarioId, activo);
   revalidatePath(`/catalogos/${ruta}`);
+}
+
+// ---------------------------------------------------------------------------
+// Eliminar definitivamente — solo cuando el Beneficiario no tiene ningún
+// historial de negocio (eliminarBeneficiario ya lo re-verifica siempre,
+// nunca confía en lo que la UI mostró).
+// ---------------------------------------------------------------------------
+
+export type EliminarBeneficiarioFormState = { error?: string; eliminado?: boolean } | undefined;
+
+export async function eliminarBeneficiarioAction(
+  ruta: "proveedores" | "contratistas" | "personal",
+  beneficiarioId: string,
+  _state: EliminarBeneficiarioFormState,
+  _formData: FormData
+): Promise<EliminarBeneficiarioFormState> {
+  const usuario = await requireSession();
+  try {
+    await eliminarBeneficiario(usuario, beneficiarioId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/catalogos/${ruta}`);
+  return { eliminado: true };
 }

@@ -9,7 +9,7 @@ import { DetalleCorteModal } from "./detalle-corte-modal";
 import {
   generarReciboAction,
   type GenerarReciboFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type {
   ResumenFinancieroContratista,
   CorteHistorial,

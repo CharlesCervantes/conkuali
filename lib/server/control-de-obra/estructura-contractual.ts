@@ -248,11 +248,16 @@ export function sumarContratoVigentePorBeneficiario(
   return mapa;
 }
 
+// `contratista.descripcion` es la especialidad general del catálogo — el
+// formulario "Nuevo contrato" la usa para precargar la Descripción de ESE
+// contrato al elegir un contratista existente (editable ahí sin tocar el
+// catálogo, ver FormNuevoContrato).
 export async function listarContratistasDisponibles(usuario: UsuarioSesion) {
   if (!usuario.empresa) throw new SinPermisoError();
   return db.beneficiario.findMany({
     where: { empresaId: usuario.empresa.id, tipo: "CONTRATISTA", activo: true },
     orderBy: { nombre: "asc" },
+    include: { contratista: { select: { descripcion: true } } },
   });
 }
 
@@ -653,7 +658,17 @@ const DatosContratoSchema = z
 async function obtenerOCrearParticipacionContratista(
   empresaId: string,
   proyectoId: string,
-  datos: { beneficiarioId?: string | null; nombreNuevoContratista?: string | null }
+  datos: {
+    beneficiarioId?: string | null;
+    nombreNuevoContratista?: string | null;
+    // Solo se usa para SEMBRAR el catálogo (Contratista.descripcion) cuando
+    // el contratista es nuevo — este primer contrato todavía no tiene una
+    // especialidad capturada en Catálogos, así que su propia Descripción es
+    // el mejor punto de partida. Un contratista ya existente nunca se
+    // sobreescribe desde aquí (ver crearContratoContratista) — solo se edita
+    // desde Catálogos.
+    descripcionParaCatalogoSiEsNuevo?: string | null;
+  }
 ) {
   let beneficiarioId = datos.beneficiarioId ?? undefined;
 
@@ -663,6 +678,9 @@ async function obtenerOCrearParticipacionContratista(
         empresaId,
         tipo: "CONTRATISTA",
         nombre: datos.nombreNuevoContratista,
+        contratista: {
+          create: { descripcion: datos.descripcionParaCatalogoSiEsNuevo || null },
+        },
       },
     });
     beneficiarioId = beneficiario.id;
@@ -693,11 +711,10 @@ export async function crearContratoContratista(
   await obtenerProyecto(usuario, proyectoId);
   const datos = DatosContratoSchema.parse(datosCrudos);
 
-  const beneficiarioProyecto = await obtenerOCrearParticipacionContratista(
-    empresaId,
-    proyectoId,
-    datos
-  );
+  const beneficiarioProyecto = await obtenerOCrearParticipacionContratista(empresaId, proyectoId, {
+    ...datos,
+    descripcionParaCatalogoSiEsNuevo: datos.descripcion,
+  });
 
   const contrato = await db.contratoContratista.create({
     data: {

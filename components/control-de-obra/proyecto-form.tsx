@@ -35,6 +35,7 @@ type ValoresProyecto = {
   esquemaContractual?: string | null;
   porcentajeUtilidadDefault?: string | null;
   porcentajeAdministracionDefault?: string | null;
+  porcentajeAdministracionPrivadoDefault?: string | null;
 };
 
 export function ProyectoForm({
@@ -44,6 +45,7 @@ export function ProyectoForm({
   textoBoton,
   esquemaBloqueado = false,
   requiereConfirmacionEsquema = false,
+  puedeVerPrivado = false,
 }: {
   action: (state: FormState, formData: FormData) => Promise<FormState>;
   modo: "crear" | "editar";
@@ -58,6 +60,12 @@ export function ProyectoForm({
   // asignar uno es la última oportunidad de corregirlo, así que exige
   // confirmación explícita antes de guardar (sección 3 del rediseño).
   requiereConfirmacionEsquema?: boolean;
+  // Vista privada (ADMIN/DIRECTOR con Vista Privada activa, nunca
+  // Supervisor/Master) — gatea el %Utilidad/%Administración por default, que
+  // es información privada. Independiente de esquemaBloqueado: el selector
+  // de esquema en sí sigue bloqueado igual, pero el porcentaje debe poder
+  // editarse aunque el esquema ya esté fijo (corrección de sesión, agosto 2026).
+  puedeVerPrivado?: boolean;
 }) {
   const [state, formAction, pending] = useActionState<FormState, FormData>(
     action,
@@ -170,7 +178,7 @@ export function ProyectoForm({
               )}
             </div>
 
-            {!esquemaBloqueado && esquema === "PRECIO_ALZADO" && (
+            {puedeVerPrivado && esquema === "PRECIO_ALZADO" && (
               <Campo
                 label="% Utilidad por default"
                 name="porcentajeUtilidadDefault"
@@ -178,13 +186,32 @@ export function ProyectoForm({
                 defaultValue={valoresIniciales?.porcentajeUtilidadDefault ?? undefined}
               />
             )}
-            {!esquemaBloqueado && esquema === "ADMINISTRACION" && (
+            {/* Sin gate de Vista Privada — el % Administración lo usa también
+                el motor operativo (Cliente normal), y el cliente sí puede
+                verlo (a diferencia de %Utilidad de Precio Alzado, que es
+                margen oculto). Gastos cobrables en Estimación Cliente,
+                agosto 2026. */}
+            {esquema === "ADMINISTRACION" && (
               <Campo
                 label="% Administración por default"
                 name="porcentajeAdministracionDefault"
                 type="number"
                 defaultValue={valoresIniciales?.porcentajeAdministracionDefault ?? undefined}
               />
+            )}
+            {puedeVerPrivado && esquema === "ADMINISTRACION" && (
+              <div>
+                <Campo
+                  label="% Administración privado"
+                  name="porcentajeAdministracionPrivadoDefault"
+                  type="number"
+                  defaultValue={valoresIniciales?.porcentajeAdministracionPrivadoDefault ?? undefined}
+                />
+                <p className="mt-1.5 text-xs text-[var(--muted)]">
+                  Vacío = usa el % Administración por default de la izquierda
+                  en Cliente Priv./Contrato General Privado.
+                </p>
+              </div>
             )}
           </div>
 

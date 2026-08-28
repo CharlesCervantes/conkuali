@@ -11,7 +11,7 @@ import {
   rechazarOrdenCompraAction,
   cancelarOrdenCompraAction,
   type OrdenCompraFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import { FormularioOrdenCompra } from "./formulario-orden-compra";
 import { FormularioGastoDesdeOC } from "./formulario-gasto-desde-oc";
 import type { FilaOrdenCompra } from "@/lib/server/control-de-obra/ordenes-compra";

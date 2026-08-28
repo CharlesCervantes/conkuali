@@ -8,7 +8,7 @@ import { formatMoney } from "@/lib/dinero";
 import {
   reabrirSemanaAction,
   type ReabrirSemanaFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { ResumenCierreSemana } from "@/lib/server/control-de-obra/cierre-semana";
 
 function formatFecha(iso: string): string {

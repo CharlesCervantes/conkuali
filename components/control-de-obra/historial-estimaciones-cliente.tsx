@@ -12,10 +12,11 @@ import {
   aplicarFondoEstimacionAction,
   type RegistrarPagoFormState,
   type AplicarFondoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type {
   FilaHistorialEstimacion,
   EstadoPagoEstimacion,
+  CapaValorizacion,
 } from "@/lib/server/control-de-obra/financiero-cliente";
 
 const ESTADO_ESTILO: Record<EstadoPagoEstimacion, string> = {
@@ -31,17 +32,22 @@ const ESTADO_LABEL: Record<EstadoPagoEstimacion, string> = {
 };
 
 // Toda obra se cobra por Estimación — una sola tabla, sin ramas por esquema
-// (rediseño del modelo financiero del cliente, agosto 2026). "Aplicar fondo"
-// es una decisión explícita de Administrador/Director, nunca automática al
-// registrar una aportación — solo aparece si hay fondo disponible y la fila
-// todavía tiene saldo pendiente.
+// (rediseño del modelo financiero del cliente, agosto 2026). El "Importe"
+// por fila varía según la capa de la pantalla (operativo en Cliente, privado
+// en Cliente Priv.); las columnas financieras (Aplicado fondo/Pago
+// directo/Pendiente/Estado) y las acciones son siempre la MISMA realidad
+// (ancladas al total privado real) y solo se pintan si el servidor las
+// incluyó (`f.financiero !== null` — nunca se decide aquí ocultar un dato
+// que sí llegó, el servidor ya lo podó según puedeVerFinancieroCliente).
 export function HistorialEstimacionesCliente({
   proyectoId,
+  capa,
   fondoDisponible,
   filas,
   puedeRegistrar,
 }: {
   proyectoId: string;
+  capa: CapaValorizacion;
   fondoDisponible: number;
   filas: FilaHistorialEstimacion[];
   puedeRegistrar: boolean;
@@ -50,6 +56,7 @@ export function HistorialEstimacionesCliente({
   const [fondoParaId, setFondoParaId] = useState<string | null>(null);
   const filaPago = filas.find((f) => f.id === pagoParaId) ?? null;
   const filaFondo = filas.find((f) => f.id === fondoParaId) ?? null;
+  const mostrarFinanciero = filas.some((f) => f.financiero !== null);
 
   return (
     <Card className="enter p-5">
@@ -67,11 +74,16 @@ export function HistorialEstimacionesCliente({
                 <Th>Estimación</Th>
                 <Th>Semana</Th>
                 <Th className="text-right">Importe</Th>
-                <Th className="text-right">Aplicado fondo</Th>
-                <Th className="text-right">Pago directo</Th>
-                <Th className="text-right">Pendiente</Th>
-                <Th>Estado</Th>
+                {mostrarFinanciero && (
+                  <>
+                    <Th className="text-right">Aplicado fondo</Th>
+                    <Th className="text-right">Pago directo</Th>
+                    <Th className="text-right">Pendiente</Th>
+                    <Th>Estado</Th>
+                  </>
+                )}
                 {puedeRegistrar && <Th />}
+                <Th>Documento</Th>
               </Tr>
             </Thead>
             <tbody>
@@ -82,19 +94,23 @@ export function HistorialEstimacionesCliente({
                     Semana {f.semanaNumero}/{f.semanaAnio}
                   </Td>
                   <Td className="text-right tabular-nums">{formatMoney(f.importe)}</Td>
-                  <Td className="text-right tabular-nums">{formatMoney(f.aplicadoFondo)}</Td>
-                  <Td className="text-right tabular-nums">{formatMoney(f.pagoDirecto)}</Td>
-                  <Td className="text-right tabular-nums">{formatMoney(f.pendiente)}</Td>
-                  <Td>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${ESTADO_ESTILO[f.estado]}`}
-                    >
-                      {ESTADO_LABEL[f.estado]}
-                    </span>
-                  </Td>
-                  {puedeRegistrar && (
+                  {mostrarFinanciero && f.financiero && (
+                    <>
+                      <Td className="text-right tabular-nums">{formatMoney(f.financiero.aplicadoFondo)}</Td>
+                      <Td className="text-right tabular-nums">{formatMoney(f.financiero.pagoDirecto)}</Td>
+                      <Td className="text-right tabular-nums">{formatMoney(f.financiero.pendiente)}</Td>
+                      <Td>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-xs font-medium ${ESTADO_ESTILO[f.financiero.estado]}`}
+                        >
+                          {ESTADO_LABEL[f.financiero.estado]}
+                        </span>
+                      </Td>
+                    </>
+                  )}
+                  {puedeRegistrar && f.financiero && (
                     <Td>
-                      {f.pendiente > 0 && (
+                      {f.financiero.pendiente > 0 && (
                         <div className="flex flex-col items-start gap-0.5">
                           {fondoDisponible > 0 && (
                             <button
@@ -116,6 +132,16 @@ export function HistorialEstimacionesCliente({
                       )}
                     </Td>
                   )}
+                  <Td>
+                    <a
+                      href={`/api/control-de-obra/proyectos/${proyectoId}/estimaciones/${f.id}${capa === "privado" ? "/privado" : ""}/pdf`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs font-medium text-[var(--brand)] hover:underline"
+                    >
+                      Descargar
+                    </a>
+                  </Td>
                 </Tr>
               ))}
             </tbody>
@@ -123,22 +149,22 @@ export function HistorialEstimacionesCliente({
         </div>
       )}
 
-      {filaPago && (
+      {filaPago && filaPago.financiero && (
         <ModalRegistrarPago
           proyectoId={proyectoId}
           estimacionId={filaPago.id}
           numero={filaPago.numero}
-          pendiente={filaPago.pendiente}
+          pendiente={filaPago.financiero.pendiente}
           onClose={() => setPagoParaId(null)}
         />
       )}
 
-      {filaFondo && (
+      {filaFondo && filaFondo.financiero && (
         <ModalAplicarFondo
           proyectoId={proyectoId}
           estimacionId={filaFondo.id}
           numero={filaFondo.numero}
-          pendiente={filaFondo.pendiente}
+          pendiente={filaFondo.financiero.pendiente}
           fondoDisponible={fondoDisponible}
           onClose={() => setFondoParaId(null)}
         />

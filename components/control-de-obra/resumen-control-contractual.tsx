@@ -8,11 +8,14 @@ const ESQUEMA_CONTRACTUAL_LABEL: Record<string, string> = {
   ADMINISTRACION: "Administración",
 };
 
-// Toda obra se cobra por Estimación — ya no hay un "esquema financiero" que
-// elegir ni bloque que ocultar por falta de configuración. El bloque de
-// Fondo es puramente data-driven: aparece solo si el proyecto ya recibió
-// alguna aportación (rediseño del modelo financiero del cliente, agosto
-// 2026).
+// Dos bloques deliberadamente separados, nunca mezclados en una fórmula
+// (rediseño Cliente/Cliente Priv., agosto 2026): "Avance contractual" varía
+// según la capa de valorización de la pantalla (operativo en Cliente,
+// privado en Cliente Priv.) y es visible sin restricción financiera. "Fondo
+// del cliente" es dinero real, ancorado siempre al total privado — el
+// servidor ya lo omite (`datos.financiero === null`) si el usuario no tiene
+// puedeVerFinancieroCliente, así que aquí solo se decide si HAY algo que
+// pintar, nunca si se debe ocultar un dato que sí llegó.
 export function ResumenControlContractual({
   datos,
 }: {
@@ -26,7 +29,10 @@ export function ResumenControlContractual({
           Información contractual
         </p>
         <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Dato etiqueta="Monto del contrato" valor={formatMoney(datos.proyecto.montoContrato)} />
+          <Dato
+            etiqueta="Monto del contrato"
+            valor={formatMoney(datos.avanceContractual.montoContrato)}
+          />
           <Dato
             etiqueta="Esquema contractual"
             valor={
@@ -44,40 +50,58 @@ export function ResumenControlContractual({
       </Card>
 
       <Card className="enter p-5 ring-2 ring-emerald-200">
-        <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">Contrato</p>
+        <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
+          Avance contractual
+        </p>
         <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <Dato etiqueta="Total estimado emitido" valor={formatMoney(datos.contrato.totalEstimado)} />
-          <Dato etiqueta="Total cubierto" valor={formatMoney(datos.contrato.totalCubierto)} />
           <Dato
-            etiqueta="Pendiente por cobrar"
-            valor={formatMoney(datos.contrato.pendienteCobro)}
-            resaltar={datos.contrato.pendienteCobro > 0}
+            etiqueta="Total estimado emitido"
+            valor={formatMoney(datos.avanceContractual.totalEstimado)}
           />
           <Dato
             etiqueta="Saldo contractual por ejercer"
-            valor={formatMoney(datos.contrato.saldoPorEjercer)}
+            valor={formatMoney(datos.avanceContractual.saldoPorEjercer)}
           />
           <Dato
-            etiqueta="% avance financiero"
-            valor={`${datos.contrato.porcentajeEjercido.toLocaleString("es-MX", { maximumFractionDigits: 1 })}%`}
+            etiqueta="% avance"
+            valor={`${datos.avanceContractual.porcentajeEjercido.toLocaleString("es-MX", { maximumFractionDigits: 1 })}%`}
           />
         </dl>
       </Card>
 
-      {datos.fondo && (
+      {datos.financiero && (
         <Card className="enter p-5">
           <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
-            Fondo del cliente
+            Situación financiera real
           </p>
           <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <Dato etiqueta="Total aportado" valor={formatMoney(datos.fondo.aportado)} />
-            <Dato etiqueta="Total aplicado" valor={formatMoney(datos.fondo.aplicado)} />
-            {datos.fondo.disponible >= 0 ? (
-              <Dato etiqueta="Fondo disponible" valor={formatMoney(datos.fondo.disponible)} />
+            <Dato etiqueta="Total cubierto" valor={formatMoney(datos.financiero.totalCubierto)} />
+            <Dato
+              etiqueta="Pendiente por cobrar"
+              valor={formatMoney(datos.financiero.pendienteFinancieroReal)}
+              resaltar={datos.financiero.pendienteFinancieroReal > 0}
+            />
+          </dl>
+        </Card>
+      )}
+
+      {datos.financiero?.fondo && (
+        <Card className="enter p-5">
+          <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
+            Fondo disponible del proyecto
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            Efectivo real del proyecto — compartido entre General y Privado, nunca partido entre capas.
+          </p>
+          <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <Dato etiqueta="Total aportado" valor={formatMoney(datos.financiero.fondo.aportado)} />
+            <Dato etiqueta="Total aplicado" valor={formatMoney(datos.financiero.fondo.aplicado)} />
+            {datos.financiero.fondo.disponible >= 0 ? (
+              <Dato etiqueta="Fondo disponible" valor={formatMoney(datos.financiero.fondo.disponible)} />
             ) : (
               <Dato
                 etiqueta="Fondo por reponer"
-                valor={formatMoney(Math.abs(datos.fondo.disponible))}
+                valor={formatMoney(Math.abs(datos.financiero.fondo.disponible))}
                 resaltar
               />
             )}

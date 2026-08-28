@@ -11,7 +11,7 @@ import { formatearFecha } from "@/lib/fecha";
 import {
   registrarAportacionFondoAction,
   type RegistrarAportacionFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { FilaAportacionFondo } from "@/lib/server/control-de-obra/financiero-cliente";
 
 export function AportacionesFondo({

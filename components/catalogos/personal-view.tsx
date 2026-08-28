@@ -12,6 +12,7 @@ import {
   type CatalogoFormState,
 } from "@/app/(app)/catalogos/actions";
 import type { FilaPersonalAdministrativo } from "@/lib/server/catalogos";
+import { ModalEliminarBeneficiario } from "@/components/catalogos/modal-eliminar-beneficiario";
 
 const ROL_LABEL: Record<string, string> = {
   MASTER: "Master",
@@ -23,12 +24,18 @@ const ROL_LABEL: Record<string, string> = {
 export function PersonalView({
   personal,
   usuariosActivos,
+  beneficiariosParaVincular,
+  puedeEliminar,
 }: {
   personal: FilaPersonalAdministrativo[];
   usuariosActivos: { id: string; nombre: string; rol: string }[];
+  beneficiariosParaVincular: { id: string; nombre: string; tipo: string }[];
+  puedeEliminar: boolean;
 }) {
   const [editando, setEditando] = useState<string | null>(null);
   const [creando, setCreando] = useState(false);
+  const [eliminando, setEliminando] = useState<string | null>(null);
+  const personaEliminando = personal.find((p) => p.id === eliminando) ?? null;
 
   // Un Usuario ya vinculado a OTRO beneficiario no debe ofrecerse en el
   // selector de una fila distinta (la unicidad real la garantiza la base de
@@ -54,6 +61,7 @@ export function PersonalView({
             <FormularioPersonal
               persona={p}
               usuariosDisponibles={usuariosActivos.filter((u) => !vinculadosAOtros(p.id).has(u.id))}
+              beneficiariosDisponibles={beneficiariosParaVincular.filter((b) => b.id !== p.id)}
               onGuardado={() => setEditando(null)}
               onCancelar={() => setEditando(null)}
             />
@@ -73,6 +81,11 @@ export function PersonalView({
                     ? `Relacionado con usuario ${p.usuarioVinculado.nombre} (${ROL_LABEL[p.usuarioVinculado.rol] ?? p.usuarioVinculado.rol})`
                     : "Sin usuario relacionado"}
                 </p>
+                {p.mismaPersonaQue && (
+                  <p className="mt-0.5 text-xs text-[var(--muted)]">
+                    Misma persona que: <span className="font-medium">{p.mismaPersonaQue.nombre}</span>
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <button
@@ -89,16 +102,38 @@ export function PersonalView({
                 >
                   {p.activo ? "Desactivar" : "Activar"}
                 </button>
+                {puedeEliminar && (
+                  <button
+                    type="button"
+                    onClick={() => setEliminando(p.id)}
+                    className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+                  >
+                    Eliminar
+                  </button>
+                )}
               </div>
             </div>
           )}
         </Card>
       ))}
 
+      {personaEliminando && (
+        <ModalEliminarBeneficiario
+          ruta="personal"
+          beneficiarioId={personaEliminando.id}
+          nombre={personaEliminando.nombre}
+          activo={personaEliminando.activo}
+          puedeEliminar={personaEliminando.puedeEliminar}
+          motivos={personaEliminando.motivosBloqueoEliminacion}
+          onClose={() => setEliminando(null)}
+        />
+      )}
+
       {creando ? (
         <Card className="enter p-5">
           <FormularioPersonal
             usuariosDisponibles={usuariosActivos.filter((u) => !vinculadosAOtros("").has(u.id))}
+            beneficiariosDisponibles={beneficiariosParaVincular}
             onGuardado={() => setCreando(false)}
             onCancelar={() => setCreando(false)}
           />
@@ -119,11 +154,13 @@ export function PersonalView({
 function FormularioPersonal({
   persona,
   usuariosDisponibles,
+  beneficiariosDisponibles,
   onGuardado,
   onCancelar,
 }: {
   persona?: FilaPersonalAdministrativo;
   usuariosDisponibles: { id: string; nombre: string; rol: string }[];
+  beneficiariosDisponibles: { id: string; nombre: string; tipo: string }[];
   onGuardado: () => void;
   onCancelar: () => void;
 }) {
@@ -166,6 +203,25 @@ function FormularioPersonal({
             ))}
           </select>
         </div>
+        {persona && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+              ¿Es la misma persona que... (opcional)
+            </label>
+            <select
+              name="mismaPersonaQueId"
+              defaultValue={persona.mismaPersonaQue?.id ?? ""}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+            >
+              <option value="">No es duplicado de nadie</option>
+              {beneficiariosDisponibles.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.nombre} ({b.tipo})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>

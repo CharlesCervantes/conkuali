@@ -10,7 +10,7 @@ import { CATEGORIAS_GASTO, CATEGORIA_GASTO_LABEL } from "@/lib/control-de-obra/c
 import {
   generarGastoDesdeOrdenCompraAction,
   type OrdenCompraFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { FilaOrdenCompra } from "@/lib/server/control-de-obra/ordenes-compra";
 
 const METODOS_PAGO = [

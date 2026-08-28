@@ -46,8 +46,8 @@ model Empresa {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  plan            Plan?    @relation(fields: [planId], references: [id])
-  planId          String?
+  plan   Plan?   @relation(fields: [planId], references: [id])
+  planId String?
 
   // Recibos de pago (sección "Recibo de Pago" de 02-control-de-obra.md) — el
   // folio es único por empresa, no por proyecto. `ultimoFolioRecibo` es el
@@ -69,21 +69,21 @@ model Empresa {
   ultimoFolioReposicion  Int @default(0)
   ultimoFolioOrdenCompra Int @default(0)
 
-  dominiosCorreo      DominioCorreo[]
-  usuarios            Usuario[]
-  registros           RegistroAuditoria[]
-  proyectos           Proyecto[]
-  beneficiarios       Beneficiario[]
-  semanas             Semana[]
-  avancesConcepto     AvanceConcepto[]
-  cierresSemana       CierreSemanaProyecto[]
-  cortesSemana        CorteSemanal[]
-  recibosPago         ReciboPago[]
-  estimacionesCliente EstimacionCliente[]
+  dominiosCorreo         DominioCorreo[]
+  usuarios               Usuario[]
+  registros              RegistroAuditoria[]
+  proyectos              Proyecto[]
+  beneficiarios          Beneficiario[]
+  semanas                Semana[]
+  avancesConcepto        AvanceConcepto[]
+  cierresSemana          CierreSemanaProyecto[]
+  cortesSemana           CorteSemanal[]
+  recibosPago            ReciboPago[]
+  estimacionesCliente    EstimacionCliente[]
   movimientosFinancieros MovimientoFinancieroCliente[]
-  gastosObra          GastoObra[]
-  reposicionesGastos  ReposicionGastos[]
-  ordenesCompra       OrdenCompra[]
+  gastosObra             GastoObra[]
+  reposicionesGastos     ReposicionGastos[]
+  ordenesCompra          OrdenCompra[]
 
   @@map("empresas")
 }
@@ -106,8 +106,8 @@ model Plan {
   nombre    String   @unique
   createdAt DateTime @default(now())
 
-  empresas  Empresa[]
-  modulos   PlanModulo[]
+  empresas Empresa[]
+  modulos  PlanModulo[]
 
   @@map("planes")
 }
@@ -144,11 +144,11 @@ model Usuario {
   updatedAt    DateTime   @updatedAt
 
   // null únicamente para rol MASTER (usuario de plataforma, sin empresa).
-  empresa      Empresa?   @relation(fields: [empresaId], references: [id])
-  empresaId    String?
+  empresa   Empresa? @relation(fields: [empresaId], references: [id])
+  empresaId String?
 
-  sesiones     Sesion[]
-  registros    RegistroAuditoria[]
+  sesiones  Sesion[]
+  registros RegistroAuditoria[]
 
   aditivasSolicitadas    Aditiva[]              @relation("AditivasSolicitadas")
   aditivasAutorizadas    Aditiva[]              @relation("AditivasAutorizadas")
@@ -157,27 +157,29 @@ model Usuario {
   movimientosFondoPuente MovimientoSemanal[]    @relation("FondoPuente")
   movimientosLiquidados  MovimientoSemanal[]    @relation("MovimientoLiquidado")
   comentarios            ComentarioMovimiento[]
-  avancesRegistrados     AvanceConcepto[]        @relation("AvanceRegistrado")
-  avancesAprobados       AvanceConcepto[]        @relation("AvanceAprobado")
+  avancesRegistrados     AvanceConcepto[]       @relation("AvanceRegistrado")
+  avancesAprobados       AvanceConcepto[]       @relation("AvanceAprobado")
 
   cierresSemanaGenerados  CierreSemanaProyecto[] @relation("CierreSemanaGenerado")
   cierresSemanaReabiertos CierreSemanaProyecto[] @relation("CierreSemanaReabierto")
   cortesSemanaGenerados   CorteSemanal[]         @relation("CorteSemanalGenerado")
 
-  recibosGenerados        ReciboPago[] @relation("ReciboPagoGenerado")
-  recibosEvidenciaSubida  ReciboPago[] @relation("ReciboPagoEvidenciaSubida")
+  recibosGenerados       ReciboPago[] @relation("ReciboPagoGenerado")
+  recibosEvidenciaSubida ReciboPago[] @relation("ReciboPagoEvidenciaSubida")
 
-  estimacionesClienteGeneradas EstimacionCliente[] @relation("EstimacionClienteGenerada")
-  estimacionesClienteEmitidas  EstimacionCliente[] @relation("EstimacionClienteEmitida")
+  estimacionesClienteGeneradas             EstimacionCliente[]           @relation("EstimacionClienteGenerada")
+  estimacionesClienteEmitidas              EstimacionCliente[]           @relation("EstimacionClienteEmitida")
+  estimacionesClienteCapaGeneradas         EstimacionClienteCapa[]       @relation("EstimacionClienteCapaGenerada")
+  estimacionesClienteCapaEmitidas          EstimacionClienteCapa[]       @relation("EstimacionClienteCapaEmitida")
   movimientosFinancierosClienteRegistrados MovimientoFinancieroCliente[]
 
   gastosCapturados GastoObra[] @relation("GastoCapturado")
   gastosRevisados  GastoObra[] @relation("GastoRevisado")
 
-  reposicionesCreadas  ReposicionGastos[] @relation("ReposicionCreada")
+  reposicionesCreadas   ReposicionGastos[] @relation("ReposicionCreada")
   reposicionesRevisadas ReposicionGastos[] @relation("ReposicionRevisada")
 
-  ordenesCompraCreadas    OrdenCompra[] @relation("OCCreada")
+  ordenesCompraCreadas     OrdenCompra[] @relation("OCCreada")
   ordenesCompraAutorizadas OrdenCompra[] @relation("OCAutorizada")
 
   // Vínculo opcional con la identidad de pago (Beneficiario) de esta misma
@@ -327,9 +329,21 @@ model Proyecto {
   // propósito. Solo uno de los dos porcentajes default aplica, según el
   // esquema — se guardan separados (nunca un campo genérico) para que su
   // significado nunca dependa de una lectura implícita del esquema.
-  esquemaContractual            EsquemaContractual?
-  porcentajeUtilidadDefault      Decimal?            @db.Decimal(5, 2)
-  porcentajeAdministracionDefault Decimal?           @db.Decimal(5, 2)
+  esquemaContractual              EsquemaContractual?
+  porcentajeUtilidadDefault       Decimal?            @db.Decimal(5, 2)
+  porcentajeAdministracionDefault Decimal?            @db.Decimal(5, 2)
+
+  // Override privado del %Administración de arriba — mismo patrón que
+  // Concepto.precioUnitarioContratistaPrivado: null = todavía no se editó
+  // aquí, el motor privado (Cliente Priv./Contrato General Privado) usa el
+  // %Administración por default de arriba; una vez editado, independiente,
+  // nunca se resincroniza. Necesario porque ese default alimenta también al
+  // motor OPERATIVO (Cliente/Contrato General normal, que no es privado —
+  // ver comentario en calcularPrecioOperativoConcepto), y el valor comercial
+  // que se le aplica al cliente puede diferir del que se usa internamente
+  // (decisión de sesión, agosto 2026). %Utilidad no tiene equivalente aquí
+  // porque ya es 100% privada — el motor operativo nunca la usa.
+  porcentajeAdministracionPrivadoDefault Decimal? @db.Decimal(5, 2)
 
   // Contador atómico de Estimación Cliente (sección "Cliente" de
   // 04-modulo-control-de-obra.md) — correlativo POR PROYECTO (a diferencia
@@ -338,18 +352,26 @@ model Proyecto {
   // EstimacionCliente — mismo mecanismo que Empresa.ultimoFolioRecibo.
   ultimoNumeroEstimacion Int @default(0)
 
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  // Correlativos por capa (arquitectura por capas, agosto 2026) — Cliente y
+  // Cliente Priv. emiten con folio propio e independiente, asignado solo al
+  // emitir esa capa (ver EstimacionClienteCapa.numero). El backfill arranca
+  // ambos clonando el valor de ultimoNumeroEstimacion de arriba, así la
+  // numeración futura nunca choca con el historial ya emitido.
+  ultimoNumeroEstimacionOperativo Int @default(0)
+  ultimoNumeroEstimacionPrivado   Int @default(0)
 
-  beneficiarios       BeneficiarioProyecto[]
-  partidas            Partida[]
-  cierresSemana       CierreSemanaProyecto[]
-  cortesSemana        CorteSemanal[]
-  estimacionesCliente EstimacionCliente[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  beneficiarios          BeneficiarioProyecto[]
+  partidas               Partida[]
+  cierresSemana          CierreSemanaProyecto[]
+  cortesSemana           CorteSemanal[]
+  estimacionesCliente    EstimacionCliente[]
   movimientosFinancieros MovimientoFinancieroCliente[]
-  gastosObra          GastoObra[]
-  reposicionesGastos  ReposicionGastos[]
-  ordenesCompra       OrdenCompra[]
+  gastosObra             GastoObra[]
+  reposicionesGastos     ReposicionGastos[]
+  ordenesCompra          OrdenCompra[]
 
   @@index([empresaId])
   @@map("proyectos")
@@ -372,10 +394,11 @@ model Beneficiario {
   updatedAt DateTime         @updatedAt
 
   proveedor              Proveedor?
+  contratista            Contratista?
   personalAdministrativo PersonalAdministrativo?
   proyectos              BeneficiarioProyecto[]
-  gastosPagados          GastoObra[]        @relation("GastoPagador")
-  gastosProveedor        GastoObra[]        @relation("GastoProveedor")
+  gastosPagados          GastoObra[]             @relation("GastoPagador")
+  gastosProveedor        GastoObra[]             @relation("GastoProveedor")
   reposicionesGastos     ReposicionGastos[]
   ordenesCompra          OrdenCompra[]
 
@@ -388,7 +411,23 @@ model Beneficiario {
   usuario   Usuario? @relation(fields: [usuarioId], references: [id])
   usuarioId String?  @unique
 
+  // Vínculo opcional y explícito para resolver duplicados de identidad de
+  // pago — una misma persona real puede tener más de una fila Beneficiario
+  // (ej. Contratista temporal + Personal/Administración ya existente).
+  // Nunca se infiere por nombre (dos personas distintas pueden compartir
+  // nombre); se fija a mano desde Catálogos y siempre apunta a la fila raíz
+  // canónica, nunca a otro alias (resolverMismaPersonaQueId en
+  // lib/server/catalogos.ts valida auto-referencia, misma empresa y
+  // ciclos). Filas con este campo lleno son alias y se excluyen de
+  // cualquier selector de beneficiarios (ej. "¿Quién pagó?" en Gastos) —
+  // el historial (GastoObra.pagadorBeneficiarioId, BeneficiarioProyecto,
+  // etc.) nunca se reescribe (beneficiarios duplicados, agosto 2026).
+  mismaPersonaQue   Beneficiario?  @relation("BeneficiarioMismaPersona", fields: [mismaPersonaQueId], references: [id])
+  mismaPersonaQueId String?
+  alias             Beneficiario[] @relation("BeneficiarioMismaPersona")
+
   @@index([empresaId, tipo])
+  @@index([mismaPersonaQueId])
   @@map("beneficiarios")
 }
 
@@ -407,6 +446,22 @@ model Proveedor {
   rfc            String?
 
   @@map("proveedores")
+}
+
+// Dato general del contratista — especialidad/giro (ej. "Obra civil",
+// "Herrería"), igual en cualquier obra. Se usa como sugerencia: al elegir un
+// contratista existente en el formulario de "Nuevo contrato" de una obra, el
+// campo Descripción de ESE contrato se precarga desde aquí, pero sigue
+// siendo editable por contrato sin modificar este catálogo (un mismo
+// contratista puede tener un alcance distinto en una obra puntual). Al
+// capturar un contratista nuevo desde dentro de una obra, la Descripción de
+// ese primer contrato siembra este campo (Catálogos: Contratistas, agosto 2026).
+model Contratista {
+  beneficiario   Beneficiario @relation(fields: [beneficiarioId], references: [id], onDelete: Cascade)
+  beneficiarioId String       @id
+  descripcion    String?
+
+  @@map("contratistas")
 }
 
 // Datos biográficos/personales — lo laboral (puesto, sueldo) vive en
@@ -438,7 +493,7 @@ model BeneficiarioProyecto {
 
   // Administración (aplica cuando beneficiario.tipo = ADMINISTRACION)
   puesto         String?
-  sueldo         Decimal? @db.Decimal(14, 2)
+  sueldo         Decimal?  @db.Decimal(14, 2)
   sueldoVariable Boolean?
   fechaIngreso   DateTime?
 
@@ -549,7 +604,7 @@ model MovimientoSemanal {
   metodoPago     MetodoPagoGasto?
   referenciaPago String?
   notasPago      String?
-  liquidadoPor   Usuario?  @relation("MovimientoLiquidado", fields: [liquidadoPorId], references: [id])
+  liquidadoPor   Usuario?         @relation("MovimientoLiquidado", fields: [liquidadoPorId], references: [id])
   liquidadoPorId String?
   liquidadoEn    DateTime?
 
@@ -561,17 +616,24 @@ model MovimientoSemanal {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  comentarios ComentarioMovimiento[]
-  corte       CorteSemanal?
+  comentarios      ComentarioMovimiento[]
+  corte            CorteSemanal?
   reposicionGastos ReposicionGastos?
   ordenCompra      OrdenCompra?
 
-  // Antes: @@unique([beneficiarioProyectoId, semanaId]) — un solo movimiento
-  // por beneficiario+semana, sin importar la fuente. Ahora cada `origen`
-  // mantiene su propia fila (Cierre Semanal, Reposición y Orden de Compra
-  // nunca se pisan entre sí), pero cada uno individualmente sigue
-  // garantizado a lo más uno por beneficiario+semana, igual que antes.
-  @@unique([beneficiarioProyectoId, semanaId, origen])
+  // Antes: @@unique([beneficiarioProyectoId, semanaId]), luego
+  // @@unique([..., origen]) — un movimiento por beneficiario+semana+origen.
+  // CORTE_CONTRATISTA/ORDEN_COMPRA/MANUAL siguen exactamente así (a lo más
+  // uno). REPOSICION_GASTOS ya no: una vez que ese movimiento queda
+  // LIQUIDADO, un gasto aprobado después para el mismo beneficiario+semana
+  // abre una reposición complementaria con su propio MovimientoSemanal
+  // nuevo — la integridad de "a lo más UNA reposición ABIERTA" ya la da el
+  // índice único parcial de ReposicionGastos (`cerrada = false`), no este.
+  // No representable como @@unique normal — índice único PARCIAL en la
+  // migración (WHERE origen != 'REPOSICION_GASTOS') — mismo patrón que el
+  // resto de índices parciales de esta sesión (colapso de doble aprobación
+  // Gastos→Reposiciones, agosto 2026).
+  @@index([beneficiarioProyectoId, semanaId, origen])
   @@index([semanaId])
   @@map("movimientos_semanales")
 }
@@ -676,10 +738,11 @@ model Concepto {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  asignaciones       ContratoConcepto[]
-  avances            AvanceConcepto[]
-  corteDetalles      CorteSemanalConcepto[]
-  estimacionDetalles EstimacionClienteConcepto[]
+  asignaciones           ContratoConcepto[]
+  avances                AvanceConcepto[]
+  corteDetalles          CorteSemanalConcepto[]
+  estimacionDetalles     EstimacionClienteConcepto[]
+  estimacionCapaDetalles EstimacionClienteCapaConcepto[]
 
   @@index([partidaId])
   @@map("conceptos")
@@ -908,7 +971,7 @@ model CorteSemanalConcepto {
   avanceConcepto   AvanceConcepto @relation(fields: [avanceConceptoId], references: [id])
   avanceConceptoId String         @unique
 
-  descripcionConcepto      String
+  descripcionConcepto       String
   unidad                    String
   cantidadEjecutada         Decimal @db.Decimal(14, 3)
   precioUnitarioContratista Decimal @db.Decimal(14, 2)
@@ -990,6 +1053,14 @@ enum EstatusEstimacionCliente {
   EMITIDA
 }
 
+// Cliente (operativo, sin sufijo históricamente) y Cliente Priv. — a partir de
+// la arquitectura por capas (agosto 2026) cada una emite, cobra y factura de
+// forma independiente. Ver EstimacionClienteCapa.
+enum CapaEstimacion {
+  OPERATIVO
+  PRIVADO
+}
+
 model EstimacionCliente {
   id         String   @id @default(cuid())
   empresa    Empresa  @relation(fields: [empresaId], references: [id])
@@ -999,22 +1070,45 @@ model EstimacionCliente {
   semana     Semana   @relation(fields: [semanaId], references: [id])
   semanaId   String
 
-  // Correlativo por proyecto (Proyecto.ultimoNumeroEstimacion) — "Estimación 1",
-  // "Estimación 2"...
-  numero Int
+  // DEPRECATED (arquitectura por capas, agosto 2026) — el folio real ahora
+  // vive en EstimacionClienteCapa.numero, uno independiente por capa. Se
+  // conserva nullable únicamente para no perder el folio de las filas
+  // históricas ya emitidas antes del rediseño; ninguna fila nueva lo llena.
+  numero Int?
 
+  // DEPRECATED (arquitectura por capas, agosto 2026) — el estatus real de
+  // cada capa vive en EstimacionClienteCapa.estatus. Este campo ya no se
+  // actualiza para filas nuevas (se queda en su default BORRADOR sin
+  // significado); se conserva solo por compatibilidad histórica de lectura.
   estatus EstatusEstimacionCliente @default(BORRADOR)
 
   // Snapshot del esquema al momento de generar — si el esquema del proyecto
   // cambiara después, esta fila no cambia de significado retroactivamente.
   esquemaContractualUsado EsquemaContractual?
 
-  // Resumen comercial (capa Privada — el monto "oficial" de la estimación).
-  // El resumen operativo/Cliente se calcula sumando en vivo el detalle
-  // congelado (columnas *Operativo), no se duplica aquí.
-  subtotal                     Decimal @db.Decimal(14, 2)
-  montoAdministracionOUtilidad Decimal @db.Decimal(14, 2)
-  total                        Decimal @db.Decimal(14, 2)
+  // DEPRECATED en bloque (arquitectura por capas, agosto 2026) — todo el
+  // dinero de una estimación ahora vive en EstimacionClienteCapa, una fila
+  // por capa, congelado solo al emitir esa capa. Estos campos se vuelven
+  // nullable/sin escritura para filas nuevas y se conservan intactos en las
+  // filas históricas únicamente hasta que el backfill quede verificado.
+  subtotal                     Decimal? @db.Decimal(14, 2)
+  montoAdministracionOUtilidad Decimal? @db.Decimal(14, 2)
+  total                        Decimal? @db.Decimal(14, 2)
+
+  subtotalOperativo                    Decimal @default(0) @db.Decimal(14, 2)
+  montoAdministracionTrabajosOperativo Decimal @default(0) @db.Decimal(14, 2)
+  totalOperativo                       Decimal @default(0) @db.Decimal(14, 2)
+
+  subtotalGastosCobrables                 Decimal  @default(0) @db.Decimal(14, 2)
+  porcentajeAdministracionGastosOperativo Decimal? @db.Decimal(5, 2)
+  montoAdministracionGastosOperativo      Decimal  @default(0) @db.Decimal(14, 2)
+  porcentajeAdministracionGastosPrivado   Decimal? @db.Decimal(5, 2)
+  montoAdministracionGastosPrivado        Decimal  @default(0) @db.Decimal(14, 2)
+
+  aplicaIVA         Boolean  @default(false)
+  porcentajeIVA     Decimal? @db.Decimal(5, 2)
+  montoIVA          Decimal  @default(0) @db.Decimal(14, 2)
+  montoIVAOperativo Decimal  @default(0) @db.Decimal(14, 2)
 
   generadoPor   Usuario  @relation("EstimacionClienteGenerada", fields: [generadoPorId], references: [id])
   generadoPorId String
@@ -1024,11 +1118,30 @@ model EstimacionCliente {
   emitidoPorId String?
   emitidoEn    DateTime?
 
+  // Corte del documento histórico (PDF) — se fija una sola vez, en la
+  // primera descarga (cualquier capa), y nunca se vuelve a tocar. Necesario
+  // porque MovimientoFinancieroCliente no tiene ningún filtro temporal por
+  // sí solo, y porque Concepto/Partida no están versionados (montoContrato
+  // se recalcularía distinto si el contrato cambia después de esta
+  // estimación) — sin este congelamiento, descargar el mismo documento más
+  // adelante podría dar cifras distintas (historial documental, agosto 2026).
+  fechaCorteDocumento             DateTime?
+  montoContratoOperativoCongelado Decimal?  @db.Decimal(14, 2)
+  montoContratoPrivadoCongelado   Decimal?  @db.Decimal(14, 2)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  detalle             EstimacionClienteConcepto[]
+  detalle                EstimacionClienteConcepto[]
+  gastos                 EstimacionClienteGasto[]
+  gastosCobrados         GastoObra[]                   @relation("GastoIncluidoEnEstimacion")
   movimientosFinancieros MovimientoFinancieroCliente[]
+
+  // Arquitectura por capas (agosto 2026) — el documento financiero real:
+  // exactamente 2 filas (OPERATIVO/PRIVADO), cada una con su propio ciclo de
+  // vida BORRADOR→EMITIDA, folio, IVA, gastos y pagos. Ver
+  // EstimacionClienteCapa.
+  capas EstimacionClienteCapa[]
 
   @@unique([proyectoId, semanaId])
   @@index([empresaId])
@@ -1055,24 +1168,174 @@ model EstimacionClienteConcepto {
   cantidadPorEjercer Decimal @db.Decimal(14, 3)
   avancePorcentaje   Decimal @db.Decimal(5, 2)
 
-  // Capa Cliente (operativo — lógica de Contrato General).
-  precioUnitarioOperativo    Decimal @db.Decimal(14, 2)
-  importeContratadoOperativo Decimal @db.Decimal(14, 2)
-  importeEstaSemanaOperativo Decimal @db.Decimal(14, 2)
-  importeAcumuladoOperativo  Decimal @db.Decimal(14, 2)
-  importePorEjercerOperativo Decimal @db.Decimal(14, 2)
+  // DEPRECATED (arquitectura por capas, agosto 2026) — el precio ya no vive
+  // aquí: esta fila es puramente física/compartida (cantidades), y cada capa
+  // congela su propio precio en EstimacionClienteCapaConcepto solo al
+  // emitir. Nullable para no exigir dummy values en filas nuevas; se
+  // conservan intactos en las filas históricas hasta verificar el backfill.
+  precioUnitarioOperativo    Decimal? @db.Decimal(14, 2)
+  importeContratadoOperativo Decimal? @db.Decimal(14, 2)
+  importeEstaSemanaOperativo Decimal? @db.Decimal(14, 2)
+  importeAcumuladoOperativo  Decimal? @db.Decimal(14, 2)
+  importePorEjercerOperativo Decimal? @db.Decimal(14, 2)
 
-  // Capa Cliente Priv. (comercial — lógica de Contrato General Privado).
-  precioUnitarioPrivado     Decimal  @db.Decimal(14, 2)
-  importeContratadoPrivado Decimal  @db.Decimal(14, 2)
-  importeEstaSemanaPrivado Decimal  @db.Decimal(14, 2)
-  importeAcumuladoPrivado  Decimal  @db.Decimal(14, 2)
-  importePorEjercerPrivado Decimal  @db.Decimal(14, 2)
+  precioUnitarioPrivado     Decimal? @db.Decimal(14, 2)
+  importeContratadoPrivado  Decimal? @db.Decimal(14, 2)
+  importeEstaSemanaPrivado  Decimal? @db.Decimal(14, 2)
+  importeAcumuladoPrivado   Decimal? @db.Decimal(14, 2)
+  importePorEjercerPrivado  Decimal? @db.Decimal(14, 2)
   porcentajeAplicadoPrivado Decimal? @db.Decimal(5, 2)
 
   @@index([estimacionClienteId])
   @@index([conceptoId])
   @@map("estimacion_cliente_conceptos")
+}
+
+// El documento financiero real — una fila por capa (OPERATIVO/PRIVADO),
+// cada una con su propio ciclo de vida BORRADOR→EMITIDA independiente del de
+// la otra. Mientras estatus = BORRADOR, subtotal/montoAdministracion*/
+// montoIVA/total se quedan en su default (0) y NUNCA se leen para mostrar la
+// pantalla — la pantalla BORRADOR se calcula en vivo con
+// calcularEstimacionCapaEnVivo (lib/server/control-de-obra/
+// estimacion-cliente.ts). Esas columnas, junto con `numero` y el detalle
+// (EstimacionClienteCapaConcepto/EstimacionClienteGasto), se escriben una
+// sola vez, dentro de la transacción de emitirEstimacion. Arquitectura por
+// capas — Cliente/Cliente Priv. como documentos financieros independientes,
+// agosto 2026.
+model EstimacionClienteCapa {
+  id                  String            @id @default(cuid())
+  estimacionCliente   EstimacionCliente @relation(fields: [estimacionClienteId], references: [id])
+  estimacionClienteId String
+  capa                CapaEstimacion
+
+  estatus EstatusEstimacionCliente @default(BORRADOR)
+
+  // Configuración editable mientras BORRADOR — se persiste de inmediato al
+  // configurarla (es una decisión del usuario, no un cálculo derivado; no
+  // hay otra fuente de verdad para "esta capa activó IVA a 16%").
+  aplicaIVA     Boolean  @default(false)
+  porcentajeIVA Decimal? @db.Decimal(5, 2)
+
+  // --- Snapshot congelado — solo tiene significado real si estatus = EMITIDA ---
+  // Correlativo propio de esta capa (Proyecto.ultimoNumeroEstimacionOperativo/
+  // ...Privado) — asignado SOLO al emitir, nunca al crear la fila BORRADOR
+  // (una capa que nunca llega a emitirse no debe "gastar" un folio).
+  numero                         Int?
+  subtotal                       Decimal  @default(0) @db.Decimal(14, 2)
+  montoAdministracionTrabajos    Decimal  @default(0) @db.Decimal(14, 2)
+  subtotalGastosCobrables        Decimal  @default(0) @db.Decimal(14, 2)
+  porcentajeAdministracionGastos Decimal? @db.Decimal(5, 2)
+  montoAdministracionGastos      Decimal  @default(0) @db.Decimal(14, 2)
+  montoIVA                       Decimal  @default(0) @db.Decimal(14, 2)
+  total                          Decimal  @default(0) @db.Decimal(14, 2)
+
+  generadoPor   Usuario   @relation("EstimacionClienteCapaGenerada", fields: [generadoPorId], references: [id])
+  generadoPorId String
+  generadoEn    DateTime  @default(now())
+  emitidoPor    Usuario?  @relation("EstimacionClienteCapaEmitida", fields: [emitidoPorId], references: [id])
+  emitidoPorId  String?
+  emitidoEn     DateTime?
+
+  // Corte del documento histórico (PDF) de ESTA capa — mismo criterio que
+  // tenía el padre antes del rediseño, ahora independiente por capa.
+  fechaCorteDocumento    DateTime?
+  montoContratoCongelado Decimal?  @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  detalle                  EstimacionClienteCapaConcepto[]
+  gastos                   EstimacionClienteGasto[]
+  movimientosFinancieros   MovimientoFinancieroCliente[]
+  gastosIncluidosOperativo GastoObra[]                     @relation("GastoIncluidoEnCapaOperativo")
+  gastosIncluidosPrivado   GastoObra[]                     @relation("GastoIncluidoEnCapaPrivado")
+
+  @@unique([estimacionClienteId, capa])
+  @@index([estatus])
+  @@map("estimacion_cliente_capas")
+}
+
+// El snapshot monetario real por concepto — nace VACÍO mientras la capa es
+// BORRADOR (no existen filas todavía) y se materializa de una sola vez,
+// dentro de la misma transacción de emitirEstimacion, con los precios
+// vigentes EN ESE MOMENTO. Aquí es donde General (emitida con P.U. $500) y
+// Privado (emitida después con P.U. $650) quedan completamente
+// desacopladas, aunque ambas describan el mismo conceptoId.
+model EstimacionClienteCapaConcepto {
+  id                      String                @id @default(cuid())
+  estimacionClienteCapa   EstimacionClienteCapa @relation(fields: [estimacionClienteCapaId], references: [id])
+  estimacionClienteCapaId String
+  concepto                Concepto              @relation(fields: [conceptoId], references: [id])
+  conceptoId              String
+
+  precioUnitarioBase Decimal  @db.Decimal(14, 2) // antes de administración/utilidad
+  porcentajeAplicado Decimal? @db.Decimal(5, 2) // % realmente usado (override o default), congelado
+  precioUnitario     Decimal  @db.Decimal(14, 2) // con administración/utilidad ya incluida
+  importeContratado  Decimal  @db.Decimal(14, 2)
+  importeEstaSemana  Decimal  @db.Decimal(14, 2)
+  importeAcumulado   Decimal  @db.Decimal(14, 2)
+  importePorEjercer  Decimal  @db.Decimal(14, 2)
+
+  @@unique([estimacionClienteCapaId, conceptoId])
+  @@map("estimacion_cliente_capa_conceptos")
+}
+
+// Gasto cobrable congelado dentro de la estimación de UNA capa — mismo
+// patrón que EstimacionClienteCapaConcepto (copia propia, nunca un join en
+// vivo a GastoObra, materializado solo al emitir esa capa — arquitectura por
+// capas, agosto 2026), aunque en la práctica un GastoObra ya es inmutable en
+// cuanto sale de BORRADOR/PENDIENTE_REVISION (ver editarGasto). El monto
+// congelado es el mismo costo real para cualquier capa que lo cobre (un
+// gasto no tiene "precio privado" propio), pero puede quedar reclamado y
+// congelado en AMBAS capas de forma independiente — por eso ya no es
+// @unique por sí solo: @@unique([estimacionClienteCapaId, gastoObraId]),
+// GastoObra.incluidoEnCapaOperativoId/incluidoEnCapaPrivadoId son la guardia
+// real contra reclamarlo dos veces DENTRO de la misma capa.
+model EstimacionClienteGasto {
+  id                  String            @id @default(cuid())
+  estimacionCliente   EstimacionCliente @relation(fields: [estimacionClienteId], references: [id])
+  estimacionClienteId String
+
+  // Nullable únicamente durante la ventana de la migración aditiva — toda
+  // fila creada por código nuevo (backfill o emisión por capa) siempre la
+  // llena.
+  estimacionClienteCapa   EstimacionClienteCapa? @relation(fields: [estimacionClienteCapaId], references: [id])
+  estimacionClienteCapaId String?
+
+  gastoObra   GastoObra @relation(fields: [gastoObraId], references: [id])
+  gastoObraId String
+
+  fecha       DateTime
+  descripcion String
+  categoria   String
+  monto       Decimal  @db.Decimal(14, 2)
+
+  detalle EstimacionClienteGastoDetalle[]
+
+  @@unique([estimacionClienteCapaId, gastoObraId])
+  @@index([estimacionClienteId])
+  @@index([gastoObraId])
+  @@map("estimacion_cliente_gastos")
+}
+
+model EstimacionClienteGastoDetalle {
+  id                       String                 @id @default(cuid())
+  estimacionClienteGasto   EstimacionClienteGasto @relation(fields: [estimacionClienteGastoId], references: [id])
+  estimacionClienteGastoId String
+
+  descripcion    String
+  unidad         String
+  cantidad       Decimal @db.Decimal(14, 3)
+  precioUnitario Decimal @db.Decimal(14, 2)
+  // Orden de captura original (mismo patrón que GastoObraDetalle.orden) —
+  // congelado al emitir, para que la tabla plana de gastos cobrables y el
+  // PDF muestren siempre el mismo orden en que se capturó, sin depender del
+  // orden de retorno de la base de datos (presentación plana de gastos
+  // cobrables, agosto 2026).
+  orden          Int     @default(0)
+
+  @@index([estimacionClienteGastoId])
+  @@map("estimacion_cliente_gastos_detalle")
 }
 
 // ---------------------------------------------------------------------------
@@ -1103,9 +1366,9 @@ model MovimientoFinancieroCliente {
   proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
   proyectoId String
 
-  tipo   TipoMovimientoFinancieroCliente
-  monto  Decimal  @db.Decimal(14, 2)
-  fecha  DateTime
+  tipo       TipoMovimientoFinancieroCliente
+  monto      Decimal                         @db.Decimal(14, 2)
+  fecha      DateTime
   referencia String?
   notas      String?
 
@@ -1118,15 +1381,27 @@ model MovimientoFinancieroCliente {
   // bloqueo de fila sobre Proyecto al calcular fondo disponible, no un
   // índice). null en APORTACION_FONDO (una aportación es del proyecto, no de
   // una estimación específica).
+  // DEPRECATED (arquitectura por capas, agosto 2026) — reemplazada por
+  // estimacionClienteCapaId de abajo, que ya deja implícita la capa; código
+  // nuevo ya no la escribe en PAGO_ESTIMACION/APLICACION_ESTIMACION.
   estimacionCliente   EstimacionCliente? @relation(fields: [estimacionClienteId], references: [id])
   estimacionClienteId String?
 
-  registradoPor   Usuario @relation(fields: [registradoPorId], references: [id])
+  // Obligatorio en PAGO_ESTIMACION/APLICACION_ESTIMACION para código nuevo —
+  // la capa queda implícita por la fila a la que apunta. El fondo mismo
+  // (APORTACION_FONDO) sigue sin capa: es efectivo real del proyecto, no de
+  // una capa (ver "Fondo disponible del proyecto" en
+  // lib/server/control-de-obra/financiero-cliente.ts).
+  estimacionClienteCapa   EstimacionClienteCapa? @relation(fields: [estimacionClienteCapaId], references: [id])
+  estimacionClienteCapaId String?
+
+  registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
   registradoPorId String
-  createdAt DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   @@index([proyectoId])
   @@index([estimacionClienteId])
+  @@index([estimacionClienteCapaId])
   @@map("movimientos_financieros_cliente")
 }
 
@@ -1178,7 +1453,7 @@ model GastoObra {
   // enum de Postgres — puede crecer sin migración (mismo patrón que
   // Partida.icono).
   categoria   String
-  monto       Decimal          @db.Decimal(14, 2)
+  monto       Decimal         @db.Decimal(14, 2)
   metodoPago  MetodoPagoGasto
 
   // Quién puso el dinero — null = lo pagó la empresa directamente (no genera
@@ -1200,11 +1475,37 @@ model GastoObra {
   // estatusFiscal (NO_APLICA/PENDIENTE_FACTURA/FACTURADO) se DERIVA de
   // requiereFactura + facturaUrl en el servicio — no es columna.
 
-  tratamientoCliente TratamientoClienteGasto @default(NO_COBRABLE)
-  // Preparado para el enganche futuro con EstimacionCliente — se queda null
-  // en toda esta etapa, ningún servicio lo escribe todavía. El día que exista
-  // esa integración, marcarlo es lo que evita cobrar el mismo gasto dos veces.
+  tratamientoCliente            TratamientoClienteGasto @default(NO_COBRABLE)
+  // DEPRECATED (arquitectura por capas, agosto 2026) — reemplazada por las
+  // dos FK de abajo, una guardia independiente por capa. Se conserva
+  // nullable únicamente por compatibilidad histórica de lectura; código
+  // nuevo ya no la escribe.
+  incluidoEnEstimacionCliente   EstimacionCliente?      @relation("GastoIncluidoEnEstimacion", fields: [incluidoEnEstimacionClienteId], references: [id])
   incluidoEnEstimacionClienteId String?
+
+  // Guardia real por capa contra cobrar el mismo gasto dos veces DENTRO de
+  // esa capa — en cuanto se llena, ninguna reconciliación posterior de esa
+  // capa lo vuelve a considerar elegible. Un gasto puede quedar reclamado en
+  // ambas a la vez (General y Privado cobrando el mismo costo real, cada uno
+  // en su propio documento). Se escribe únicamente al aprobar el gasto (o al
+  // resolver un reclamo pendiente durante una acción real de negocio
+  // posterior) — nunca como efecto de una simple lectura de pantalla
+  // (arquitectura por capas, agosto 2026).
+  incluidoEnCapaOperativo   EstimacionClienteCapa? @relation("GastoIncluidoEnCapaOperativo", fields: [incluidoEnCapaOperativoId], references: [id])
+  incluidoEnCapaOperativoId String?
+  incluidoEnCapaPrivado     EstimacionClienteCapa? @relation("GastoIncluidoEnCapaPrivado", fields: [incluidoEnCapaPrivadoId], references: [id])
+  incluidoEnCapaPrivadoId   String?
+
+  // Detalle multilínea opcional — GastoObra.monto sigue siendo la única
+  // fuente de verdad que lee el resto del sistema (reposiciones, dashboard,
+  // estimación); cuando hay detalle, monto se recalcula server-side como la
+  // suma de las líneas (captura multilínea de gastos, agosto 2026).
+  detalle GastoObraDetalle[]
+
+  // Snapshot(s) congelado(s) de este gasto — a lo más uno por capa que lo
+  // haya cobrado (arquitectura por capas, agosto 2026; antes era 1:1 vía
+  // gastoObraId @unique). Ver EstimacionClienteGasto.
+  estimacionesClienteGasto EstimacionClienteGasto[]
 
   ticketUrl    String?
   ticketNombre String?
@@ -1227,8 +1528,8 @@ model GastoObra {
   // "Incluido en reposición" se DERIVA (estatus=APROBADO &&
   // reposicionGastosId != null) — no hay un estado INCLUIDO_EN_REPOSICION
   // aparte, evita que ese estado se desincronice de la relación real.
-  reposicion          ReposicionGastos? @relation(fields: [reposicionGastosId], references: [id])
-  reposicionGastosId  String?
+  reposicion         ReposicionGastos? @relation(fields: [reposicionGastosId], references: [id])
+  reposicionGastosId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1236,7 +1537,28 @@ model GastoObra {
   @@index([proyectoId, semanaId])
   @@index([pagadorBeneficiarioId])
   @@index([reposicionGastosId])
+  @@index([incluidoEnEstimacionClienteId])
+  @@index([incluidoEnCapaOperativoId])
+  @@index([incluidoEnCapaPrivadoId])
   @@map("gastos_obra")
+}
+
+// Detalle multilínea opcional de un gasto — mismo patrón que
+// OrdenCompraConcepto (importe siempre derivado en el servicio, nunca
+// columna). Captura multilínea de gastos, agosto 2026.
+model GastoObraDetalle {
+  id             String    @id @default(cuid())
+  gastoObra      GastoObra @relation(fields: [gastoObraId], references: [id])
+  gastoObraId    String
+  descripcion    String
+  unidad         String
+  cantidad       Decimal   @db.Decimal(14, 3)
+  precioUnitario Decimal   @db.Decimal(14, 2)
+  orden          Int       @default(0)
+  createdAt      DateTime  @default(now())
+
+  @@index([gastoObraId])
+  @@map("gastos_obra_detalle")
 }
 
 enum EstatusReposicion {
@@ -1285,19 +1607,28 @@ model ReposicionGastos {
 
   gastos GastoObra[]
 
+  // Una reposición deja de aceptar nuevos gastos/reconciliación en cuanto su
+  // MovimientoSemanal queda LIQUIDADO — liquidarMovimiento() la marca aquí,
+  // en la misma transacción, justo al liquidar (lib/server/reporte-general/
+  // liquidar.ts). asignarGastoAReposicionTx también la marca de forma
+  // defensiva si la encuentra desincronizada. Una vez cerrada, un gasto
+  // aprobado después para el mismo proyecto+semana+beneficiario abre una
+  // reposición complementaria nueva, con folio propio — nunca se reabre ni
+  // se reescribe historia financiera ya liquidada (colapso de doble
+  // aprobación Gastos→Reposiciones, agosto 2026).
+  cerrada Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Una reposición ACTIVA por proyecto+semana+beneficiario (sección 11 del
-  // diseño) — evita que dos reposiciones distintas compitan por los mismos
-  // gastos disponibles del mismo pagador. No es un @@unique normal a
-  // propósito: una RECHAZADA no debe bloquear crear una nueva para la misma
-  // semana (si no, un rechazo dejaría esos gastos sin forma de volver a
-  // agruparse). La garantía real es un índice único PARCIAL en la migración
-  // (WHERE estatus != 'RECHAZADA'), mismo patrón que la unicidad de
-  // APLICACION_ESTIMACION en Control Contractual — no representable en este
-  // DSL de Prisma. crearReposicion() también valida esto antes de insertar,
-  // para un mensaje de error legible en vez de un choque crudo de Postgres.
+  // Una reposición ABIERTA por proyecto+semana+beneficiario (no "activa" —
+  // una liquidada deja de contar, permitiendo una complementaria posterior;
+  // ver `cerrada` arriba). No es un @@unique normal a propósito: ni una
+  // RECHAZADA ni una ya CERRADA deben bloquear crear una nueva. La garantía
+  // real es un índice único PARCIAL en la migración
+  // (WHERE cerrada = false AND estatus != 'RECHAZADA'), mismo patrón que la
+  // unicidad de APLICACION_ESTIMACION en Control Contractual — no
+  // representable en este DSL de Prisma.
   @@map("reposiciones_gastos")
 }
 
@@ -1352,9 +1683,9 @@ model OrdenCompra {
   facturaUrl            String?
   facturaNombre         String?
 
-  creadoPor       Usuario  @relation("OCCreada", fields: [creadoPorId], references: [id])
+  creadoPor       Usuario   @relation("OCCreada", fields: [creadoPorId], references: [id])
   creadoPorId     String
-  autorizadoPor   Usuario? @relation("OCAutorizada", fields: [autorizadoPorId], references: [id])
+  autorizadoPor   Usuario?  @relation("OCAutorizada", fields: [autorizadoPorId], references: [id])
   autorizadoPorId String?
   autorizadoEn    DateTime?
 

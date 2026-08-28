@@ -61,7 +61,7 @@ export default async function ControlDeObraPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-[var(--foreground)]">
-            Control de Obra
+            Proyectos
           </h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
             Administración de proyectos
@@ -166,7 +166,7 @@ function FilaProyecto({
         <div>{proyecto.nombre}</div>
         {pendientesAprobar > 0 && (
           <Link
-            href={`/control-de-obra/${proyecto.id}/avance`}
+            href={`/control-de-obra/${proyecto.id}/ejecucion/avance`}
             className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors duration-150 ease-out hover:bg-amber-100"
           >
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />

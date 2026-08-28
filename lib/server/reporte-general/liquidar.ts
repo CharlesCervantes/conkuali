@@ -65,6 +65,19 @@ export async function liquidarMovimiento(
       },
     });
 
+    // Cierra la Reposición que este movimiento paga, en el mismo instante de
+    // liquidar — no de forma perezosa. Deja el índice único parcial libre de
+    // inmediato para una complementaria futura, sin depender de que otra
+    // función "descubra" después que ya estaba liquidada (colapso de doble
+    // aprobación Gastos→Reposiciones, agosto 2026). Único cambio a esta
+    // función — ninguna otra regla de liquidación se toca.
+    if (movimiento.origen === "REPOSICION_GASTOS") {
+      await tx.reposicionGastos.updateMany({
+        where: { movimientoSemanalId: movimientoId },
+        data: { cerrada: true },
+      });
+    }
+
     await registrarAuditoriaTx(tx, {
       empresaId,
       usuarioId: usuario.id,

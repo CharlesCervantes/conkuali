@@ -10,7 +10,7 @@ import {
   crearOrdenCompraAction,
   editarOrdenCompraAction,
   type OrdenCompraFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { FilaOrdenCompra } from "@/lib/server/control-de-obra/ordenes-compra";
 
 type Linea = {

@@ -1,6 +1,10 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { empresaTieneModulo, puedeAdministrarCatalogos } from "@/lib/server/permisos";
-import { listarPersonalAdministrativo, listarUsuariosActivos } from "@/lib/server/catalogos";
+import { empresaTieneModulo, puedeAdministrarCatalogos, puedeEliminarCatalogo } from "@/lib/server/permisos";
+import {
+  listarPersonalAdministrativo,
+  listarUsuariosActivos,
+  listarBeneficiariosParaVincular,
+} from "@/lib/server/catalogos";
 import { PersonalView } from "@/components/catalogos/personal-view";
 import { Card } from "@/components/ui/card";
 
@@ -31,10 +35,18 @@ export default async function PersonalPage() {
     );
   }
 
-  const [personal, usuariosActivos] = await Promise.all([
+  const [personal, usuariosActivos, beneficiariosParaVincular] = await Promise.all([
     listarPersonalAdministrativo(usuario),
     listarUsuariosActivos(usuario),
+    listarBeneficiariosParaVincular(usuario),
   ]);
 
-  return <PersonalView personal={personal} usuariosActivos={usuariosActivos} />;
+  return (
+    <PersonalView
+      personal={personal}
+      usuariosActivos={usuariosActivos}
+      beneficiariosParaVincular={beneficiariosParaVincular}
+      puedeEliminar={puedeEliminarCatalogo(usuario)}
+    />
+  );
 }

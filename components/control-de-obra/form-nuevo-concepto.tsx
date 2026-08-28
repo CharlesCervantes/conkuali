@@ -4,7 +4,7 @@ import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CampoDinero } from "@/components/ui/campo-dinero";
-import { crearConceptoAction, type FormState } from "@/app/(app)/control-de-obra/[id]/actions";
+import { crearConceptoAction, type FormState } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 
 // Solo campos operativos (Contrato General) — descripción, unidad, cantidad,

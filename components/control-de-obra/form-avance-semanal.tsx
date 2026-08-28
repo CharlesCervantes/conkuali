@@ -14,7 +14,7 @@ import {
   guardarAvanceAction,
   cambiarEstatusAprobacionAvanceAction,
   type AvanceFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { obtenerAvanceSemanal } from "@/lib/server/control-de-obra/avance";
 
 type Partidas = Awaited<ReturnType<typeof obtenerAvanceSemanal>>;

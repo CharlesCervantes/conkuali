@@ -47,6 +47,9 @@ function datosDesdeFormData(formData: FormData) {
     porcentajeAdministracionDefault: opcional(
       formData.get("porcentajeAdministracionDefault")
     ),
+    porcentajeAdministracionPrivadoDefault: opcional(
+      formData.get("porcentajeAdministracionPrivadoDefault")
+    ),
   };
 }
 
@@ -81,7 +84,8 @@ export async function editarProyectoAction(
   }
 
   revalidatePath("/control-de-obra");
-  redirect("/control-de-obra");
+  revalidatePath(`/control-de-obra/${id}`);
+  redirect(`/control-de-obra/${id}`);
 }
 
 export async function cambiarEstatusAction(id: string, estatus: string) {

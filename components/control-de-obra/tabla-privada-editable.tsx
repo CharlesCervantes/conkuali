@@ -9,7 +9,7 @@ import { ModalEditarConcepto } from "./modal-editar-concepto";
 import {
   editarConceptoPrivadoAction,
   type EditarConceptoPrivadoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { ImportesConceptoCalculados } from "@/lib/control-de-obra/contrato-general";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 

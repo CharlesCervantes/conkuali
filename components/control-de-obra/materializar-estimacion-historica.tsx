@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import {
   materializarEstimacionHistoricaAction,
   type MaterializarEstimacionFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 // Semana cerrada ANTES de que existiera EstimacionCliente (o que por
 // cualquier otra razón nunca disparó su generación al cerrar) — no tiene

@@ -12,10 +12,21 @@ import {
   type CatalogoFormState,
 } from "@/app/(app)/catalogos/actions";
 import type { FilaProveedorCatalogo } from "@/lib/server/catalogos";
+import { ModalEliminarBeneficiario } from "@/components/catalogos/modal-eliminar-beneficiario";
 
-export function ProveedoresView({ proveedores }: { proveedores: FilaProveedorCatalogo[] }) {
+export function ProveedoresView({
+  proveedores,
+  beneficiariosParaVincular,
+  puedeEliminar,
+}: {
+  proveedores: FilaProveedorCatalogo[];
+  beneficiariosParaVincular: { id: string; nombre: string; tipo: string }[];
+  puedeEliminar: boolean;
+}) {
   const [editando, setEditando] = useState<string | null>(null);
   const [creando, setCreando] = useState(false);
+  const [eliminando, setEliminando] = useState<string | null>(null);
+  const proveedorEliminando = proveedores.find((p) => p.id === eliminando) ?? null;
 
   return (
     <div className="space-y-3">
@@ -30,6 +41,7 @@ export function ProveedoresView({ proveedores }: { proveedores: FilaProveedorCat
           {editando === p.id ? (
             <FormularioProveedor
               proveedor={p}
+              beneficiariosDisponibles={beneficiariosParaVincular.filter((b) => b.id !== p.id)}
               onGuardado={() => setEditando(null)}
               onCancelar={() => setEditando(null)}
             />
@@ -49,6 +61,11 @@ export function ProveedoresView({ proveedores }: { proveedores: FilaProveedorCat
                     .filter(Boolean)
                     .join(" · ") || "Sin información adicional"}
                 </p>
+                {p.mismaPersonaQue && (
+                  <p className="mt-0.5 text-xs text-[var(--muted)]">
+                    Misma persona que: <span className="font-medium">{p.mismaPersonaQue.nombre}</span>
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <button
@@ -65,11 +82,32 @@ export function ProveedoresView({ proveedores }: { proveedores: FilaProveedorCat
                 >
                   {p.activo ? "Desactivar" : "Activar"}
                 </button>
+                {puedeEliminar && (
+                  <button
+                    type="button"
+                    onClick={() => setEliminando(p.id)}
+                    className="text-sm text-[var(--muted)] hover:text-[var(--foreground)]"
+                  >
+                    Eliminar
+                  </button>
+                )}
               </div>
             </div>
           )}
         </Card>
       ))}
+
+      {proveedorEliminando && (
+        <ModalEliminarBeneficiario
+          ruta="proveedores"
+          beneficiarioId={proveedorEliminando.id}
+          nombre={proveedorEliminando.nombre}
+          activo={proveedorEliminando.activo}
+          puedeEliminar={proveedorEliminando.puedeEliminar}
+          motivos={proveedorEliminando.motivosBloqueoEliminacion}
+          onClose={() => setEliminando(null)}
+        />
+      )}
 
       {creando ? (
         <Card className="enter p-5">
@@ -90,10 +128,12 @@ export function ProveedoresView({ proveedores }: { proveedores: FilaProveedorCat
 
 function FormularioProveedor({
   proveedor,
+  beneficiariosDisponibles,
   onGuardado,
   onCancelar,
 }: {
   proveedor?: FilaProveedorCatalogo;
+  beneficiariosDisponibles?: { id: string; nombre: string; tipo: string }[];
   onGuardado: () => void;
   onCancelar: () => void;
 }) {
@@ -121,6 +161,25 @@ function FormularioProveedor({
         <Input name="cuentaBancaria" placeholder="Cuenta bancaria (opcional, informativo)" defaultValue={proveedor?.cuentaBancaria ?? ""} />
         <Input name="rfc" placeholder="RFC (opcional)" defaultValue={proveedor?.rfc ?? ""} />
       </div>
+      {proveedor && (
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+            ¿Es la misma persona que... (opcional)
+          </label>
+          <select
+            name="mismaPersonaQueId"
+            defaultValue={proveedor.mismaPersonaQue?.id ?? ""}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+          >
+            <option value="">No es duplicado de nadie</option>
+            {(beneficiariosDisponibles ?? []).map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.nombre} ({b.tipo})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
           {pending ? "Guardando…" : proveedor ? "Guardar cambios" : "Guardar proveedor"}

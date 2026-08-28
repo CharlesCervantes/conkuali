@@ -7,7 +7,7 @@ import { puedeCerrarSemana, puedeReabrirSemana } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
-import { generarOReconciliarEstimacionBorrador } from "./estimacion-cliente";
+import { asegurarFisicoYCapas } from "./estimacion-cliente";
 
 type Cliente = Prisma.TransactionClient;
 
@@ -692,9 +692,10 @@ export async function cerrarSemana(
 
         // Estimación Cliente — una sola vez por proyecto+semana (no por
         // contratista), después de los cortes, dentro de la misma
-        // transacción atómica. EMITIDA nunca se toca (ver
-        // generarOReconciliarEstimacionBorrador).
-        const resultadoEstimacion = await generarOReconciliarEstimacionBorrador(
+        // transacción atómica. En cuanto cualquiera de las dos capas ya esté
+        // EMITIDA, el físico queda congelado para siempre (ver
+        // asegurarFisicoYCapas).
+        const resultadoEstimacion = await asegurarFisicoYCapas(
           tx,
           { empresaId, proyectoId, semanaId, usuarioId: usuario.id },
           semana
@@ -706,7 +707,7 @@ export async function cerrarSemana(
           cortesReconciliados,
           cortesOmitidosPorLiquidado,
           montoTotalGenerado,
-          estimacionClienteOmitidaPorEmitida: resultadoEstimacion.tipo === "OMITIDA_EMITIDA",
+          estimacionClienteOmitidaPorEmitida: resultadoEstimacion.tipo === "CONGELADO",
         };
       },
       { timeout: 20000 }
@@ -760,6 +761,23 @@ export async function reabrirSemana(
   });
   if (!cierre) throw new RegistroNoEncontradoError("El cierre de esta semana");
   if (cierre.estatus === "ABIERTA") return cierre;
+
+  // Bloqueo de reapertura después de emitir (arquitectura por capas, agosto
+  // 2026) — EstimacionClienteConcepto es la verdad física que sustenta un
+  // documento contractual ya emitido; reabrir la semana permitiría que el
+  // avance cambiara por debajo de una estimación EMITIDA. En cuanto
+  // cualquiera de las dos capas (OPERATIVO o PRIVADO) llegó a EMITIDA, la
+  // semana ya no puede reabrirse — las correcciones posteriores se manejan
+  // en semanas posteriores, nunca reescribiendo esta.
+  const algunaCapaEmitida = await db.estimacionClienteCapa.findFirst({
+    where: { estatus: "EMITIDA", estimacionCliente: { proyectoId, semanaId } },
+    select: { id: true },
+  });
+  if (algunaCapaEmitida) {
+    throw new ValidacionError(
+      "La semana no puede reabrirse porque ya existe una estimación de cliente emitida."
+    );
+  }
 
   const actualizado = await db.cierreSemanaProyecto.update({
     where: { id: cierre.id },
