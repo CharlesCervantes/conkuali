@@ -1,6 +1,6 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { empresaTieneModulo, puedeAdministrarCatalogos } from "@/lib/server/permisos";
-import { listarContratistasCatalogo } from "@/lib/server/catalogos";
+import { empresaTieneModulo, puedeAdministrarCatalogos, puedeEliminarCatalogo } from "@/lib/server/permisos";
+import { listarContratistasCatalogo, listarBeneficiariosParaVincular } from "@/lib/server/catalogos";
 import { ContratistasCatalogoView } from "@/components/catalogos/contratistas-view";
 import { Card } from "@/components/ui/card";
 
@@ -31,7 +31,16 @@ export default async function ContratistasCatalogoPage() {
     );
   }
 
-  const contratistas = await listarContratistasCatalogo(usuario);
+  const [contratistas, beneficiariosParaVincular] = await Promise.all([
+    listarContratistasCatalogo(usuario),
+    listarBeneficiariosParaVincular(usuario),
+  ]);
 
-  return <ContratistasCatalogoView contratistas={contratistas} />;
+  return (
+    <ContratistasCatalogoView
+      contratistas={contratistas}
+      beneficiariosParaVincular={beneficiariosParaVincular}
+      puedeEliminar={puedeEliminarCatalogo(usuario)}
+    />
+  );
 }

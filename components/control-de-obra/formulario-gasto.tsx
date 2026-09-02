@@ -5,13 +5,17 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { formatMoney } from "@/lib/dinero";
 import { CATEGORIAS_GASTO, CATEGORIA_GASTO_LABEL } from "@/lib/control-de-obra/categorias-gasto";
 import {
   crearGastoAction,
   editarGastoAction,
   type GastoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { FilaGasto } from "@/lib/server/control-de-obra/gastos";
+
+type LineaDetalle = { descripcion: string; unidad: string; cantidad: string; precioUnitario: string };
+const LINEA_VACIA: LineaDetalle = { descripcion: "", unidad: "", cantidad: "1", precioUnitario: "0" };
 
 const METODOS_PAGO = [
   { value: "EFECTIVO", label: "Efectivo" },
@@ -72,6 +76,27 @@ export function FormularioGasto({
     return "OTRO";
   });
 
+  // Siempre por líneas — cada gasto se captura como una o más líneas con su
+  // propia descripción (nunca una "Descripción" genérica aparte); mínimo una
+  // línea, forzado por que el botón de quitar se deshabilita en la última.
+  const [lineas, setLineas] = useState<LineaDetalle[]>(
+    gasto && gasto.detalle.length > 0
+      ? gasto.detalle.map((l) => ({
+          descripcion: l.descripcion,
+          unidad: l.unidad,
+          cantidad: String(l.cantidad),
+          precioUnitario: String(l.precioUnitario),
+        }))
+      : [{ ...LINEA_VACIA }]
+  );
+  const totalDetalle = lineas.reduce(
+    (t, l) => t + (Number(l.cantidad) || 0) * (Number(l.precioUnitario) || 0),
+    0
+  );
+  function actualizarLinea(i: number, campo: keyof LineaDetalle, valor: string) {
+    setLineas((prev) => prev.map((l, idx) => (idx === i ? { ...l, [campo]: valor } : l)));
+  }
+
   useEffect(() => {
     function alTecla(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -89,12 +114,14 @@ export function FormularioGasto({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <Card className="enter max-h-[90vh] w-full max-w-lg overflow-y-auto p-6">
+      <Card className="enter max-h-[90vh] w-full max-w-5xl overflow-y-auto p-6">
         <h2 className="text-lg font-semibold text-[var(--foreground)]">
           {gasto ? "Editar gasto" : "Nuevo gasto"}
         </h2>
 
         <form action={formAction} className="mt-4 space-y-3">
+          <input type="hidden" name="detalle" value={JSON.stringify(lineas)} />
+
           <div className="grid grid-cols-2 gap-3">
             <Campo label="Fecha">
               <input
@@ -109,24 +136,73 @@ export function FormularioGasto({
               <input
                 name="monto"
                 type="number"
-                step="0.01"
-                min="0.01"
-                required
-                defaultValue={gasto?.monto}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+                readOnly
+                value={totalDetalle.toFixed(2)}
+                className="w-full rounded-lg border border-[var(--border)] bg-black/[0.03] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
               />
+              <p className="mt-1 text-xs text-[var(--muted)]">Suma de los gastos de abajo.</p>
             </Campo>
           </div>
 
-          <Campo label="Descripción">
-            <input
-              name="descripcion"
-              type="text"
-              required
-              defaultValue={gasto?.descripcion}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
-            />
-          </Campo>
+          <div>
+            <p className="text-sm font-medium text-[var(--foreground)]">Gastos</p>
+            <div className="mt-2 space-y-2">
+              {lineas.map((l, i) => (
+                <div key={i} className="grid grid-cols-12 gap-1.5">
+                  <input
+                    placeholder="Descripción"
+                    required
+                    value={l.descripcion}
+                    onChange={(e) => actualizarLinea(i, "descripcion", e.target.value)}
+                    className="col-span-5 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+                  />
+                  <input
+                    placeholder="Unidad"
+                    required
+                    value={l.unidad}
+                    onChange={(e) => actualizarLinea(i, "unidad", e.target.value)}
+                    className="col-span-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+                  />
+                  <input
+                    type="number"
+                    step="0.001"
+                    placeholder="Cant."
+                    required
+                    value={l.cantidad}
+                    onChange={(e) => actualizarLinea(i, "cantidad", e.target.value)}
+                    className="col-span-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="P.U."
+                    required
+                    value={l.precioUnitario}
+                    onChange={(e) => actualizarLinea(i, "precioUnitario", e.target.value)}
+                    className="col-span-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setLineas((prev) => prev.filter((_, idx) => idx !== i))}
+                    disabled={lineas.length === 1}
+                    className="col-span-1 text-sm text-red-700 disabled:opacity-30"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setLineas((prev) => [...prev, { ...LINEA_VACIA }])}
+                className="text-sm font-medium text-[var(--brand)] hover:underline"
+              >
+                + Agregar gasto
+              </button>
+              <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-2 text-sm font-semibold text-[var(--foreground)]">
+                Total <span className="tabular-nums">{formatMoney(totalDetalle)}</span>
+              </div>
+            </div>
+          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Campo label="Categoría">
@@ -268,7 +344,7 @@ export function FormularioGasto({
               type="file"
               accept="image/*,application/pdf"
               capture="environment"
-              className="w-full text-sm text-[var(--foreground)]"
+              className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"
             />
             {gasto?.ticketUrl && (
               <a

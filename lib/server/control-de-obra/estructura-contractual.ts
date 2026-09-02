@@ -87,7 +87,11 @@ export async function obtenerPartidasProyectoPrivado(
   return partidasConConceptos(proyectoId);
 }
 
-function partidasConConceptosOperativo(proyectoId: string) {
+// Exportado: lo reutiliza también lib/server/control-de-obra/avance.ts —
+// Avance de obra es una pantalla operativa (visible a Supervisor incluido),
+// nunca debe traer columnas privadas de Concepto (auditoría de rendimiento,
+// agosto 2026: antes reusaba partidasConConceptos, que trae todo).
+export function partidasConConceptosOperativo(proyectoId: string) {
   return db.partida.findMany({
     where: { proyectoId },
     // `orden` casi siempre es 0 (nada en la UI lo captura hoy) — sin un
@@ -132,8 +136,12 @@ export async function obtenerContratistasProyecto(
 ) {
   await obtenerProyecto(usuario, proyectoId);
 
+  // Contratistas solo usa partidas/conceptos para el selector "asignar
+  // concepto existente" (nombre/unidad/id) — nunca precio ni nada privado
+  // (auditoría de rendimiento, agosto 2026: antes reusaba partidasConConceptos,
+  // que trae toda la capa privada de Concepto).
   const [partidas, contratos] = await Promise.all([
-    partidasConConceptos(proyectoId),
+    partidasConConceptosOperativo(proyectoId),
     contratosConConceptos(proyectoId),
   ]);
 
@@ -240,11 +248,16 @@ export function sumarContratoVigentePorBeneficiario(
   return mapa;
 }
 
+// `contratista.descripcion` es la especialidad general del catálogo — el
+// formulario "Nuevo contrato" la usa para precargar la Descripción de ESE
+// contrato al elegir un contratista existente (editable ahí sin tocar el
+// catálogo, ver FormNuevoContrato).
 export async function listarContratistasDisponibles(usuario: UsuarioSesion) {
   if (!usuario.empresa) throw new SinPermisoError();
   return db.beneficiario.findMany({
     where: { empresaId: usuario.empresa.id, tipo: "CONTRATISTA", activo: true },
     orderBy: { nombre: "asc" },
+    include: { contratista: { select: { descripcion: true } } },
   });
 }
 
@@ -645,7 +658,17 @@ const DatosContratoSchema = z
 async function obtenerOCrearParticipacionContratista(
   empresaId: string,
   proyectoId: string,
-  datos: { beneficiarioId?: string | null; nombreNuevoContratista?: string | null }
+  datos: {
+    beneficiarioId?: string | null;
+    nombreNuevoContratista?: string | null;
+    // Solo se usa para SEMBRAR el catálogo (Contratista.descripcion) cuando
+    // el contratista es nuevo — este primer contrato todavía no tiene una
+    // especialidad capturada en Catálogos, así que su propia Descripción es
+    // el mejor punto de partida. Un contratista ya existente nunca se
+    // sobreescribe desde aquí (ver crearContratoContratista) — solo se edita
+    // desde Catálogos.
+    descripcionParaCatalogoSiEsNuevo?: string | null;
+  }
 ) {
   let beneficiarioId = datos.beneficiarioId ?? undefined;
 
@@ -655,6 +678,9 @@ async function obtenerOCrearParticipacionContratista(
         empresaId,
         tipo: "CONTRATISTA",
         nombre: datos.nombreNuevoContratista,
+        contratista: {
+          create: { descripcion: datos.descripcionParaCatalogoSiEsNuevo || null },
+        },
       },
     });
     beneficiarioId = beneficiario.id;
@@ -685,11 +711,10 @@ export async function crearContratoContratista(
   await obtenerProyecto(usuario, proyectoId);
   const datos = DatosContratoSchema.parse(datosCrudos);
 
-  const beneficiarioProyecto = await obtenerOCrearParticipacionContratista(
-    empresaId,
-    proyectoId,
-    datos
-  );
+  const beneficiarioProyecto = await obtenerOCrearParticipacionContratista(empresaId, proyectoId, {
+    ...datos,
+    descripcionParaCatalogoSiEsNuevo: datos.descripcion,
+  });
 
   const contrato = await db.contratoContratista.create({
     data: {

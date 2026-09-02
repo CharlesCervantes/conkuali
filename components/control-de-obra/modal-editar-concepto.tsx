@@ -14,7 +14,7 @@ import {
   type BitacoraEntrada,
   type EditarConceptoEstructuralFormState,
   type EditarConceptoPrivadoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 const ETIQUETA_ACCION: Record<string, string> = {
   CREAR: "Creó el concepto",

@@ -1,6 +1,6 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { empresaTieneModulo, puedeAdministrarCatalogos } from "@/lib/server/permisos";
-import { listarProveedores } from "@/lib/server/catalogos";
+import { empresaTieneModulo, puedeAdministrarCatalogos, puedeEliminarCatalogo } from "@/lib/server/permisos";
+import { listarProveedores, listarBeneficiariosParaVincular } from "@/lib/server/catalogos";
 import { ProveedoresView } from "@/components/catalogos/proveedores-view";
 import { Card } from "@/components/ui/card";
 
@@ -31,7 +31,16 @@ export default async function ProveedoresPage() {
     );
   }
 
-  const proveedores = await listarProveedores(usuario);
+  const [proveedores, beneficiariosParaVincular] = await Promise.all([
+    listarProveedores(usuario),
+    listarBeneficiariosParaVincular(usuario),
+  ]);
 
-  return <ProveedoresView proveedores={proveedores} />;
+  return (
+    <ProveedoresView
+      proveedores={proveedores}
+      beneficiariosParaVincular={beneficiariosParaVincular}
+      puedeEliminar={puedeEliminarCatalogo(usuario)}
+    />
+  );
 }

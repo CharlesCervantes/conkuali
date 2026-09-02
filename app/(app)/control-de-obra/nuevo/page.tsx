@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
+import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import { Card } from "@/components/ui/card";
 import { ProyectoForm } from "@/components/control-de-obra/proyecto-form";
 import { crearProyectoAction } from "../actions";
@@ -36,6 +36,7 @@ export default async function NuevoProyectoPage() {
           action={crearProyectoAction}
           modo="crear"
           textoBoton="Crear proyecto"
+          puedeVerPrivado={puedeVerContratoGeneralPrivado(usuario)}
         />
       </Card>
     </div>

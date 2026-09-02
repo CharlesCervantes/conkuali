@@ -21,6 +21,11 @@ export type CostosConcepto = {
 export type PorcentajesDefaultProyecto = {
   utilidad: number | null;
   administracion: number | null;
+  // Override privado de `administracion` (Proyecto.porcentajeAdministracionPrivadoDefault)
+  // — null = el motor privado cae a `administracion` (el default operativo).
+  // Solo lo usa calcularPrecioConcepto; calcularPrecioOperativoConcepto
+  // nunca lo lee (agosto 2026).
+  administracionPrivado: number | null;
 };
 
 export type PrecioConceptoCalculado = {
@@ -127,6 +132,83 @@ export function calcularPrecioOperativoConcepto(
   };
 }
 
+// Espejo de calcularImportesConcepto (motor privado) pero para el motor
+// operativo — mismo patrón "× cantidad" para totales de contrato/proyecto,
+// nunca una fórmula nueva (Control Contractual en Cliente normal, agosto
+// 2026).
+export type ImportesOperativoConceptoCalculados = PrecioOperativoCalculado & {
+  cantidad: number;
+  importeTotal: number; // cantidad × precioUnitarioConAdministracion
+};
+
+export function calcularImportesOperativoConcepto(
+  concepto: CostosOperativoConcepto & { cantidadContratada: number },
+  esquema: EsquemaContractual | null,
+  porcentajeAdministracionDefault: number | null
+): ImportesOperativoConceptoCalculados {
+  const precio = calcularPrecioOperativoConcepto(concepto, esquema, porcentajeAdministracionDefault);
+  const cantidad = concepto.cantidadContratada;
+
+  return {
+    ...precio,
+    cantidad,
+    importeTotal: precio.precioUnitarioConAdministracion * cantidad,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Totales de una Estimación Cliente — trabajos + gastos cobrables + IVA.
+// Punto único de esta aritmética: EstimacionCliente (snapshot al cerrar/
+// reconciliar), la vista en vivo antes de emitir, el PDF y ResumenEstimacion*
+// llaman todos a esta misma función — nunca la repiten (gastos cobrables en
+// Estimación Cliente, agosto 2026). Se llama una vez por capa (operativo,
+// privado) con los insumos YA resueltos de esa capa; nunca mezcla ambas ni
+// aplica un % único sobre trabajos+gastos combinados — la administración de
+// trabajos llega ya sumada exacta por concepto (puede variar por concepto,
+// por overrides), la de gastos se calcula aquí porque un gasto no tiene
+// concepto que pueda traer su propio override.
+// ---------------------------------------------------------------------------
+
+export type InsumosTotalesEstimacion = {
+  subtotalTrabajos: number;
+  montoAdministracionTrabajos: number;
+  subtotalGastosCobrables: number;
+  // % vigente para gastos, ya resuelto por el caller (administración default
+  // del proyecto, o utilidad default si el esquema es PRECIO_ALZADO) — null
+  // si no hay gastos o el esquema/capa no aplica ningún % (ej. operativo +
+  // PRECIO_ALZADO, donde ningún % es visible para Cliente normal).
+  porcentajeAdministracionGastos: number | null;
+  aplicaIVA: boolean;
+  porcentajeIVA: number | null;
+};
+
+export type TotalesEstimacionCalculados = {
+  montoAdministracionGastos: number;
+  montoAdministracionTotal: number; // trabajos + gastos
+  baseAntesIVA: number; // subtotalTrabajos + subtotalGastosCobrables + montoAdministracionTotal
+  montoIVA: number;
+  total: number;
+};
+
+export function calcularTotalesEstimacion(
+  insumos: InsumosTotalesEstimacion
+): TotalesEstimacionCalculados {
+  const montoAdministracionGastos =
+    insumos.subtotalGastosCobrables * ((insumos.porcentajeAdministracionGastos ?? 0) / 100);
+  const montoAdministracionTotal = insumos.montoAdministracionTrabajos + montoAdministracionGastos;
+  const baseAntesIVA =
+    insumos.subtotalTrabajos + insumos.subtotalGastosCobrables + montoAdministracionTotal;
+  const montoIVA = insumos.aplicaIVA ? baseAntesIVA * ((insumos.porcentajeIVA ?? 0) / 100) : 0;
+
+  return {
+    montoAdministracionGastos,
+    montoAdministracionTotal,
+    baseAntesIVA,
+    montoIVA,
+    total: baseAntesIVA + montoIVA,
+  };
+}
+
 export function calcularPrecioConcepto(
   concepto: CostosConcepto,
   esquema: EsquemaContractual | null,
@@ -150,7 +232,9 @@ export function calcularPrecioConcepto(
 
   const porcentajeAplicado =
     esquema === "ADMINISTRACION"
-      ? (concepto.porcentajeAdministracion ?? porcentajesDefault.administracion)
+      ? (concepto.porcentajeAdministracion ??
+        porcentajesDefault.administracionPrivado ??
+        porcentajesDefault.administracion)
       : (concepto.porcentajeUtilidad ?? porcentajesDefault.utilidad);
 
   const montoPorcentaje = costoBase * ((porcentajeAplicado ?? 0) / 100);

@@ -1,12 +1,14 @@
 import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
-import { registrarAuditoria } from "@/lib/server/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
 import { puedeCapturarGastos, puedeAprobarGastos } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { CATEGORIAS_GASTO } from "@/lib/control-de-obra/categorias-gasto";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
+import { asignarGastoAReposicionTx } from "./reposiciones";
+import { intentarReclamarGastoParaCapas } from "./estimacion-cliente";
 
 function requerirEmpresa(usuario: UsuarioSesion): string {
   if (!usuario.empresa) throw new SinPermisoError();
@@ -29,10 +31,38 @@ export function calcularEstatusFiscal(g: {
   return g.facturaUrl ? "FACTURADO" : "PENDIENTE_FACTURA";
 }
 
+// Detalle multilínea opcional — mismo patrón que LineaSchema de
+// ordenes-compra.ts, sin el campo `concepto` (un gasto no lo necesita, solo
+// descripción/unidad/cantidad/P.U.). Captura multilínea de gastos, agosto 2026.
+const LineaGastoSchema = z.object({
+  descripcion: z.string().trim().min(1, "La descripción de la línea es obligatoria."),
+  unidad: z.string().trim().min(1, "La unidad es obligatoria."),
+  cantidad: z.coerce.number().positive("La cantidad debe ser mayor a cero."),
+  precioUnitario: z.coerce.number().nonnegative(),
+});
+
+function totalDetalleGasto(detalle: { cantidad: number; precioUnitario: number }[]): number {
+  return detalle.reduce((t, l) => t + l.cantidad * l.precioUnitario, 0);
+}
+
+// El formulario ya no pide una "Descripción" aparte — cada gasto se captura
+// siempre por líneas (mínimo una), y GastoObra.descripcion se deriva
+// uniendo la descripción de cada línea (ej. "Cemento, Varilla"). Sigue
+// siendo opcional aquí por compatibilidad con cualquier otro llamador que sí
+// mande una descripción explícita sin detalle (captura multilínea de
+// gastos, agosto 2026).
+function descripcionDesdeDetalle(detalle: { descripcion: string }[]): string {
+  return detalle.map((l) => l.descripcion).join(", ");
+}
+
 const DatosGastoSchema = z.object({
   fecha: z.coerce.date(),
-  descripcion: z.string().trim().min(1, "La descripción es obligatoria."),
+  descripcion: z.string().trim().optional().nullable(),
   categoria: z.enum(CATEGORIAS_GASTO),
+  // Cuando `detalle` trae líneas, este monto se ignora — el servidor lo
+  // recalcula siempre como la suma de las líneas (nunca confía en el total
+  // que mande el cliente). Sin detalle, sigue siendo el input directo de
+  // siempre (captura simple, ej. "Gasolina — $850").
   monto: z.coerce.number().positive("El monto debe ser mayor a cero."),
   metodoPago: z.enum(["EFECTIVO", "TRANSFERENCIA", "TARJETA_DEBITO", "TARJETA_CREDITO"]),
   // "YO" nunca confía en pagadorBeneficiarioId del cliente — se resuelve
@@ -49,6 +79,7 @@ const DatosGastoSchema = z.object({
     .default("NO_COBRABLE"),
   ticketUrl: z.string().trim().optional().nullable(),
   ticketNombre: z.string().trim().optional().nullable(),
+  detalle: z.array(LineaGastoSchema).optional(),
 });
 
 export type DatosGasto = z.infer<typeof DatosGastoSchema>;
@@ -102,29 +133,50 @@ export async function crearGasto(
   if (!semana) throw new RegistroNoEncontradoError("La semana");
 
   const pagadorBeneficiarioId = await resolverPagadorBeneficiarioId(usuario, empresaId, datos);
+  const tieneDetalle = (datos.detalle?.length ?? 0) > 0;
+  const monto = tieneDetalle ? totalDetalleGasto(datos.detalle!) : datos.monto;
+  const descripcion = datos.descripcion || (tieneDetalle ? descripcionDesdeDetalle(datos.detalle!) : "");
+  if (!descripcion) throw new ValidacionError("La descripción es obligatoria.");
 
   // Nace siempre PENDIENTE_REVISION, sin importar el rol que captura — misma
   // consistencia que AvanceConcepto: aprobar es siempre una acción explícita
   // separada de capturar (decisión de sesión, agosto 2026).
-  const gasto = await db.gastoObra.create({
-    data: {
-      empresaId,
-      proyectoId,
-      semanaId,
-      fecha: datos.fecha,
-      descripcion: datos.descripcion,
-      categoria: datos.categoria,
-      monto: datos.monto,
-      metodoPago: datos.metodoPago,
-      pagadorBeneficiarioId,
-      proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
-      comentario: datos.comentario || null,
-      requiereFactura: datos.requiereFactura,
-      tratamientoCliente: datos.tratamientoCliente,
-      ticketUrl: datos.ticketUrl || null,
-      ticketNombre: datos.ticketNombre || null,
-      capturadoPorId: usuario.id,
-    },
+  const gasto = await db.$transaction(async (tx) => {
+    const creado = await tx.gastoObra.create({
+      data: {
+        empresaId,
+        proyectoId,
+        semanaId,
+        fecha: datos.fecha,
+        descripcion,
+        categoria: datos.categoria,
+        monto,
+        metodoPago: datos.metodoPago,
+        pagadorBeneficiarioId,
+        proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
+        comentario: datos.comentario || null,
+        requiereFactura: datos.requiereFactura,
+        tratamientoCliente: datos.tratamientoCliente,
+        ticketUrl: datos.ticketUrl || null,
+        ticketNombre: datos.ticketNombre || null,
+        capturadoPorId: usuario.id,
+      },
+    });
+
+    if (tieneDetalle) {
+      await tx.gastoObraDetalle.createMany({
+        data: datos.detalle!.map((l, i) => ({
+          gastoObraId: creado.id,
+          descripcion: l.descripcion,
+          unidad: l.unidad,
+          cantidad: l.cantidad,
+          precioUnitario: l.precioUnitario,
+          orden: i,
+        })),
+      });
+    }
+
+    return creado;
   });
 
   await registrarAuditoria({
@@ -133,7 +185,7 @@ export async function crearGasto(
     entidad: "GastoObra",
     entidadId: gasto.id,
     accion: "CREAR",
-    valorNuevo: { descripcion: gasto.descripcion, monto: datos.monto, categoria: gasto.categoria },
+    valorNuevo: { descripcion: gasto.descripcion, monto, categoria: gasto.categoria },
   });
 
   return gasto;
@@ -158,23 +210,50 @@ export async function editarGasto(usuario: UsuarioSesion, gastoId: string, datos
   }
 
   const pagadorBeneficiarioId = await resolverPagadorBeneficiarioId(usuario, empresaId, datos);
+  const tieneDetalle = (datos.detalle?.length ?? 0) > 0;
+  const monto = tieneDetalle ? totalDetalleGasto(datos.detalle!) : datos.monto;
+  const descripcion = datos.descripcion || (tieneDetalle ? descripcionDesdeDetalle(datos.detalle!) : "");
+  if (!descripcion) throw new ValidacionError("La descripción es obligatoria.");
 
-  const gasto = await db.gastoObra.update({
-    where: { id: gastoId },
-    data: {
-      fecha: datos.fecha,
-      descripcion: datos.descripcion,
-      categoria: datos.categoria,
-      monto: datos.monto,
-      metodoPago: datos.metodoPago,
-      pagadorBeneficiarioId,
-      proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
-      comentario: datos.comentario || null,
-      requiereFactura: datos.requiereFactura,
-      tratamientoCliente: datos.tratamientoCliente,
-      ticketUrl: datos.ticketUrl || anterior.ticketUrl,
-      ticketNombre: datos.ticketNombre || anterior.ticketNombre,
-    },
+  const gasto = await db.$transaction(async (tx) => {
+    const actualizado = await tx.gastoObra.update({
+      where: { id: gastoId },
+      data: {
+        fecha: datos.fecha,
+        descripcion,
+        categoria: datos.categoria,
+        monto,
+        metodoPago: datos.metodoPago,
+        pagadorBeneficiarioId,
+        proveedorBeneficiarioId: datos.proveedorBeneficiarioId || null,
+        comentario: datos.comentario || null,
+        requiereFactura: datos.requiereFactura,
+        tratamientoCliente: datos.tratamientoCliente,
+        ticketUrl: datos.ticketUrl || anterior.ticketUrl,
+        ticketNombre: datos.ticketNombre || anterior.ticketNombre,
+      },
+    });
+
+    // Detalle siempre se reemplaza entero (mismo patrón que
+    // CorteSemanalConcepto al reconciliar un corte) — más simple y seguro
+    // que diffear línea por línea, y un gasto editable (BORRADOR/
+    // PENDIENTE_REVISION) nunca tiene todavía nada externo apuntando a una
+    // línea específica de su detalle.
+    await tx.gastoObraDetalle.deleteMany({ where: { gastoObraId: gastoId } });
+    if (tieneDetalle) {
+      await tx.gastoObraDetalle.createMany({
+        data: datos.detalle!.map((l, i) => ({
+          gastoObraId: gastoId,
+          descripcion: l.descripcion,
+          unidad: l.unidad,
+          cantidad: l.cantidad,
+          precioUnitario: l.precioUnitario,
+          orden: i,
+        })),
+      });
+    }
+
+    return actualizado;
   });
 
   await registrarAuditoria({
@@ -222,37 +301,84 @@ export async function enviarGastoARevision(usuario: UsuarioSesion, gastoId: stri
   return actualizado;
 }
 
+// Única aprobación real de todo el flujo Gastos→Reposiciones — si el gasto
+// fue pagado personalmente (pagadorBeneficiarioId no nulo), en la misma
+// transacción se asigna a la reposición abierta de ese beneficiario en este
+// proyecto+semana (o se crea una) y se crea/reconcilia su MovimientoSemanal.
+// Nunca hace falta una segunda aprobación (colapso de doble aprobación
+// Gastos→Reposiciones, agosto 2026). Bloqueo de fila sobre el propio gasto:
+// un doble clic sobre uno ya APROBADO es un no-op idempotente, así que nunca
+// se duplica el monto ni se crea una segunda reposición/movimiento.
 export async function aprobarGasto(usuario: UsuarioSesion, gastoId: string) {
   if (!puedeAprobarGastos(usuario)) throw new SinPermisoError();
   const empresaId = requerirEmpresa(usuario);
 
-  const gasto = await db.gastoObra.findFirst({ where: { id: gastoId, empresaId } });
-  if (!gasto) throw new RegistroNoEncontradoError("El gasto");
-  if (gasto.estatus !== "PENDIENTE_REVISION") {
-    throw new ValidacionError("Solo se puede aprobar un gasto pendiente de revisión.");
-  }
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM gastos_obra WHERE id = ${gastoId} FOR UPDATE`;
 
-  const actualizado = await db.gastoObra.update({
-    where: { id: gastoId },
-    data: {
-      estatus: "APROBADO",
-      revisadoPorId: usuario.id,
-      revisadoEn: new Date(),
-      motivoRechazo: null,
-    },
+    const gasto = await tx.gastoObra.findFirst({ where: { id: gastoId, empresaId } });
+    if (!gasto) throw new RegistroNoEncontradoError("El gasto");
+    if (gasto.estatus === "APROBADO") return gasto;
+    if (gasto.estatus !== "PENDIENTE_REVISION") {
+      throw new ValidacionError("Solo se puede aprobar un gasto pendiente de revisión.");
+    }
+
+    const actualizado = await tx.gastoObra.update({
+      where: { id: gastoId },
+      data: {
+        estatus: "APROBADO",
+        revisadoPorId: usuario.id,
+        revisadoEn: new Date(),
+        motivoRechazo: null,
+      },
+    });
+
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "GastoObra",
+      entidadId: actualizado.id,
+      accion: "CONFIRMAR",
+      valorAnterior: { estatus: "PENDIENTE_REVISION" },
+      valorNuevo: { estatus: "APROBADO" },
+    });
+
+    // null = lo pagó la empresa directamente — no genera reposición para
+    // nadie (mismo criterio ya usado en resolverPagadorBeneficiarioId). Esta
+    // es la obligación INTERNA (Conkuali → quien pagó) — completamente
+    // independiente del cobro al cliente de abajo (reposiciones ≠ cobro al
+    // cliente, agosto 2026).
+    if (gasto.pagadorBeneficiarioId) {
+      await asignarGastoAReposicionTx(tx, {
+        empresaId,
+        usuarioId: usuario.id,
+        proyectoId: gasto.proyectoId,
+        semanaId: gasto.semanaId,
+        beneficiarioId: gasto.pagadorBeneficiarioId,
+        gastoId: gasto.id,
+      });
+    }
+
+    // Reclamo por capa — un gasto cobrable que se aprueba se reclama de
+    // inmediato en cualquier capa (OPERATIVO/PRIVADO) que YA tenga una fila
+    // EstimacionClienteCapa en BORRADOR elegible para su semana de origen
+    // (regla cronológica en intentarReclamarGastoParaCapas,
+    // estimacion-cliente.ts). Si ninguna capa elegible existe todavía
+    // (su semana no ha cerrado, o esa capa nunca se generó), el gasto queda
+    // sin reclamar — nunca se crea una capa por adelantado solo para tener
+    // dónde ponerlo; se resuelve más tarde, en el próximo cierre de semana
+    // que sí toque esa capa (arquitectura por capas, agosto 2026).
+    if (gasto.tratamientoCliente === "COBRABLE_EN_ESTIMACION") {
+      await intentarReclamarGastoParaCapas(tx, gasto.proyectoId, {
+        id: gasto.id,
+        semanaId: gasto.semanaId,
+        incluidoEnCapaOperativoId: gasto.incluidoEnCapaOperativoId,
+        incluidoEnCapaPrivadoId: gasto.incluidoEnCapaPrivadoId,
+      });
+    }
+
+    return actualizado;
   });
-
-  await registrarAuditoria({
-    empresaId,
-    usuarioId: usuario.id,
-    entidad: "GastoObra",
-    entidadId: actualizado.id,
-    accion: "CONFIRMAR",
-    valorAnterior: { estatus: "PENDIENTE_REVISION" },
-    valorNuevo: { estatus: "APROBADO" },
-  });
-
-  return actualizado;
 }
 
 const MotivoRechazoSchema = z.string().trim().min(1, "El motivo del rechazo es obligatorio.");
@@ -353,6 +479,7 @@ export type FilaGasto = {
   motivoRechazo: string | null;
   reposicionGastosId: string | null;
   ordenCompraId: string | null;
+  detalle: { descripcion: string; unidad: string; cantidad: number; precioUnitario: number }[];
 };
 
 export async function obtenerGastos(
@@ -370,6 +497,7 @@ export async function obtenerGastos(
       proveedor: { select: { nombre: true } },
       capturadoPor: { select: { nombre: true } },
       revisadoPor: { select: { nombre: true } },
+      detalle: { orderBy: { orden: "asc" } },
     },
     orderBy: { fecha: "desc" },
   });
@@ -400,6 +528,12 @@ export async function obtenerGastos(
     motivoRechazo: g.motivoRechazo,
     reposicionGastosId: g.reposicionGastosId,
     ordenCompraId: g.ordenCompraId,
+    detalle: g.detalle.map((d) => ({
+      descripcion: d.descripcion,
+      unidad: d.unidad,
+      cantidad: Number(d.cantidad),
+      precioUnitario: Number(d.precioUnitario),
+    })),
   }));
 }
 
@@ -414,13 +548,17 @@ export type DashboardGastos = {
 // criterio que listarContratistasDisponibles (estructura-contractual.ts):
 // catálogo de la empresa completa, no solo los ya asignados a este proyecto,
 // porque un pagador/proveedor puede no tener todavía un BeneficiarioProyecto
-// formal en esta obra específica.
+// formal en esta obra específica. `mismaPersonaQueId: null` excluye los
+// alias (una misma persona real con más de una fila Beneficiario, ej. un
+// Contratista temporal que ya existía como Personal) — la fila canónica a
+// la que apuntan ya está incluida, así que la persona nunca desaparece de
+// la lista, solo deja de duplicarse (beneficiarios duplicados, agosto 2026).
 export async function listarBeneficiariosParaGasto(
   usuario: UsuarioSesion
 ): Promise<{ id: string; nombre: string; tipo: string }[]> {
   if (!usuario.empresa) throw new SinPermisoError();
   return db.beneficiario.findMany({
-    where: { empresaId: usuario.empresa.id, activo: true },
+    where: { empresaId: usuario.empresa.id, activo: true, mismaPersonaQueId: null },
     select: { id: true, nombre: true, tipo: true },
     orderBy: { nombre: "asc" },
   });

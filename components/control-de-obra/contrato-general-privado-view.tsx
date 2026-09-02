@@ -31,7 +31,11 @@ export function ContratoGeneralPrivadoView({
   proyectoId: string;
   partidas: Partidas;
   esquemaContractual: EsquemaContractual | null;
-  porcentajesDefault: { utilidad: number | null; administracion: number | null };
+  porcentajesDefault: {
+    utilidad: number | null;
+    administracion: number | null;
+    administracionPrivado: number | null;
+  };
 }) {
   const esAdministracion = esquemaContractual === "ADMINISTRACION";
   const mostrarIndirectosHerramienta = esquemaContractual === "PRECIO_ALZADO";
@@ -100,8 +104,12 @@ export function ContratoGeneralPrivadoView({
     }),
     { contratistas: 0, materiales: 0, indirectos: 0, herramienta: 0, porcentaje: 0 }
   );
+  // Valor EFECTIVO que calcularPrecioConcepto de verdad le aplica a un
+  // concepto sin override propio: el %Administración privado si se
+  // configuró, si no, cae al %Administración operativo — mismo fallback que
+  // el motor de cálculo (agosto 2026).
   const porcentajeProyecto = esAdministracion
-    ? porcentajesDefault.administracion
+    ? (porcentajesDefault.administracionPrivado ?? porcentajesDefault.administracion)
     : porcentajesDefault.utilidad;
 
   return (

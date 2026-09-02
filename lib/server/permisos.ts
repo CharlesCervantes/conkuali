@@ -127,13 +127,19 @@ export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
 /**
  * Emitir una Estimación Cliente la congela para siempre — mismo criterio
  * financieramente sensible que cerrar/reabrir semana y eliminar proyectos,
- * sin Master (04-modulo-control-de-obra.md, sección "Cliente"). También
- * respeta Vista privada — emitir es una acción de la capa privada del
- * cliente (puedeCerrarSemana ya excluye Master, así que no hace falta pasar
- * por puedeConfigurarVistaPrivada).
+ * sin Master (04-modulo-control-de-obra.md, sección "Cliente"). Ya NO exige
+ * Vista privada activa (cambio deliberado, gastos cobrables en Estimación
+ * Cliente, agosto 2026): una obra sin capa privada (Vista Privada
+ * permanentemente apagada, o el proyecto nunca la usa) debe poder emitir
+ * desde Cliente normal sin depender de ese interruptor — respaldado por
+ * 04-modulo-control-de-obra.md sección 49.9, que ya documenta que el %
+ * Administración (a diferencia de %Utilidad de Precio Alzado) es visible
+ * para el cliente, no es margen oculto. Quién puede emitir no cambia (sigue
+ * siendo exclusivamente ADMINISTRADOR/DIRECTOR vía puedeCerrarSemana, Master
+ * sigue excluido) — solo deja de requerir el toggle.
  */
 export function puedeEmitirEstimacionCliente(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
+  return puedeCerrarSemana(usuario);
 }
 
 /**
@@ -148,13 +154,25 @@ export function puedeMaterializarEstimacionHistorica(usuario: UsuarioSesion): bo
 }
 
 /**
- * Ver Control Contractual (información financiera privada del cliente:
- * fondo/cuentas por cobrar, aportaciones, pagos) — mismo rol-set que el
- * resto de la capa privada de Contrato General (04-modulo-control-de-obra.md,
+ * Ver Control Contractual — información financiera del cliente (fondo/
+ * cuentas por cobrar, aportaciones, pagos), capa Privada: mismo rol-set que
+ * el resto de la capa privada de Contrato General (04-modulo-control-de-obra.md,
  * sección "Control Contractual").
  */
 export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
   return puedeVerContratoGeneralPrivado(usuario);
+}
+
+/**
+ * Igual que puedeVerFinancieroCliente, pero para la capa Cliente (operativo)
+ * — deliberadamente SIN exigir Vista privada (mismo criterio que
+ * puedeEmitirEstimacionCliente): una obra sin capa privada necesita ver su
+ * propio pendiente por cobrar/fondo sin depender de ese interruptor. El
+ * rol-set no cambia (ADMINISTRADOR/DIRECTOR, sin Master) — gastos cobrables
+ * en Estimación Cliente, agosto 2026.
+ */
+export function puedeVerFinancieroClienteOperativo(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
 }
 
 /**
@@ -165,6 +183,19 @@ export function puedeVerFinancieroCliente(usuario: UsuarioSesion): boolean {
  */
 export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
   return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
+}
+
+/**
+ * Igual que puedeRegistrarMovimientoFinancieroCliente, pero para la capa
+ * Cliente (operativo) — deliberadamente SIN exigir Vista privada (mismo
+ * criterio que puedeVerFinancieroClienteOperativo/puedeEmitirEstimacionCliente):
+ * una obra sin capa privada necesita poder registrar pagos y aplicar fondo
+ * contra su propia estimación Operativo sin depender de ese interruptor. El
+ * rol-set no cambia (ADMINISTRADOR/DIRECTOR, sin Master) — arquitectura por
+ * capas, agosto 2026.
+ */
+export function puedeRegistrarMovimientoFinancieroClienteOperativo(usuario: UsuarioSesion): boolean {
+  return puedeCerrarSemana(usuario);
 }
 
 /**
@@ -201,6 +232,17 @@ export function puedeAutorizarOrdenesCompra(usuario: UsuarioSesion): boolean {
  */
 export function puedeAdministrarCatalogos(usuario: UsuarioSesion): boolean {
   return puedeAdministrarProyectos(usuario);
+}
+
+/**
+ * Eliminar definitivamente un elemento de catálogo (Proveedor/Contratista/
+ * Personal) — a diferencia de puedeAdministrarCatalogos (que incluye Master,
+ * igual que administrar proyectos), esto es irreversible y borra datos reales
+ * de un tenant, así que sigue el mismo criterio restringido que
+ * puedeEliminarProyectos: nunca Master (decisión de sesión, agosto 2026).
+ */
+export function puedeEliminarCatalogo(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
 }
 
 /**

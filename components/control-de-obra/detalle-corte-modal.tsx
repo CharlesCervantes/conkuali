@@ -13,7 +13,7 @@ import {
   subirEvidenciaReciboAction,
   type GenerarReciboFormState,
   type SubirEvidenciaReciboFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { DetalleCorte } from "@/lib/server/control-de-obra/recibos";
 
 function formatFecha(iso: string): string {

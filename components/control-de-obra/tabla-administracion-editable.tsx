@@ -10,7 +10,7 @@ import { ModalEditarConcepto } from "./modal-editar-concepto";
 import {
   editarConceptoPrivadoAction,
   type EditarConceptoPrivadoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 // Plano y sin Decimal a propósito (igual que tabla-privada-editable.tsx).
 export type ConceptoAdministracion = {

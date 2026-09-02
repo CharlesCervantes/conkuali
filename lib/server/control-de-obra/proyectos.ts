@@ -3,7 +3,11 @@ import { cache } from "react";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeAdministrarProyectos, puedeEliminarProyectos } from "@/lib/server/permisos";
+import {
+  puedeAdministrarProyectos,
+  puedeEliminarProyectos,
+  puedeVerContratoGeneralPrivado,
+} from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { EstatusProyecto } from "@/lib/generated/prisma/enums";
 
@@ -43,6 +47,8 @@ const DatosProyectoSchema = z.object({
   esquemaContractual: z.enum(["PRECIO_ALZADO", "ADMINISTRACION"]).optional().nullable(),
   porcentajeUtilidadDefault: z.coerce.number().nonnegative().optional().nullable(),
   porcentajeAdministracionDefault: z.coerce.number().nonnegative().optional().nullable(),
+  // Override privado del anterior — ver comentario en schema.prisma.
+  porcentajeAdministracionPrivadoDefault: z.coerce.number().nonnegative().optional().nullable(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;
@@ -60,6 +66,28 @@ function requerirAdmin(usuario: UsuarioSesion): string {
 function requerirEliminar(usuario: UsuarioSesion): string {
   if (!puedeEliminarProyectos(usuario)) throw new SinPermisoError();
   return requerirEmpresa(usuario);
+}
+
+// %Utilidad/%Administración por default son información privada (misma
+// puerta que Contrato General Privado/Cliente Priv.) — se ignoran del lado
+// servidor si llegan en el payload sin el permiso, sin rechazar el resto de
+// la edición; nunca se confía en que el formulario los haya ocultado
+// (defensa en profundidad, corrección de sesión agosto 2026).
+function podarPorcentajesPrivados(
+  usuario: UsuarioSesion,
+  datos: DatosProyecto
+): DatosProyecto {
+  if (puedeVerContratoGeneralPrivado(usuario)) return datos;
+  // porcentajeAdministracionDefault NO se poda — lo usa también el motor
+  // operativo (Cliente normal) y el cliente sí puede verlo (a diferencia de
+  // %Utilidad de Precio Alzado, que sí es margen oculto, y del override
+  // %Administración privado, que sí es exclusivo de Cliente Priv.). Gastos
+  // cobrables en Estimación Cliente, agosto 2026.
+  return {
+    ...datos,
+    porcentajeUtilidadDefault: undefined,
+    porcentajeAdministracionPrivadoDefault: undefined,
+  };
 }
 
 export async function listarProyectos(usuario: UsuarioSesion) {
@@ -110,7 +138,7 @@ export async function proyectoTieneInformacionContractual(
 
 export async function crearProyecto(usuario: UsuarioSesion, datosCrudos: unknown) {
   const empresaId = requerirAdmin(usuario);
-  const datos = DatosProyectoSchema.parse(datosCrudos);
+  const datos = podarPorcentajesPrivados(usuario, DatosProyectoSchema.parse(datosCrudos));
 
   // Obra formal nueva: el esquema contractual es obligatorio desde el inicio
   // (sección 3 del rediseño). No se aplica en editarProyecto — ahí debe seguir
@@ -149,7 +177,7 @@ export async function editarProyecto(
   confirmarEsquemaConDatos = false
 ) {
   const empresaId = requerirAdmin(usuario);
-  const datos = DatosProyectoSchema.parse(datosCrudos);
+  const datos = podarPorcentajesPrivados(usuario, DatosProyectoSchema.parse(datosCrudos));
 
   const anterior = await db.proyecto.findFirst({ where: { id, empresaId } });
   if (!anterior) throw new ProyectoNoEncontradoError();
@@ -314,6 +342,22 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
     });
     const gastoIds = gastos.map((g) => g.id);
 
+    // Arquitectura por capas (agosto 2026) — Cliente/Cliente Priv. son
+    // documentos financieros independientes, cada uno con su propia fila
+    // EstimacionClienteCapa (y su propio detalle/gastos congelados). Se
+    // recolectan aquí para poder borrarlos antes que EstimacionCliente
+    // (EstimacionClienteCapa.estimacionClienteId es RESTRICT, no CASCADE).
+    const capas = await tx.estimacionClienteCapa.findMany({
+      where: { estimacionClienteId: { in: estimacionIds } },
+      select: { id: true },
+    });
+    const capaIds = capas.map((c) => c.id);
+    const movimientos = await tx.movimientoFinancieroCliente.findMany({
+      where: { proyectoId: id },
+      select: { id: true },
+    });
+    const movimientoIds = movimientos.map((m) => m.id);
+
     const reposiciones = await tx.reposicionGastos.findMany({
       where: { proyectoId: id },
       select: { id: true },
@@ -331,15 +375,35 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
     // nivel de base de datos — no hace falta borrarlo aparte.
     await tx.corteSemanalConcepto.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
     await tx.reciboPago.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
+
+    // Snapshot congelado por capa (EstimacionClienteCapaConcepto/
+    // EstimacionClienteGasto) — RESTRICT hacia EstimacionClienteCapa/
+    // EstimacionCliente y GastoObra respectivamente, así que deben
+    // liberarse antes que esos tres (arquitectura por capas, agosto 2026).
+    await tx.estimacionClienteCapaConcepto.deleteMany({
+      where: { estimacionClienteCapaId: { in: capaIds } },
+    });
+    await tx.estimacionClienteGastoDetalle.deleteMany({
+      where: { estimacionClienteGasto: { estimacionClienteId: { in: estimacionIds } } },
+    });
+    await tx.estimacionClienteGasto.deleteMany({
+      where: { estimacionClienteId: { in: estimacionIds } },
+    });
+    await tx.estimacionClienteCapa.deleteMany({
+      where: { id: { in: capaIds } },
+    });
     await tx.estimacionClienteConcepto.deleteMany({
       where: { estimacionClienteId: { in: estimacionIds } },
     });
     await tx.ordenCompraConcepto.deleteMany({ where: { ordenCompraId: { in: ordenIds } } });
     await tx.movimientoFinancieroCliente.deleteMany({ where: { proyectoId: id } });
-    // Gasto antes que Reposición/OC — un gasto puede referenciar cualquiera
-    // de las dos (pagadorBeneficiarioId/proveedorBeneficiarioId apuntan a
-    // Beneficiario, que nunca se toca; ordenCompraId/reposicionGastosId sí
-    // apuntan aquí y deben liberarse primero).
+    // Detalle multilínea de gasto (GastoObraDetalle) — RESTRICT hacia
+    // GastoObra, debe liberarse antes (captura multilínea de gastos, agosto
+    // 2026). Gasto antes que Reposición/OC — un gasto puede referenciar
+    // cualquiera de las dos (pagadorBeneficiarioId/proveedorBeneficiarioId
+    // apuntan a Beneficiario, que nunca se toca; ordenCompraId/
+    // reposicionGastosId sí apuntan aquí y deben liberarse primero).
+    await tx.gastoObraDetalle.deleteMany({ where: { gastoObraId: { in: gastoIds } } });
     await tx.gastoObra.deleteMany({ where: { proyectoId: id } });
     await tx.reposicionGastos.deleteMany({ where: { proyectoId: id } });
     await tx.ordenCompra.deleteMany({ where: { proyectoId: id } });
@@ -369,6 +433,8 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
           { entidad: "ContratoContratista", entidadId: { in: contratoIds } },
           { entidad: "ContratoConcepto", entidadId: { in: asignacionIds } },
           { entidad: "EstimacionCliente", entidadId: { in: estimacionIds } },
+          { entidad: "EstimacionClienteCapa", entidadId: { in: capaIds } },
+          { entidad: "MovimientoFinancieroCliente", entidadId: { in: movimientoIds } },
           { entidad: "GastoObra", entidadId: { in: gastoIds } },
           { entidad: "ReposicionGastos", entidadId: { in: reposicionIds } },
           { entidad: "OrdenCompra", entidadId: { in: ordenIds } },

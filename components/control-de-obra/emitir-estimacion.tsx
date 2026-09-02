@@ -9,7 +9,7 @@ import { formatMoney } from "@/lib/dinero";
 import {
   emitirEstimacionAction,
   type EmitirEstimacionFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 // Bloque de estado/emisión de Cliente Priv. para una semana cerrada — mismo
 // patrón de modal propio (no window.confirm()) que CierreSemanaAbierta, ya
@@ -28,7 +28,7 @@ export function EmitirEstimacion({
 }: {
   proyectoId: string;
   estimacionId: string;
-  numero: number;
+  numero: number | null;
   estatus: "BORRADOR" | "EMITIDA";
   total: number;
   generadoPorNombre: string;
@@ -44,12 +44,12 @@ export function EmitirEstimacion({
       <div className="flex items-center justify-between">
         <div>
           <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
-            Estimación {numero}
+            {numero !== null ? `Estimación ${numero}` : "Estimación · borrador"}
           </p>
           <p className="mt-1 text-sm text-[var(--muted)]">
             {estatus === "EMITIDA"
               ? `Emitida por ${emitidoPorNombre} · ${emitidoEn ? new Date(emitidoEn).toLocaleDateString("es-MX") : ""}`
-              : `Borrador, generada al cerrar la semana por ${generadoPorNombre}`}
+              : `Borrador, generada al cerrar la semana por ${generadoPorNombre} — el folio se asigna al emitir`}
           </p>
         </div>
         <span
@@ -100,7 +100,7 @@ function ModalConfirmarEmision({
 }: {
   proyectoId: string;
   estimacionId: string;
-  numero: number;
+  numero: number | null;
   total: number;
   fondoDisponible: number;
   onClose: () => void;
@@ -140,7 +140,7 @@ function ModalConfirmarEmision({
     >
       <Card className="enter w-full max-w-md p-6">
         <h2 className="text-lg font-semibold text-[var(--foreground)]">
-          Emitir estimación {numero}
+          {numero !== null ? `Emitir estimación ${numero}` : "Emitir estimación"}
         </h2>
         <p className="mt-2 text-sm text-[var(--muted)]">
           Esto congela la estimación por {formatMoney(total)} para siempre — ninguna edición

@@ -4,7 +4,7 @@ import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/cn";
-import { crearPartidaAction, type FormState } from "@/app/(app)/control-de-obra/[id]/actions";
+import { crearPartidaAction, type FormState } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import { ICONOS_PARTIDA, COLORES_PARTIDA } from "@/lib/control-de-obra/iconos-partida";
 
 export function FormNuevaPartida({ proyectoId }: { proyectoId: string }) {

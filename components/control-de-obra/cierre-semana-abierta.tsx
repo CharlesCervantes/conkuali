@@ -9,7 +9,7 @@ import { formatMoney } from "@/lib/dinero";
 import {
   cerrarSemanaAction,
   type CerrarSemanaFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { ResumenCierreSemana } from "@/lib/server/control-de-obra/cierre-semana";
 
 // Bloque al final de Avance de obra — semana todavía abierta (nunca se

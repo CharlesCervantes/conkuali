@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
-import { asignarConceptoAction, type FormState } from "@/app/(app)/control-de-obra/[id]/actions";
+import { asignarConceptoAction, type FormState } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 export function FormAsignarConcepto({
   contratoId,

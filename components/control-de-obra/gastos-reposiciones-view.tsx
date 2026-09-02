@@ -8,18 +8,15 @@ import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/dinero";
 import { formatearFecha } from "@/lib/fecha";
 import { CATEGORIA_GASTO_LABEL } from "@/lib/control-de-obra/categorias-gasto";
+import { EstadoPagoBadge } from "@/components/reporte-general/estado-pago-badge";
+import type { EstatusPago } from "@/lib/generated/prisma/enums";
 import {
-  crearReposicionAction,
-  enviarReposicionARevisionAction,
-  aprobarReposicionAction,
-  rechazarReposicionAction,
   enviarGastoARevisionAction,
   aprobarGastoAction,
   rechazarGastoAction,
-  type ReposicionFormState,
   type AprobarGastoFormState,
   type RechazarGastoFormState,
-} from "@/app/(app)/control-de-obra/[id]/actions";
+} from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import { FormularioGasto } from "./formulario-gasto";
 import type { FilaGasto, DashboardGastos } from "@/lib/server/control-de-obra/gastos";
 import type { FilaReposicion } from "@/lib/server/control-de-obra/reposiciones";
@@ -47,13 +44,10 @@ const ESTATUS_GASTO_LABEL: Record<string, string> = {
   CANCELADO: "Cancelado",
 };
 
-const ESTATUS_REPOSICION_LABEL: Record<string, string> = {
-  BORRADOR: "Borrador",
-  ENVIADA_REVISION: "Enviada a revisión",
-  APROBADA: "Aprobada",
-  RECHAZADA: "Rechazada",
-};
-
+// La Reposición ya no es un segundo flujo de aprobación — es el agrupador de
+// pago que aprobarGasto arma solo. Esta vista solo consulta/lee la sección
+// Reposiciones; su única acción es Aprobar/Rechazar por gasto (colapso de
+// doble aprobación Gastos→Reposiciones, agosto 2026).
 export function GastosReposicionesView({
   proyectoId,
   semanaId,
@@ -77,32 +71,13 @@ export function GastosReposicionesView({
 }) {
   const [modalNuevoGasto, setModalNuevoGasto] = useState(false);
   const [gastoEditando, setGastoEditando] = useState<FilaGasto | null>(null);
-  const [seleccionados, setSeleccionados] = useState<Set<string>>(new Set());
   const [rechazandoGasto, setRechazandoGasto] = useState<string | null>(null);
-  const [rechazandoReposicion, setRechazandoReposicion] = useState<string | null>(null);
 
-  const elegibles = gastos.filter(
-    (g) => g.estatus === "APROBADO" && !g.reposicionGastosId && g.pagadorBeneficiarioId
-  );
-  const pagadorSeleccionado =
-    seleccionados.size > 0
-      ? (elegibles.find((g) => seleccionados.has(g.id))?.pagadorBeneficiarioId ?? null)
-      : null;
-  const totalSeleccionado = elegibles
-    .filter((g) => seleccionados.has(g.id))
-    .reduce((t, g) => t + g.monto, 0);
-
-  function alternarSeleccion(gasto: FilaGasto) {
-    setSeleccionados((prev) => {
-      const nuevo = new Set(prev);
-      if (nuevo.has(gasto.id)) {
-        nuevo.delete(gasto.id);
-      } else {
-        nuevo.add(gasto.id);
-      }
-      return nuevo;
-    });
-  }
+  // Un gasto ya asignado a una reposición vive visualmente en la sección
+  // Reposiciones de abajo — mostrarlo también aquí lo duplicaría. Un
+  // aprobado pagado directo por "La empresa" nunca genera reposición, así
+  // que sigue viéndose aquí (es el único lugar donde vive).
+  const gastosVisibles = gastos.filter((g) => !g.reposicionGastosId);
 
   return (
     <div className="space-y-6">
@@ -115,13 +90,10 @@ export function GastosReposicionesView({
         />
         <Indicador etiqueta="Aprobados" valor={dashboard.aprobados} />
         <Indicador etiqueta="Total aprobado" valor={formatMoney(dashboard.totalAprobado)} />
+        <Indicador etiqueta="Reposiciones" valor={reposiciones.length} />
         <Indicador
-          etiqueta="Reposiciones pendientes"
-          valor={reposiciones.filter((r) => r.estatus === "ENVIADA_REVISION").length}
-        />
-        <Indicador
-          etiqueta="Reposiciones aprobadas"
-          valor={reposiciones.filter((r) => r.estatus === "APROBADA").length}
+          etiqueta="Reposiciones liquidadas"
+          valor={reposiciones.filter((r) => r.estatusPago === "LIQUIDADO").length}
         />
       </div>
 
@@ -130,18 +102,13 @@ export function GastosReposicionesView({
         <Button onClick={() => setModalNuevoGasto(true)}>+ Nuevo gasto</Button>
       </div>
 
-      {gastos.length === 0 ? (
+      {gastosVisibles.length === 0 ? (
         <Card className="p-6 text-sm text-[var(--muted)]">
           Todavía no hay gastos capturados esta semana.
         </Card>
       ) : (
         <div className="space-y-3">
-          {gastos.map((g) => {
-            const puedeSeleccionar =
-              g.estatus === "APROBADO" &&
-              !g.reposicionGastosId &&
-              g.pagadorBeneficiarioId &&
-              (pagadorSeleccionado === null || pagadorSeleccionado === g.pagadorBeneficiarioId);
+          {gastosVisibles.map((g) => {
             const puedeEditar =
               (g.estatus === "BORRADOR" || g.estatus === "PENDIENTE_REVISION") &&
               (g.capturadoPorId === usuarioId || puedeAprobar);
@@ -149,14 +116,6 @@ export function GastosReposicionesView({
             return (
               <Card key={g.id} className="enter p-4">
                 <div className="flex items-start gap-3">
-                  {puedeSeleccionar && (
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={seleccionados.has(g.id)}
-                      onChange={() => alternarSeleccion(g)}
-                    />
-                  )}
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="font-medium text-[var(--foreground)]">{g.descripcion}</p>
@@ -177,8 +136,32 @@ export function GastosReposicionesView({
                     {g.comentario && (
                       <p className="mt-1 text-sm text-[var(--muted)]">{g.comentario}</p>
                     )}
-                    {g.motivoRechazo && (
-                      <p className="mt-1 text-sm text-red-700">Rechazado: {g.motivoRechazo}</p>
+                    {g.estatus === "RECHAZADO" && g.motivoRechazo && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-sm font-medium text-red-700 select-none">
+                          Ver motivo
+                        </summary>
+                        <p className="mt-1 text-sm text-red-700">{g.motivoRechazo}</p>
+                      </details>
+                    )}
+                    {g.detalle.length > 0 && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-sm font-medium text-[var(--brand)] select-none">
+                          Ver detalle ({g.detalle.length} línea{g.detalle.length === 1 ? "" : "s"})
+                        </summary>
+                        <ul className="mt-1 space-y-0.5 text-xs text-[var(--muted)]">
+                          {g.detalle.map((l, i) => (
+                            <li key={i} className="flex justify-between gap-2">
+                              <span>
+                                {l.descripcion} — {l.cantidad} {l.unidad} × {formatMoney(l.precioUnitario)}
+                              </span>
+                              <span className="tabular-nums">
+                                {formatMoney(l.cantidad * l.precioUnitario)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
                     )}
                     <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
                       {g.ticketUrl && (
@@ -240,73 +223,51 @@ export function GastosReposicionesView({
         </div>
       )}
 
-      {seleccionados.size > 0 && pagadorSeleccionado && (
-        <Card className="enter sticky bottom-4 flex items-center justify-between p-4 ring-2 ring-emerald-200">
-          <p className="text-sm text-[var(--foreground)]">
-            {seleccionados.size} gasto{seleccionados.size === 1 ? "" : "s"} seleccionado
-            {seleccionados.size === 1 ? "" : "s"} · {formatMoney(totalSeleccionado)}
-          </p>
-          <FormularioGenerarReposicion
-            proyectoId={proyectoId}
-            semanaId={semanaId}
-            beneficiarioId={pagadorSeleccionado}
-            gastoIds={[...seleccionados]}
-            onDone={() => setSeleccionados(new Set())}
-          />
-        </Card>
-      )}
-
       <div>
         <h2 className="mb-3 text-sm font-semibold text-[var(--foreground)]">Reposiciones</h2>
         {reposiciones.length === 0 ? (
           <Card className="p-6 text-sm text-[var(--muted)]">
-            Todavía no hay reposiciones generadas esta semana.
+            Todavía no hay reposiciones esta semana — se crean solas al aprobar un gasto pagado
+            personalmente.
           </Card>
         ) : (
           <div className="space-y-3">
             {reposiciones.map((r) => (
               <Card key={r.id} className="enter p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-medium text-[var(--foreground)]">
-                      {r.folio} · {r.beneficiarioNombre}
-                    </p>
-                    <p className="mt-0.5 text-xs text-[var(--muted)]">
-                      {r.cantidadGastos} gasto{r.cantidadGastos === 1 ? "" : "s"} ·{" "}
-                      {ESTATUS_REPOSICION_LABEL[r.estatus]}
-                      {r.estatusPago && ` · Pago: ${r.estatusPago}`}
-                    </p>
-                    {r.motivoRechazo && (
-                      <p className="mt-1 text-sm text-red-700">Rechazada: {r.motivoRechazo}</p>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
-                      {formatMoney(r.total)}
-                    </p>
-                    {r.estatus === "BORRADOR" && (
-                      <button
-                        type="button"
-                        onClick={() => enviarReposicionARevisionAction(proyectoId, r.id)}
-                        className="text-sm font-medium text-[var(--brand)] hover:underline"
-                      >
-                        Enviar a revisión
-                      </button>
-                    )}
-                    {r.estatus === "ENVIADA_REVISION" && puedeAprobar && (
-                      <div className="flex items-center gap-2">
-                        <BotonAprobarReposicion proyectoId={proyectoId} reposicionId={r.id} />
-                        <button
-                          type="button"
-                          onClick={() => setRechazandoReposicion(r.id)}
-                          className="text-sm font-medium text-red-700 hover:underline"
-                        >
-                          Rechazar
-                        </button>
+                <details>
+                  <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 select-none [&::-webkit-details-marker]:hidden">
+                    <div>
+                      <p className="font-medium text-[var(--foreground)]">
+                        {r.folio} · {r.beneficiarioNombre}
+                      </p>
+                      <p className="mt-0.5 text-xs text-[var(--muted)]">
+                        {r.cantidadGastos} gasto{r.cantidadGastos === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
+                        {formatMoney(r.total)}
+                      </p>
+                      <EstadoPagoBadge estatus={r.estatusPago as EstatusPago | null} />
+                    </div>
+                  </summary>
+
+                  <div className="mt-3 border-t border-[var(--border)] pt-3">
+                    {r.gastos.map((g) => (
+                      <div key={g.id} className="flex items-center justify-between py-1 text-sm">
+                        <span className="text-[var(--foreground)]">
+                          {g.descripcion}{" "}
+                          <span className="text-xs text-[var(--muted)]">
+                            · {formatearFecha(new Date(g.fecha))}
+                          </span>
+                        </span>
+                        <span className="tabular-nums text-[var(--foreground)]">
+                          {formatMoney(g.monto)}
+                        </span>
                       </div>
-                    )}
+                    ))}
                   </div>
-                </div>
+                </details>
               </Card>
             ))}
           </div>
@@ -329,21 +290,9 @@ export function GastosReposicionesView({
 
       {rechazandoGasto && (
         <ModalMotivoRechazo
-          titulo="Rechazar gasto"
           proyectoId={proyectoId}
-          idParaAccion={rechazandoGasto}
-          accion={rechazarGastoAction}
+          gastoId={rechazandoGasto}
           onClose={() => setRechazandoGasto(null)}
-        />
-      )}
-
-      {rechazandoReposicion && (
-        <ModalMotivoRechazo
-          titulo="Rechazar reposición"
-          proyectoId={proyectoId}
-          idParaAccion={rechazandoReposicion}
-          accion={rechazarReposicionAction}
-          onClose={() => setRechazandoReposicion(null)}
         />
       )}
     </div>
@@ -393,99 +342,20 @@ function BotonAprobarGasto({ proyectoId, gastoId }: { proyectoId: string; gastoI
   );
 }
 
-function BotonAprobarReposicion({
-  proyectoId,
-  reposicionId,
-}: {
-  proyectoId: string;
-  reposicionId: string;
-}) {
-  const action = aprobarReposicionAction.bind(null, proyectoId, reposicionId);
-  const [state, formAction, pending] = useActionState<ReposicionFormState, FormData>(
-    action,
-    undefined
-  );
-  return (
-    <form action={formAction}>
-      <button
-        type="submit"
-        disabled={pending}
-        className="text-sm font-medium text-emerald-700 hover:underline disabled:opacity-50"
-      >
-        {pending ? "Aprobando…" : "Aprobar"}
-      </button>
-      {state?.error && <p className="mt-1 text-xs text-red-700">{state.error}</p>}
-    </form>
-  );
-}
-
-function FormularioGenerarReposicion({
-  proyectoId,
-  semanaId,
-  beneficiarioId,
-  gastoIds,
-  onDone,
-}: {
-  proyectoId: string;
-  semanaId: string;
-  beneficiarioId: string;
-  gastoIds: string[];
-  onDone: () => void;
-}) {
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  return (
-    <div className="flex items-center gap-2">
-      <Button
-        disabled={pending}
-        onClick={async () => {
-          setPending(true);
-          setError(null);
-          const resultado = await crearReposicionAction(
-            proyectoId,
-            semanaId,
-            beneficiarioId,
-            gastoIds
-          );
-          setPending(false);
-          if (resultado?.error) {
-            setError(resultado.error);
-          } else {
-            onDone();
-          }
-        }}
-      >
-        {pending ? "Generando…" : "Generar reposición"}
-      </Button>
-      {error && <p className="text-xs text-red-700">{error}</p>}
-    </div>
-  );
-}
-
 function ModalMotivoRechazo({
-  titulo,
   proyectoId,
-  idParaAccion,
-  accion,
+  gastoId,
   onClose,
 }: {
-  titulo: string;
   proyectoId: string;
-  idParaAccion: string;
-  accion: (
-    proyectoId: string,
-    id: string,
-    state: RechazarGastoFormState | ReposicionFormState,
-    formData: FormData
-  ) => Promise<RechazarGastoFormState | ReposicionFormState>;
+  gastoId: string;
   onClose: () => void;
 }) {
-  const bound = accion.bind(null, proyectoId, idParaAccion);
-  const [state, formAction, pending] = useActionState<
-    RechazarGastoFormState | ReposicionFormState,
-    FormData
-  >(bound, undefined);
+  const bound = rechazarGastoAction.bind(null, proyectoId, gastoId);
+  const [state, formAction, pending] = useActionState<RechazarGastoFormState, FormData>(
+    bound,
+    undefined
+  );
   const [stateAnterior, setStateAnterior] = useState(state);
   if (state !== stateAnterior) {
     setStateAnterior(state);
@@ -500,7 +370,7 @@ function ModalMotivoRechazo({
       }}
     >
       <Card className="enter w-full max-w-md p-6">
-        <h2 className="text-lg font-semibold text-[var(--foreground)]">{titulo}</h2>
+        <h2 className="text-lg font-semibold text-[var(--foreground)]">Rechazar gasto</h2>
         <form action={formAction} className="mt-4 space-y-3">
           <textarea
             name="motivo"
