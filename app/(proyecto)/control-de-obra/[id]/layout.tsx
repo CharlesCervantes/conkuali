@@ -1,6 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
+import { esMaster, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import { NOMBRE_ROL } from "@/lib/roles";
 import {
   obtenerProyecto,
@@ -16,6 +16,9 @@ export default async function ProyectoLayout({
 }: LayoutProps<"/control-de-obra/[id]">) {
   const usuario = await requireSession();
   const { id } = await params;
+
+  if (usuario.debeCambiarPassword) redirect("/nueva-password");
+  if (esMaster(usuario)) redirect("/master");
 
   let proyecto;
   try {
@@ -80,6 +83,13 @@ export default async function ProyectoLayout({
     },
   ];
 
+  // El bucket de almacenamiento es privado — nunca se usa logoRef
+  // directamente como <img src>, siempre a través del endpoint autenticado
+  // (ver app/api/empresas/[id]/logo).
+  const logoUrl = usuario.empresa?.logoRef
+    ? `/api/empresas/${usuario.empresa.id}/logo`
+    : null;
+
   return (
     <DirtyAvanceProvider>
       <AppShell
@@ -88,7 +98,7 @@ export default async function ProyectoLayout({
           <Sidebar
             variant="proyecto"
             empresaNombre={usuario.empresa?.nombre ?? "Conkuali"}
-            logoUrl={usuario.empresa?.logoUrl ?? null}
+            logoUrl={logoUrl}
             usuarioNombre={usuario.nombre}
             rolLabel={NOMBRE_ROL[usuario.rol] ?? usuario.rol}
             proyecto={{ id, nombre: proyecto.nombre, estatus: proyecto.estatus }}

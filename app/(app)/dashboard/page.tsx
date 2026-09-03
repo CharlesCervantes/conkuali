@@ -1,39 +1,39 @@
 import { requireSession } from "@/lib/server/auth/dal";
 import { Card } from "@/components/ui/card";
-import { NOMBRE_ROL } from "@/lib/roles";
+import {
+  obtenerResumenEjecutivo,
+  type VistaDashboard,
+  type PeriodoDashboard,
+} from "@/lib/server/dashboard";
+import { InicioView } from "@/components/dashboard/inicio-view";
 
-export default async function DashboardPage() {
+function aVista(valor: string | string[] | undefined): VistaDashboard {
+  return valor === "privado" ? "privado" : "general";
+}
+function aPeriodo(valor: string | string[] | undefined): PeriodoDashboard {
+  return valor === "mes" ? "mes" : valor === "acumulado" ? "acumulado" : "semana";
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ vista?: string; periodo?: string }>;
+}) {
   const usuario = await requireSession();
 
-  return (
-    <div className="enter space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold text-[var(--foreground)]">
-          Hola, {usuario.nombre.split(" ")[0]}
-        </h1>
-        <p className="mt-1 text-sm text-[var(--muted)]">
-          {NOMBRE_ROL[usuario.rol] ?? usuario.rol} ·{" "}
-          {usuario.empresa?.nombre ?? "Conkuali"}
-        </p>
-      </div>
-
-      {!usuario.empresa && usuario.rol !== "MASTER" && (
-        <Card className="border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          Tu cuenta no tiene una empresa asignada. Contacta a un
-          administrador.
-        </Card>
-      )}
-
-      <Card className="p-6">
-        <h2 className="text-sm font-semibold text-[var(--foreground)]">
-          Próximo paso
-        </h2>
-        <p className="mt-1.5 max-w-lg text-sm text-[var(--muted)]">
-          El módulo de Reporte General (pagos semanales a contratistas,
-          proveedores y administración) está en construcción. En cuanto esté
-          listo, aparecerá en el menú de la izquierda.
-        </p>
+  if (!usuario.empresa) {
+    return (
+      <Card className="p-6 text-sm text-[var(--muted)]">
+        Tu cuenta no tiene una empresa asignada. Contacta a un administrador.
       </Card>
-    </div>
-  );
+    );
+  }
+
+  const { vista: vistaParam, periodo: periodoParam } = await searchParams;
+  const vista = aVista(vistaParam);
+  const periodo = aPeriodo(periodoParam);
+
+  const resumen = await obtenerResumenEjecutivo(usuario, vista, periodo);
+
+  return <InicioView resumen={resumen} />;
 }

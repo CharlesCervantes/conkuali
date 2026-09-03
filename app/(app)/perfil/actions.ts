@@ -60,6 +60,13 @@ export async function cambiarPasswordAction(
     throw error;
   }
 
+  // Cualquier cambio de contraseña exitoso limpia el cambio obligatorio si
+  // estaba pendiente (alta con contraseña temporal desde Portal Master, ver
+  // app/nueva-password) — sin efecto para quien ya lo tenía en false.
+  if (usuario.debeCambiarPassword) {
+    await db.usuario.update({ where: { id: usuario.id }, data: { debeCambiarPassword: false } });
+  }
+
   return { guardado: true };
 }
 

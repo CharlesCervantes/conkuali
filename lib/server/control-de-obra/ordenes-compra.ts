@@ -305,7 +305,7 @@ const DatosGastoDesdeOCSchema = z.object({
   categoria: z.enum(CATEGORIAS_GASTO).default("MATERIAL"),
   metodoPago: z.enum(["EFECTIVO", "TRANSFERENCIA", "TARJETA_DEBITO", "TARJETA_CREDITO"]),
   comentario: z.string().trim().optional().nullable(),
-  comprobantePagoUrl: z.string().trim().optional().nullable(),
+  comprobantePagoRef: z.string().trim().optional().nullable(),
   comprobantePagoNombre: z.string().trim().optional().nullable(),
 });
 
@@ -325,11 +325,11 @@ export async function generarGastoDesdeOrdenCompra(
   }
 
   return db.$transaction(async (tx) => {
-    if (datos.comprobantePagoUrl) {
+    if (datos.comprobantePagoRef) {
       await tx.ordenCompra.update({
         where: { id: ocId },
         data: {
-          comprobantePagoUrl: datos.comprobantePagoUrl,
+          comprobantePagoRef: datos.comprobantePagoRef,
           comprobantePagoNombre: datos.comprobantePagoNombre || null,
         },
       });

@@ -7,6 +7,7 @@ import type { UsuarioSesion } from "@/lib/server/session";
 import type { EstatusPago } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError, sumarContratoVigentePorBeneficiario } from "./estructura-contractual";
+import { obtenerArchivo } from "@/lib/server/archivos";
 
 function requerirVerRecibos(usuario: UsuarioSesion): string {
   if (!puedeVerRecibosFinancieros(usuario)) throw new SinPermisoError();
@@ -131,7 +132,7 @@ export async function obtenerHistorialCortes(
     include: {
       semana: { select: { numero: true, anio: true } },
       movimientoSemanal: { select: { estatusPago: true } },
-      recibos: { where: { estatus: "VIGENTE" }, select: { id: true, folio: true, archivoEvidenciaUrl: true } },
+      recibos: { where: { estatus: "VIGENTE" }, select: { id: true, folio: true, archivoEvidenciaRef: true } },
     },
   });
 
@@ -147,7 +148,7 @@ export async function obtenerHistorialCortes(
       estatusPago: c.movimientoSemanal?.estatusPago ?? null,
       reciboVigenteId: recibo?.id ?? null,
       reciboVigenteFolio: recibo?.folio ?? null,
-      reciboVigenteFirmado: Boolean(recibo?.archivoEvidenciaUrl),
+      reciboVigenteFirmado: Boolean(recibo?.archivoEvidenciaRef),
       createdAt: c.createdAt.toISOString(),
     };
   });
@@ -168,7 +169,7 @@ export async function obtenerHistorialCortesPorProyecto(
     include: {
       semana: { select: { numero: true, anio: true } },
       movimientoSemanal: { select: { estatusPago: true } },
-      recibos: { where: { estatus: "VIGENTE" }, select: { id: true, folio: true, archivoEvidenciaUrl: true } },
+      recibos: { where: { estatus: "VIGENTE" }, select: { id: true, folio: true, archivoEvidenciaRef: true } },
     },
   });
 
@@ -185,7 +186,7 @@ export async function obtenerHistorialCortesPorProyecto(
       estatusPago: c.movimientoSemanal?.estatusPago ?? null,
       reciboVigenteId: recibo?.id ?? null,
       reciboVigenteFolio: recibo?.folio ?? null,
-      reciboVigenteFirmado: Boolean(recibo?.archivoEvidenciaUrl),
+      reciboVigenteFirmado: Boolean(recibo?.archivoEvidenciaRef),
       createdAt: c.createdAt.toISOString(),
     };
     const lista = resultado.get(c.beneficiarioProyectoId) ?? [];
@@ -218,7 +219,7 @@ export type DetalleCorte = {
   reciboVigente: {
     id: string;
     folio: string;
-    archivoEvidenciaUrl: string | null;
+    archivoEvidenciaRef: string | null;
     archivoEvidenciaNombre: string | null;
     fechaRecepcion: string | null;
   } | null;
@@ -252,7 +253,7 @@ export async function obtenerDetalleCorte(
         select: {
           id: true,
           folio: true,
-          archivoEvidenciaUrl: true,
+          archivoEvidenciaRef: true,
           archivoEvidenciaNombre: true,
           fechaRecepcion: true,
         },
@@ -284,7 +285,7 @@ export async function obtenerDetalleCorte(
       ? {
           id: reciboVigente.id,
           folio: reciboVigente.folio,
-          archivoEvidenciaUrl: reciboVigente.archivoEvidenciaUrl,
+          archivoEvidenciaRef: reciboVigente.archivoEvidenciaRef,
           archivoEvidenciaNombre: reciboVigente.archivoEvidenciaNombre,
           fechaRecepcion: reciboVigente.fechaRecepcion?.toISOString() ?? null,
         }
@@ -332,7 +333,7 @@ export async function generarRecibo(
     }
 
     const vigente = corte.recibos[0] ?? null;
-    if (vigente?.archivoEvidenciaUrl) {
+    if (vigente?.archivoEvidenciaRef) {
       throw new ValidacionError(
         "Ya existe un recibo firmado para este corte. No se puede regenerar — cualquier corrección se maneja aparte."
       );
@@ -357,9 +358,16 @@ export async function generarRecibo(
     const configuracionSnapshot = {
       titulo: empresa.reciboTitulo,
       leyenda: empresa.reciboLeyenda,
-      razonSocial: empresa.reciboRazonSocial ?? empresa.nombre,
+      razonSocial: empresa.reciboRazonSocial ?? empresa.razonSocial ?? empresa.nombre,
       mostrarDetalle: empresa.reciboMostrarDetalle,
       mostrarPU: empresa.reciboMostrarPU,
+      // Logo AL MOMENTO de generar — el documento histórico se ve igual
+      // aunque el logo de la Empresa cambie después (branding congelado,
+      // Portal Master). La clave sigue llamándose `logoUrl` por compatibilidad
+      // con snapshots ya guardados; el valor es una referencia de
+      // almacenamiento (lib/server/archivos.ts), no una URL usable directo —
+      // se resuelve recién al armar los datos del PDF (obtenerDatosPdfRecibo).
+      logoUrl: empresa.logoRef,
     };
 
     const recibo = await tx.reciboPago.create({
@@ -389,12 +397,13 @@ export async function generarRecibo(
 }
 
 // ---------------------------------------------------------------------------
-// Evidencia firmada — la sube la Server Action (que ya subió el archivo a
-// Vercel Blob) y esta función solo persiste la URL resultante + audita.
+// Evidencia firmada — la sube la Server Action (que ya subió el archivo vía
+// subirArchivo(), lib/server/archivos.ts) y esta función solo persiste la
+// referencia resultante + audita.
 // ---------------------------------------------------------------------------
 
 const EvidenciaSchema = z.object({
-  archivoEvidenciaUrl: z.string().trim().min(1),
+  archivoEvidenciaRef: z.string().trim().min(1),
   archivoEvidenciaNombre: z.string().trim().min(1),
   fechaRecepcion: z.coerce.date().optional().nullable(),
 });
@@ -418,7 +427,7 @@ export async function registrarEvidenciaRecibo(
   const actualizado = await db.reciboPago.update({
     where: { id: recibo.id },
     data: {
-      archivoEvidenciaUrl: datos.archivoEvidenciaUrl,
+      archivoEvidenciaRef: datos.archivoEvidenciaRef,
       archivoEvidenciaNombre: datos.archivoEvidenciaNombre,
       fechaRecepcion: datos.fechaRecepcion ?? new Date(),
       subidoPorId: usuario.id,
@@ -432,14 +441,30 @@ export async function registrarEvidenciaRecibo(
     entidad: "ReciboPago",
     entidadId: actualizado.id,
     accion: "EDITAR",
-    valorAnterior: { archivoEvidenciaUrl: recibo.archivoEvidenciaUrl },
+    valorAnterior: { archivoEvidenciaRef: recibo.archivoEvidenciaRef },
     valorNuevo: {
-      archivoEvidenciaUrl: actualizado.archivoEvidenciaUrl,
+      archivoEvidenciaRef: actualizado.archivoEvidenciaRef,
       archivoEvidenciaNombre: actualizado.archivoEvidenciaNombre,
     },
   });
 
   return actualizado;
+}
+
+// Referencia de almacenamiento de la evidencia firmada de UN recibo, para el
+// endpoint de descarga autenticada — mismo gate que el resto de este archivo
+// (puedeVerRecibosFinancieros, capa de privacidad financiera/Vista Privada).
+export async function obtenerRefEvidenciaRecibo(
+  usuario: UsuarioSesion,
+  reciboId: string
+): Promise<string | null> {
+  const empresaId = requerirVerRecibos(usuario);
+  const recibo = await db.reciboPago.findFirst({
+    where: { id: reciboId, empresaId },
+    select: { archivoEvidenciaRef: true },
+  });
+  if (!recibo) throw new RegistroNoEncontradoError("El recibo");
+  return recibo.archivoEvidenciaRef;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +486,10 @@ export type DatosPdfRecibo = {
     mostrarDetalle: boolean;
     mostrarPU: boolean;
   };
+  // Bytes ya resueltos del logo (o null si no hay/si no se pudo descargar) —
+  // el PDF nunca recibe una URL/ref cruda, evita depender de que
+  // @react-pdf/renderer resuelva una URL firmada antes de que expire.
+  logoBuffer: Buffer | null;
   detalle: { descripcion: string; unidad: string; cantidad: number; precioUnitario: number; importe: number }[];
   total: number;
 };
@@ -486,7 +515,17 @@ export async function obtenerDatosPdfRecibo(
   });
   if (!recibo) throw new RegistroNoEncontradoError("El recibo");
 
-  const config = recibo.configuracionSnapshot as DatosPdfRecibo["configuracion"];
+  // Recibos generados antes de agregar `logoUrl` al snapshot no lo tienen en
+  // su JSON guardado — se completa con null, nunca con el logo actual de la
+  // Empresa (el snapshot histórico no se "repara" retroactivamente).
+  const configGuardada = recibo.configuracionSnapshot as DatosPdfRecibo["configuracion"] & {
+    logoUrl: string | null;
+  };
+  const logoRefGuardada = configGuardada.logoUrl ?? null;
+  // Resuelve la referencia (ref de R2 o URL histórica de Vercel Blob) a
+  // bytes reales — si falla (archivo ya no existe, referencia corrupta), el
+  // PDF se genera igual, sin logo, en vez de romper la descarga completa.
+  const logoBuffer = logoRefGuardada ? await obtenerArchivo(logoRefGuardada).catch(() => null) : null;
 
   return {
     folio: recibo.folio,
@@ -496,7 +535,14 @@ export async function obtenerDatosPdfRecibo(
     semanaAnio: recibo.corteSemanal.semana.anio,
     fechaGeneracion: recibo.createdAt.toISOString(),
     numeroCorte: recibo.corteSemanal.numero,
-    configuracion: config,
+    configuracion: {
+      titulo: configGuardada.titulo,
+      leyenda: configGuardada.leyenda,
+      razonSocial: configGuardada.razonSocial,
+      mostrarDetalle: configGuardada.mostrarDetalle,
+      mostrarPU: configGuardada.mostrarPU,
+    },
+    logoBuffer,
     detalle: recibo.corteSemanal.detalle.map((d) => ({
       descripcion: d.descripcionConcepto,
       unidad: d.unidad,

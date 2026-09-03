@@ -164,9 +164,9 @@ export function GastosReposicionesView({
                       </details>
                     )}
                     <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-                      {g.ticketUrl && (
+                      {g.ticketRef && (
                         <a
-                          href={g.ticketUrl}
+                          href={`/api/control-de-obra/proyectos/${proyectoId}/gastos/${g.id}/ticket`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-[var(--brand)] hover:underline"

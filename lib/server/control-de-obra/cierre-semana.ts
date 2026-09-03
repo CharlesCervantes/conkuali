@@ -58,7 +58,7 @@ export async function verificarSemanaEditable(
           { movimientoSemanal: { estatusPago: "LIQUIDADO" } },
           {
             recibos: {
-              some: { estatus: "VIGENTE", archivoEvidenciaUrl: { not: null } },
+              some: { estatus: "VIGENTE", archivoEvidenciaRef: { not: null } },
             },
           },
         ],
@@ -303,7 +303,7 @@ async function generarOReconciliarCorte(
   // verificarSemanaEditable, mismo criterio).
   if (
     existente?.movimientoSemanal?.estatusPago === "LIQUIDADO" ||
-    reciboVigente?.archivoEvidenciaUrl
+    reciboVigente?.archivoEvidenciaRef
   ) {
     return { tipo: "OMITIDO_LIQUIDADO", auditorias: [] };
   }

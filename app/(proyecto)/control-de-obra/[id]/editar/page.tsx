@@ -75,6 +75,7 @@ export default async function EditarProyectoPage({
           esquemaBloqueado={esquemaBloqueado}
           requiereConfirmacionEsquema={requiereConfirmacionEsquema}
           puedeVerPrivado={puedeVerPrivado}
+          imagenUrlActual={proyecto.imagenRef ? `/api/control-de-obra/proyectos/${id}/imagen` : null}
           valoresIniciales={{
             nombre: proyecto.nombre,
             tipo: proyecto.tipo,

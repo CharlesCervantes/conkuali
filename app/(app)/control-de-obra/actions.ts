@@ -12,6 +12,7 @@ import {
   SinPermisoError,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
+import { subirArchivo } from "@/lib/server/archivos";
 
 export type FormState = { error?: string } | undefined;
 
@@ -78,7 +79,16 @@ export async function editarProyectoAction(
   const confirmarEsquemaConDatos = formData.get("confirmarEsquemaConDatos") === "on";
 
   try {
-    await editarProyecto(usuario, id, datosDesdeFormData(formData), confirmarEsquemaConDatos);
+    const datos = datosDesdeFormData(formData);
+    // Solo se sube/reemplaza si de verdad se eligió un archivo — ausente
+    // aquí significa "no tocar la imagen actual" (ver comentario en
+    // DatosProyectoSchema, proyectos.ts).
+    const archivo = formData.get("imagen");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`proyectos/${id}`, archivo);
+      Object.assign(datos, { imagenRef: subido.ref, imagenNombre: subido.nombre });
+    }
+    await editarProyecto(usuario, id, datos, confirmarEsquemaConDatos);
   } catch (error) {
     return { error: mensajeError(error) };
   }

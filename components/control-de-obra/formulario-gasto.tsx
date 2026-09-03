@@ -338,7 +338,7 @@ export function FormularioGasto({
             Requiere factura
           </label>
 
-          <Campo label={gasto?.ticketUrl ? "Reemplazar ticket (opcional)" : "Ticket / foto"}>
+          <Campo label={gasto?.ticketRef ? "Reemplazar ticket (opcional)" : "Ticket / foto"}>
             <input
               name="ticket"
               type="file"
@@ -346,9 +346,9 @@ export function FormularioGasto({
               capture="environment"
               className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"
             />
-            {gasto?.ticketUrl && (
+            {gasto?.ticketRef && (
               <a
-                href={gasto.ticketUrl}
+                href={`/api/control-de-obra/proyectos/${proyectoId}/gastos/${gasto.id}/ticket`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="mt-1 inline-block text-xs text-[var(--brand)] hover:underline"

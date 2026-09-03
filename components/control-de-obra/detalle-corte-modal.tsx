@@ -250,7 +250,7 @@ function SeccionRecibo({
             Ver / descargar {detalle.reciboVigente.folio}
           </Button>
         </a>
-        {!detalle.reciboVigente.archivoEvidenciaUrl && (
+        {!detalle.reciboVigente.archivoEvidenciaRef && (
           <form action={generarFormAction}>
             <button
               type="submit"
@@ -264,9 +264,17 @@ function SeccionRecibo({
       </div>
       {generarState?.error && <p className="text-sm text-red-700">{generarState.error}</p>}
 
-      {detalle.reciboVigente.archivoEvidenciaUrl ? (
+      {detalle.reciboVigente.archivoEvidenciaRef ? (
         <div className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">
-          Evidencia firmada cargada: {detalle.reciboVigente.archivoEvidenciaNombre}
+          Evidencia firmada cargada:{" "}
+          <a
+            href={`/api/control-de-obra/proyectos/${proyectoId}/recibos/${detalle.reciboVigente.id}/evidencia`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline"
+          >
+            {detalle.reciboVigente.archivoEvidenciaNombre}
+          </a>
           {detalle.reciboVigente.fechaRecepcion &&
             ` · recibido el ${formatFecha(detalle.reciboVigente.fechaRecepcion)}`}
         </div>
