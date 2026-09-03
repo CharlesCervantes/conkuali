@@ -47,6 +47,15 @@ function generarPasswordTemporal(): string {
 
 async function main() {
   const personas = [
+    // Rol de plataforma — sin Empresa (empresaId null), fuera del ciclo
+    // normal de tenants. Igual que los demás, solo se crea si tiene correo
+    // real definido; es el único punto de entrada al Portal Master (/master)
+    // mientras no exista otra forma de dar de alta al primer Master.
+    {
+      nombre: "Master",
+      email: leerEmail("SEED_EMAIL_MASTER"),
+      rol: "MASTER" as const,
+    },
     {
       nombre: "Sergio",
       email: leerEmail("SEED_EMAIL_SERGIO"),
@@ -136,7 +145,9 @@ async function main() {
         email: persona.email,
         passwordHash,
         rol: persona.rol,
-        empresaId: empresa.id,
+        // MASTER es un rol de plataforma, sin Empresa (ver enum RolUsuario,
+        // prisma/schema.prisma) — todos los demás roles sí pertenecen a Conkuali.
+        empresaId: persona.rol === "MASTER" ? null : empresa.id,
       },
     });
 

@@ -468,9 +468,9 @@ export async function subirEvidenciaReciboAction(
   }
 
   try {
-    const { url, nombre } = await subirArchivo(`recibos/${reciboId}`, archivo);
+    const { ref, nombre } = await subirArchivo(`recibos/${reciboId}`, archivo);
     await registrarEvidenciaRecibo(usuario, reciboId, {
-      archivoEvidenciaUrl: url,
+      archivoEvidenciaRef: ref,
       archivoEvidenciaNombre: nombre,
       fechaRecepcion: opcional(formData.get("fechaRecepcion")),
     });
@@ -697,17 +697,17 @@ export async function crearGastoAction(
 ): Promise<GastoFormState> {
   const usuario = await requireSession();
   try {
-    let ticketUrl: string | null = null;
+    let ticketRef: string | null = null;
     let ticketNombre: string | null = null;
     const archivo = formData.get("ticket");
     if (archivo instanceof File && archivo.size > 0) {
       const subido = await subirArchivo(`gastos/${proyectoId}`, archivo);
-      ticketUrl = subido.url;
+      ticketRef = subido.ref;
       ticketNombre = subido.nombre;
     }
     await crearGasto(usuario, proyectoId, semanaId, {
       ...datosGastoDesdeFormData(formData),
-      ticketUrl,
+      ticketRef,
       ticketNombre,
     });
   } catch (error) {
@@ -725,17 +725,17 @@ export async function editarGastoAction(
 ): Promise<GastoFormState> {
   const usuario = await requireSession();
   try {
-    let ticketUrl: string | null = null;
+    let ticketRef: string | null = null;
     let ticketNombre: string | null = null;
     const archivo = formData.get("ticket");
     if (archivo instanceof File && archivo.size > 0) {
       const subido = await subirArchivo(`gastos/${proyectoId}`, archivo);
-      ticketUrl = subido.url;
+      ticketRef = subido.ref;
       ticketNombre = subido.nombre;
     }
     await editarGasto(usuario, gastoId, {
       ...datosGastoDesdeFormData(formData),
-      ticketUrl,
+      ticketRef,
       ticketNombre,
     });
   } catch (error) {
@@ -806,7 +806,7 @@ export async function subirFacturaGastoAction(
   try {
     const subido = await subirArchivo(`gastos/${proyectoId}/facturas`, archivo);
     await registrarFacturaGasto(usuario, gastoId, {
-      facturaUrl: subido.url,
+      facturaRef: subido.ref,
       facturaNombre: subido.nombre,
     });
   } catch (error) {
@@ -925,12 +925,12 @@ export async function generarGastoDesdeOrdenCompraAction(
 ): Promise<OrdenCompraFormState> {
   const usuario = await requireSession();
   try {
-    let comprobantePagoUrl: string | null = null;
+    let comprobantePagoRef: string | null = null;
     let comprobantePagoNombre: string | null = null;
     const archivo = formData.get("comprobantePago");
     if (archivo instanceof File && archivo.size > 0) {
       const subido = await subirArchivo(`ordenes-compra/${proyectoId}`, archivo);
-      comprobantePagoUrl = subido.url;
+      comprobantePagoRef = subido.ref;
       comprobantePagoNombre = subido.nombre;
     }
     await generarGastoDesdeOrdenCompra(usuario, ocId, {
@@ -939,7 +939,7 @@ export async function generarGastoDesdeOrdenCompraAction(
       categoria: formData.get("categoria") || "MATERIAL",
       metodoPago: formData.get("metodoPago"),
       comentario: opcional(formData.get("comentario")),
-      comprobantePagoUrl,
+      comprobantePagoRef,
       comprobantePagoNombre,
     });
   } catch (error) {

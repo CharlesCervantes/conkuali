@@ -4,6 +4,7 @@ import {
   autenticar,
   CredencialesInvalidasError,
   UsuarioInactivoError,
+  EmpresaInactivaError,
 } from "@/lib/server/auth/service";
 
 const LoginSchema = z.object({
@@ -27,6 +28,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message }, { status: 401 });
     }
     if (error instanceof UsuarioInactivoError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
+    if (error instanceof EmpresaInactivaError) {
       return NextResponse.json({ error: error.message }, { status: 403 });
     }
     throw error;

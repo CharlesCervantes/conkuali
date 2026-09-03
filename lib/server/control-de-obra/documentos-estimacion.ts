@@ -3,6 +3,8 @@ import { puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { formatearRangoSemana } from "@/lib/server/semanas";
 import { db } from "@/lib/server/db";
+import { brandingDesdeEmpresa, type BrandingEmpresa } from "@/lib/server/branding";
+import { obtenerArchivo } from "@/lib/server/archivos";
 import {
   obtenerOFijarCorteDocumento,
   obtenerControlContractual,
@@ -47,7 +49,11 @@ export type FilaEstimacionDocumento = {
 };
 
 export type DatosDocumentoEstimacion = {
-  empresaNombre: string;
+  branding: BrandingEmpresa;
+  // Bytes ya resueltos del logo (o null) — igual criterio que
+  // DatosPdfRecibo.logoBuffer (recibos.ts): el PDF nunca recibe una
+  // URL/ref cruda.
+  logoBuffer: Buffer | null;
   proyectoNombre: string;
   capa: CapaValorizacion;
   numero: number;
@@ -113,8 +119,24 @@ export async function obtenerDatosDocumentoEstimacion(
   // ya validó estatus === EMITIDA, así que esto nunca debería ser null.
   if (!congelado) throw new Error("Estimación emitida sin snapshot congelado — estado inconsistente.");
 
+  // estimacionCorte.branding solo es null para una capa que ya tenía su
+  // corte fijado ANTES de que este campo existiera (documento histórico
+  // previo a este cambio) — se completa con el branding actual como mejor
+  // aproximación disponible, nunca se reintenta congelar retroactivamente.
+  const branding =
+    estimacionCorte.branding ??
+    brandingDesdeEmpresa({
+      nombre: usuario.empresa?.nombre ?? "",
+      razonSocial: usuario.empresa?.razonSocial ?? null,
+      logoRef: usuario.empresa?.logoRef ?? null,
+      colorPrimario: usuario.empresa?.colorPrimario ?? "#0f172a",
+      colorSecundario: usuario.empresa?.colorSecundario ?? "#64748b",
+    });
+  const logoBuffer = branding.logoRef ? await obtenerArchivo(branding.logoRef).catch(() => null) : null;
+
   return {
-    empresaNombre: usuario.empresa?.nombre ?? "",
+    branding,
+    logoBuffer,
     proyectoNombre: proyecto.nombre,
     capa,
     numero: estimacionCorte.numero,

@@ -64,14 +64,17 @@ async function cargarUsuarioPorToken(token: string) {
           activo: true,
           empresaId: true,
           vistaPrivadaActiva: true,
+          debeCambiarPassword: true,
           empresa: {
             select: {
               id: true,
               nombre: true,
+              razonSocial: true,
               colorPrimario: true,
               colorSecundario: true,
-              logoUrl: true,
+              logoRef: true,
               activa: true,
+              privadoHabilitado: true,
               plan: {
                 select: {
                   id: true,
@@ -80,6 +83,11 @@ async function cargarUsuarioPorToken(token: string) {
                     select: { modulo: { select: { clave: true, nombre: true } } },
                   },
                 },
+              },
+              // Override de tenant sobre el Plan — ver EmpresaModulo/
+              // empresaTieneModulo en lib/server/permisos.ts.
+              modulosOverride: {
+                select: { habilitado: true, modulo: { select: { clave: true, nombre: true } } },
               },
             },
           },
@@ -96,6 +104,14 @@ async function cargarUsuarioPorToken(token: string) {
   }
 
   if (!sesion.usuario.activo) return null;
+
+  // MASTER no tiene empresa (empresaId null) y no debe deslogearse a sí
+  // mismo por esto — para cualquier otro rol, una Empresa desactivada cierra
+  // la sesión de inmediato, no solo en el próximo login (ver autenticar() en
+  // lib/server/auth/service.ts para el gate en el propio login).
+  if (sesion.usuario.rol !== "MASTER" && !sesion.usuario.empresa?.activa) {
+    return null;
+  }
 
   return sesion.usuario;
 }

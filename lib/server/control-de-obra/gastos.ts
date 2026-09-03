@@ -21,14 +21,14 @@ const ESTATUS_EDITABLES = ["BORRADOR", "PENDIENTE_REVISION"] as const;
 
 export type EstatusFiscalGasto = "NO_APLICA" | "PENDIENTE_FACTURA" | "FACTURADO";
 
-// No es columna — se deriva de requiereFactura + facturaUrl (sección 24 del
+// No es columna — se deriva de requiereFactura + facturaRef (sección 24 del
 // diseño de Gastos de Obra, agosto 2026).
 export function calcularEstatusFiscal(g: {
   requiereFactura: boolean;
-  facturaUrl: string | null;
+  facturaRef: string | null;
 }): EstatusFiscalGasto {
   if (!g.requiereFactura) return "NO_APLICA";
-  return g.facturaUrl ? "FACTURADO" : "PENDIENTE_FACTURA";
+  return g.facturaRef ? "FACTURADO" : "PENDIENTE_FACTURA";
 }
 
 // Detalle multilínea opcional — mismo patrón que LineaSchema de
@@ -77,7 +77,7 @@ const DatosGastoSchema = z.object({
   tratamientoCliente: z
     .enum(["INCLUIDO_EN_CONTRATO", "COBRABLE_EN_ESTIMACION", "NO_COBRABLE"])
     .default("NO_COBRABLE"),
-  ticketUrl: z.string().trim().optional().nullable(),
+  ticketRef: z.string().trim().optional().nullable(),
   ticketNombre: z.string().trim().optional().nullable(),
   detalle: z.array(LineaGastoSchema).optional(),
 });
@@ -157,7 +157,7 @@ export async function crearGasto(
         comentario: datos.comentario || null,
         requiereFactura: datos.requiereFactura,
         tratamientoCliente: datos.tratamientoCliente,
-        ticketUrl: datos.ticketUrl || null,
+        ticketRef: datos.ticketRef || null,
         ticketNombre: datos.ticketNombre || null,
         capturadoPorId: usuario.id,
       },
@@ -229,7 +229,7 @@ export async function editarGasto(usuario: UsuarioSesion, gastoId: string, datos
         comentario: datos.comentario || null,
         requiereFactura: datos.requiereFactura,
         tratamientoCliente: datos.tratamientoCliente,
-        ticketUrl: datos.ticketUrl || anterior.ticketUrl,
+        ticketRef: datos.ticketRef || anterior.ticketRef,
         ticketNombre: datos.ticketNombre || anterior.ticketNombre,
       },
     });
@@ -422,7 +422,7 @@ export async function rechazarGasto(usuario: UsuarioSesion, gastoId: string, mot
 export async function registrarFacturaGasto(
   usuario: UsuarioSesion,
   gastoId: string,
-  datos: { facturaUrl: string; facturaNombre: string }
+  datos: { facturaRef: string; facturaNombre: string }
 ) {
   if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
   const empresaId = requerirEmpresa(usuario);
@@ -432,7 +432,7 @@ export async function registrarFacturaGasto(
 
   const actualizado = await db.gastoObra.update({
     where: { id: gastoId },
-    data: { facturaUrl: datos.facturaUrl, facturaNombre: datos.facturaNombre },
+    data: { facturaRef: datos.facturaRef, facturaNombre: datos.facturaNombre },
   });
 
   await registrarAuditoria({
@@ -441,8 +441,8 @@ export async function registrarFacturaGasto(
     entidad: "GastoObra",
     entidadId: actualizado.id,
     accion: "EDITAR",
-    valorAnterior: { facturaUrl: gasto.facturaUrl },
-    valorNuevo: { facturaUrl: actualizado.facturaUrl },
+    valorAnterior: { facturaRef: gasto.facturaRef },
+    valorNuevo: { facturaRef: actualizado.facturaRef },
   });
 
   return actualizado;
@@ -468,9 +468,9 @@ export type FilaGasto = {
   requiereFactura: boolean;
   estatusFiscal: EstatusFiscalGasto;
   tratamientoCliente: string;
-  ticketUrl: string | null;
+  ticketRef: string | null;
   ticketNombre: string | null;
-  facturaUrl: string | null;
+  facturaRef: string | null;
   facturaNombre: string | null;
   estatus: string;
   capturadoPorId: string;
@@ -517,9 +517,9 @@ export async function obtenerGastos(
     requiereFactura: g.requiereFactura,
     estatusFiscal: calcularEstatusFiscal(g),
     tratamientoCliente: g.tratamientoCliente,
-    ticketUrl: g.ticketUrl,
+    ticketRef: g.ticketRef,
     ticketNombre: g.ticketNombre,
-    facturaUrl: g.facturaUrl,
+    facturaRef: g.facturaRef,
     facturaNombre: g.facturaNombre,
     estatus: g.estatus,
     capturadoPorId: g.capturadoPorId,
@@ -535,6 +535,28 @@ export async function obtenerGastos(
       precioUnitario: Number(d.precioUnitario),
     })),
   }));
+}
+
+// Referencia de almacenamiento (ticket o factura) de un Gasto puntual, para
+// el endpoint de descarga autenticada — mismo gate que obtenerGastos
+// (puedeCapturarGastos, operativo, sin relación con Vista Privada;
+// verificado contra el código real, no el permiso de aprobar/autorizar que
+// sería más restrictivo de lo que la pantalla de Gastos ya permite hoy).
+export async function obtenerRefArchivoGasto(
+  usuario: UsuarioSesion,
+  gastoId: string,
+  tipo: "ticket" | "factura"
+): Promise<string | null> {
+  if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
+  const empresaId = requerirEmpresa(usuario);
+
+  const gasto = await db.gastoObra.findFirst({
+    where: { id: gastoId, empresaId },
+    select: { ticketRef: true, facturaRef: true },
+  });
+  if (!gasto) throw new RegistroNoEncontradoError("El gasto");
+
+  return tipo === "ticket" ? gasto.ticketRef : gasto.facturaRef;
 }
 
 export type DashboardGastos = {

@@ -54,7 +54,7 @@ async function main() {
       nombre: empresa.nombre,
       colorPrimario: empresa.colorPrimario,
       colorSecundario: empresa.colorSecundario,
-      logoUrl: empresa.logoUrl,
+      logoRef: empresa.logoRef,
       activa: empresa.activa,
       plan: null,
     },

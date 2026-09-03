@@ -46,11 +46,15 @@ export function ProyectoForm({
   esquemaBloqueado = false,
   requiereConfirmacionEsquema = false,
   puedeVerPrivado = false,
+  imagenUrlActual = null,
 }: {
   action: (state: FormState, formData: FormData) => Promise<FormState>;
   modo: "crear" | "editar";
   valoresIniciales?: ValoresProyecto;
   textoBoton: string;
+  // Imagen de portada actual (solo modo "editar") — Inicio: dashboard
+  // ejecutivo, agosto 2026.
+  imagenUrlActual?: string | null;
   // Solo aplica en modo "editar" — el proyecto ya tiene información
   // contractual y ya tenía un esquema definido: no se puede volver a tocar
   // (sección 4 del rediseño, agosto 2026).
@@ -107,6 +111,30 @@ export function ProyectoForm({
             ))}
           </select>
         </div>
+
+        {modo === "editar" && (
+          <div className="sm:col-span-2 lg:col-span-3">
+            <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+              Imagen de portada
+            </label>
+            <div className="flex items-center gap-3">
+              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-black/[0.05]">
+                {imagenUrlActual ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imagenUrlActual} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">🏗️</div>
+                )}
+              </div>
+              <input
+                name="imagen"
+                type="file"
+                accept="image/*"
+                className="block flex-1 text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"
+              />
+            </div>
+          </div>
+        )}
 
         <Campo
           label="Cliente"

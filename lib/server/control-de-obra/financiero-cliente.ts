@@ -5,6 +5,7 @@ import { Prisma } from "@/lib/generated/prisma/client";
 import type { CapaEstimacion } from "@/lib/generated/prisma/enums";
 import { formatMoney } from "@/lib/dinero";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
+import { obtenerBrandingEmpresa, type BrandingEmpresa } from "@/lib/server/branding";
 import {
   puedeVerFinancieroCliente,
   puedeVerFinancieroClienteOperativo,
@@ -196,7 +197,9 @@ export type ControlContractual = {
   } | null;
 };
 
-async function calcularMontoContrato(
+// Exportada para el dashboard ejecutivo (Inicio) — mismo cálculo, ninguna
+// fórmula nueva (agosto 2026).
+export async function calcularMontoContrato(
   proyectoId: string,
   esquemaContractual: EsquemaContractual | null,
   porcentajesDefault: PorcentajesDefaultProyecto,
@@ -279,6 +282,10 @@ export type EstimacionConCorte = {
   semanaNumero: number;
   semanaAnio: number;
   corte: CorteHistorico;
+  // Identidad de Empresa congelada al momento en que este documento se
+  // generó por primera vez. Null solo si la capa fue emitida antes de que
+  // este campo existiera (documento histórico previo a este cambio).
+  branding: BrandingEmpresa | null;
 };
 
 // Fija (una sola vez, la primera vez que ESTA capa pide su documento) el
@@ -321,6 +328,7 @@ export async function obtenerOFijarCorteDocumento(
 
     let fechaCorteDocumento = capaRow.fechaCorteDocumento;
     let montoContrato = numOrNull(capaRow.montoContratoCongelado);
+    let brandingSnapshot = capaRow.brandingSnapshot as BrandingEmpresa | null;
 
     if (!fechaCorteDocumento) {
       const { estimacionCliente } = capaRow;
@@ -336,9 +344,13 @@ export async function obtenerOFijarCorteDocumento(
         capaRow.capa === "PRIVADO" ? "privado" : "operativo"
       );
       fechaCorteDocumento = new Date();
+      // Identidad de Empresa AL MOMENTO en que este documento se genera por
+      // primera vez — mismo criterio de congelamiento que montoContratoCongelado,
+      // nunca se recalcula después (branding histórico, Portal Master).
+      brandingSnapshot = await obtenerBrandingEmpresa(empresaId);
       await tx.estimacionClienteCapa.update({
         where: { id: estimacionClienteCapaId },
-        data: { fechaCorteDocumento, montoContratoCongelado: montoContrato },
+        data: { fechaCorteDocumento, montoContratoCongelado: montoContrato, brandingSnapshot },
       });
     }
 
@@ -357,6 +369,7 @@ export async function obtenerOFijarCorteDocumento(
         hastaSemanaFechaInicio: capaRow.estimacionCliente.semana.fechaInicio,
         montoContrato: montoContrato!,
       },
+      branding: brandingSnapshot,
     };
   });
 }

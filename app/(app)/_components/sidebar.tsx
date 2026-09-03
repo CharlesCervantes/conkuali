@@ -39,6 +39,14 @@ type SidebarProps =
       proyecto: { id: string; nombre: string; estatus: EstatusProyecto };
       resumenHref: string;
       grupos: GrupoProyecto[];
+    }
+  | {
+      // Master no pertenece a ninguna Empresa — el header de marca es la
+      // identidad de plataforma, no el logo/nombre de un tenant (Portal
+      // Master, decisión de sesión).
+      variant: "master";
+      usuarioNombre: string;
+      rolLabel: string;
     };
 
 function iniciales(nombre: string): string {
@@ -55,36 +63,66 @@ function iniciales(nombre: string): string {
 // y solo el <nav> central cambia (rediseño de navegación, agosto 2026).
 export function Sidebar(props: SidebarProps) {
   const pathname = usePathname();
-  const { empresaNombre, logoUrl, usuarioNombre, rolLabel } = props;
+  const { usuarioNombre, rolLabel } = props;
+
+  // Con logo cargado, el logo ES la identidad — se quita el nombre en texto
+  // para darle todo el espacio del encabezado y que se vea más grande (antes
+  // competía por espacio con el nombre; sin logo, el nombre sigue siendo
+  // necesario para identificar la Empresa).
+  const tieneLogo = props.variant !== "master" && Boolean(props.logoUrl);
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-[var(--border)] bg-[var(--surface)]">
       <Link
-        href="/dashboard"
-        className="flex items-center gap-2.5 px-5 py-5 transition-opacity duration-150 ease-out hover:opacity-80"
+        href={props.variant === "master" ? "/master" : "/dashboard"}
+        className={cn(
+          "flex items-center gap-2.5 px-5 transition-opacity duration-150 ease-out hover:opacity-80",
+          tieneLogo ? "py-6" : "py-5"
+        )}
       >
-        {logoUrl ? (
+        {props.variant === "master" ? (
+          <>
+            <span
+              className="flex h-10 w-10 items-center justify-center rounded-md text-sm font-semibold text-[var(--brand-foreground)]"
+              style={{ backgroundColor: "var(--brand)" }}
+            >
+              M
+            </span>
+            <span className="truncate text-sm font-semibold text-[var(--foreground)]">Portal Master</span>
+          </>
+        ) : tieneLogo ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={logoUrl}
-            alt={empresaNombre}
-            className="h-8 w-8 rounded-md object-cover"
+            src={props.logoUrl!}
+            alt={props.empresaNombre}
+            className="h-auto w-full max-h-28 object-contain"
           />
         ) : (
-          <span
-            className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold text-[var(--brand-foreground)]"
-            style={{ backgroundColor: "var(--brand)" }}
-          >
-            {iniciales(empresaNombre)}
-          </span>
+          <>
+            <span
+              className="flex h-10 w-10 items-center justify-center rounded-md text-sm font-semibold text-[var(--brand-foreground)]"
+              style={{ backgroundColor: "var(--brand)" }}
+            >
+              {iniciales(props.empresaNombre)}
+            </span>
+            <span className="truncate text-sm font-semibold text-[var(--foreground)]">
+              {props.empresaNombre}
+            </span>
+          </>
         )}
-        <span className="truncate text-sm font-semibold text-[var(--foreground)]">
-          {empresaNombre}
-        </span>
       </Link>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3">
-        {props.variant === "global" ? (
+        {props.variant === "master" ? (
+          <>
+            <NavLink href="/master" active={pathname === "/master"}>
+              Resumen
+            </NavLink>
+            <NavLink href="/master/empresas" active={pathname.startsWith("/master/empresas")}>
+              Empresas
+            </NavLink>
+          </>
+        ) : props.variant === "global" ? (
           <>
             <NavLink href="/dashboard" active={pathname === "/dashboard"}>
               Inicio

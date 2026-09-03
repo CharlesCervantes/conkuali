@@ -1,4 +1,4 @@
-import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
+import { Document, Page, View, Text, Image, StyleSheet } from "@react-pdf/renderer";
 import type { DatosPdfRecibo } from "@/lib/server/control-de-obra/recibos";
 
 // Documento @react-pdf/renderer — se renderiza en el servidor (route
@@ -16,6 +16,8 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottom: "1pt solid #111827",
   },
+  identidadEmpresa: { flexDirection: "row", alignItems: "center", gap: 10 },
+  logo: { width: 130, height: 56, objectFit: "contain" },
   razonSocial: { fontSize: 13, fontWeight: 700 },
   titulo: { fontSize: 11, marginTop: 2, color: "#374151" },
   folio: { fontSize: 12, fontWeight: 700, textAlign: "right" },
@@ -79,9 +81,16 @@ function PaginaRecibo({ recibo }: { recibo: DatosPdfRecibo }) {
   return (
     <Page size="LETTER" style={styles.page}>
       <View style={styles.encabezado}>
-        <View>
-          <Text style={styles.razonSocial}>{configuracion.razonSocial}</Text>
-          <Text style={styles.titulo}>{configuracion.titulo}</Text>
+        <View style={styles.identidadEmpresa}>
+          {/* eslint-disable-next-line jsx-a11y/alt-text -- @react-pdf/renderer Image, no es <img> HTML */}
+          {recibo.logoBuffer && <Image src={recibo.logoBuffer} style={styles.logo} />}
+          <View>
+            {/* Con logo, el logo ES la identidad — se omite el nombre en texto
+                para que el logo pueda verse más grande (mismo criterio que el
+                sidebar de la app). Sin logo, el nombre sigue siendo necesario. */}
+            {!recibo.logoBuffer && <Text style={styles.razonSocial}>{configuracion.razonSocial}</Text>}
+            <Text style={styles.titulo}>{configuracion.titulo}</Text>
+          </View>
         </View>
         <View>
           <Text style={styles.folio}>{recibo.folio}</Text>

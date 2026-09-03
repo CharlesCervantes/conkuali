@@ -49,6 +49,13 @@ const DatosProyectoSchema = z.object({
   porcentajeAdministracionDefault: z.coerce.number().nonnegative().optional().nullable(),
   // Override privado del anterior — ver comentario en schema.prisma.
   porcentajeAdministracionPrivadoDefault: z.coerce.number().nonnegative().optional().nullable(),
+  // Imagen de portada (Inicio: dashboard ejecutivo, agosto 2026) — ausente
+  // (undefined) = no se tocó, deja el valor actual intacto; el server action
+  // solo los incluye aquí cuando de verdad se subió un archivo nuevo (nunca
+  // se manda como string vacío/null "por si acaso", eso borraría la imagen
+  // en cualquier guardado normal del formulario).
+  imagenRef: z.string().trim().optional(),
+  imagenNombre: z.string().trim().optional(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;

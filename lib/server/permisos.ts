@@ -3,14 +3,24 @@ import type { UsuarioSesion } from "@/lib/server/session";
 
 /**
  * El plan de la Empresa decide qué módulos existen para ella (independiente
- * del rol). Ver /docs/arquitectura/00-decisiones-fundamentales.md — el
- * sistema de permisos debe consultar el plan, no solo el rol.
+ * del rol), pero Master (Portal Master → Empresas → Módulos) puede otorgar
+ * un override explícito por tenant sobre ese Plan — en cualquier sentido:
+ * conceder un módulo que el Plan no incluye, o apagar uno que sí incluye
+ * (EmpresaModulo.habilitado). Único punto de resolución: si existe un
+ * override para esa Empresa+módulo, manda sobre el Plan; si no existe, se
+ * hereda el Plan tal cual. Nada fuera de esta función debe conocer si el
+ * acceso viene del Plan o de un override (decisión de sesión, Portal
+ * Master/Empresas). Ver /docs/arquitectura/00-decisiones-fundamentales.md.
  */
 export function empresaTieneModulo(
   usuario: UsuarioSesion,
   moduloClave: string
 ): boolean {
   if (usuario.rol === "MASTER") return true; // rol de plataforma, cruza tenants
+  const override = usuario.empresa?.modulosOverride?.find(
+    (em) => em.modulo.clave === moduloClave
+  );
+  if (override) return override.habilitado;
   const modulos = usuario.empresa?.plan?.modulos ?? [];
   return modulos.some((pm) => pm.modulo.clave === moduloClave);
 }
@@ -88,16 +98,23 @@ export function puedeConfigurarVistaPrivada(usuario: UsuarioSesion): boolean {
 
 /**
  * Único punto de verdad de "¿tiene HOY acceso a la capa privada?": combina
- * el permiso real de rol (nunca cambia) con la preferencia personal Vista
+ * tres condiciones, las tres obligatorias (AND, nunca una sustituye a otra):
+ * 1) el permiso real de rol (nunca cambia); 2) la preferencia personal Vista
  * privada, que un Administrador/Director puede apagar temporalmente desde Mi
  * perfil para presentar el sistema sin riesgo de mostrar información
- * sensible — sin tocar su rol ni sus permisos operativos. Nunca al revés:
- * sin el permiso de rol, vistaPrivadaActiva no otorga nada por sí sola.
- * Supervisor y Master nunca pasan de aquí, sin importar el valor guardado en
- * BD (decisión de sesión, agosto 2026 — Vista Privada).
+ * sensible — sin tocar su rol ni sus permisos operativos; 3) que la Empresa
+ * misma tenga la capacidad Privada contratada (Empresa.privadoHabilitado,
+ * Portal Master). Supervisor y Master nunca pasan de la condición 1, sin
+ * importar el valor guardado en BD (decisión de sesión, agosto 2026 — Vista
+ * Privada); ninguna Empresa nueva pasa de la condición 3 hasta que Master la
+ * habilite explícitamente (decisión de sesión, Portal Master/Empresas).
  */
 export function puedeVerInformacionPrivada(usuario: UsuarioSesion): boolean {
-  return puedeConfigurarVistaPrivada(usuario) && usuario.vistaPrivadaActiva;
+  return (
+    puedeConfigurarVistaPrivada(usuario) &&
+    usuario.vistaPrivadaActiva &&
+    (usuario.empresa?.privadoHabilitado ?? false)
+  );
 }
 
 /**
@@ -147,10 +164,14 @@ export function puedeEmitirEstimacionCliente(usuario: UsuarioSesion): boolean {
  * estaba cerrada antes de que este módulo existiera — mismo criterio
  * financieramente sensible que cerrar semana/emitir, sin Master
  * (04-modulo-control-de-obra.md, sección "Cliente"). Respeta Vista privada
- * igual que puedeEmitirEstimacionCliente.
+ * y la capacidad Privada de Empresa, igual que puedeVerInformacionPrivada.
  */
 export function puedeMaterializarEstimacionHistorica(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
+  return (
+    puedeCerrarSemana(usuario) &&
+    usuario.vistaPrivadaActiva &&
+    (usuario.empresa?.privadoHabilitado ?? false)
+  );
 }
 
 /**
@@ -178,11 +199,15 @@ export function puedeVerFinancieroClienteOperativo(usuario: UsuarioSesion): bool
 /**
  * Registrar movimientos financieros del cliente (aportación al fondo, pago de
  * una estimación) — mismo criterio financieramente sensible que cerrar
- * semana/emitir/materializar histórico, sin Master. Respeta Vista privada
- * igual que puedeEmitirEstimacionCliente.
+ * semana/emitir/materializar histórico, sin Master. Respeta Vista privada y
+ * la capacidad Privada de Empresa, igual que puedeVerInformacionPrivada.
  */
 export function puedeRegistrarMovimientoFinancieroCliente(usuario: UsuarioSesion): boolean {
-  return puedeCerrarSemana(usuario) && usuario.vistaPrivadaActiva;
+  return (
+    puedeCerrarSemana(usuario) &&
+    usuario.vistaPrivadaActiva &&
+    (usuario.empresa?.privadoHabilitado ?? false)
+  );
 }
 
 /**

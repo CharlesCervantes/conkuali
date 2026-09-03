@@ -6,6 +6,7 @@ import {
   autenticar,
   CredencialesInvalidasError,
   UsuarioInactivoError,
+  EmpresaInactivaError,
 } from "@/lib/server/auth/service";
 
 const LoginSchema = z.object({
@@ -33,7 +34,8 @@ export async function login(
   } catch (error) {
     if (
       error instanceof CredencialesInvalidasError ||
-      error instanceof UsuarioInactivoError
+      error instanceof UsuarioInactivoError ||
+      error instanceof EmpresaInactivaError
     ) {
       return { error: error.message };
     }

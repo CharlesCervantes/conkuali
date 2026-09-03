@@ -39,15 +39,31 @@ enum AccionAuditoria {
 model Empresa {
   id              String   @id @default(cuid())
   nombre          String
+  razonSocial     String?
+  rfc             String?
   colorPrimario   String   @default("#0f172a")
   colorSecundario String   @default("#64748b")
-  logoUrl         String?
+  logoRef         String?
   activa          Boolean  @default(true)
+  // Capacidad transversal (no es un Modulo/pantalla) — si la Empresa contrató
+  // o no las capas privadas del sistema. Seguro por defecto: una Empresa
+  // nueva nunca la recibe automáticamente, Master debe habilitarla
+  // explícitamente (decisión de sesión, Portal Master). Se combina con el
+  // permiso de rol existente en puedeVerInformacionPrivada — nunca sustituye
+  // esa verificación, la complementa (ver lib/server/permisos.ts).
+  privadoHabilitado Boolean @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   plan   Plan?   @relation(fields: [planId], references: [id])
   planId String?
+
+  // Override explícito por tenant sobre los módulos de su Plan — puede tanto
+  // conceder un módulo fuera del Plan como apagar uno que el Plan sí incluye.
+  // Sin fila aquí para un módulo = se hereda el Plan tal cual. Resolución
+  // centralizada en empresaTieneModulo (lib/server/permisos.ts), nunca se
+  // evalúa dispersa en otro lugar.
+  modulosOverride EmpresaModulo[]
 
   // Recibos de pago (sección "Recibo de Pago" de 02-control-de-obra.md) — el
   // folio es único por empresa, no por proyecto. `ultimoFolioRecibo` es el
@@ -56,7 +72,7 @@ model Empresa {
   // esa transacción termina, así que dos generaciones simultáneas nunca
   // pueden sacar el mismo folio). Los demás campos son config simple de
   // marca/leyenda del recibo — no ameritan una entidad de Configuración
-  // aparte, se guardan igual que colorPrimario/colorSecundario/logoUrl.
+  // aparte, se guardan igual que colorPrimario/colorSecundario/logoRef.
   ultimoFolioRecibo    Int     @default(0)
   reciboTitulo         String  @default("Recibo de pago")
   reciboLeyenda        String?
@@ -118,7 +134,8 @@ model Modulo {
   clave  String @unique
   nombre String
 
-  planes PlanModulo[]
+  planes    PlanModulo[]
+  empresas  EmpresaModulo[]
 
   @@map("modulos")
 }
@@ -131,6 +148,21 @@ model PlanModulo {
 
   @@id([planId, moduloId])
   @@map("plan_modulos")
+}
+
+// Override de tenant sobre el Plan — ver comentario en Empresa.modulosOverride.
+// habilitado=true sobre un módulo fuera del Plan = capacidad adicional;
+// habilitado=false sobre un módulo que el Plan sí incluye = apagado específico
+// para esa Empresa. Borrar la fila = volver a heredar el Plan tal cual.
+model EmpresaModulo {
+  empresa    Empresa @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId  String
+  modulo     Modulo  @relation(fields: [moduloId], references: [id], onDelete: Cascade)
+  moduloId   String
+  habilitado Boolean
+
+  @@id([empresaId, moduloId])
+  @@map("empresa_modulos")
 }
 
 model Usuario {
@@ -197,6 +229,16 @@ model Usuario {
   // `true` para que ningún usuario existente pierda acceso al migrar.
   vistaPrivadaActiva Boolean @default(true)
 
+  // true justo después de que Master (u otro flujo de alta) crea la cuenta
+  // con una contraseña temporal generada por el sistema — mientras sea true,
+  // el usuario solo puede acceder a /nueva-password (cambio obligatorio) o
+  // cerrar sesión, nunca al resto de la app (ver app/(app)/layout.tsx y
+  // app/(proyecto)/control-de-obra/[id]/layout.tsx). Se limpia al completar
+  // el cambio de contraseña. Default `false` — ningún usuario existente
+  // queda bloqueado al migrar.
+  debeCambiarPassword Boolean @default(false)
+
+  @@index([empresaId])
   @@map("usuarios")
 }
 
@@ -323,6 +365,14 @@ model Proyecto {
   descripcion          String?
   notas                String?
   fechaEstimadaTermino DateTime?
+
+  // Imagen de portada (Inicio: dashboard ejecutivo, agosto 2026) — mismo
+  // patrón que GastoObra.ticketRef/ReciboPago.archivoEvidenciaRef: solo se
+  // guarda la referencia de almacenamiento + nombre original (Cloudflare R2
+  // vía subirArchivo(), lib/server/archivos.ts), nunca el binario. null =
+  // placeholder en la UI.
+  imagenRef    String?
+  imagenNombre String?
 
   // Contrato General (sección 49.9) — null = todavía sin definir. No se
   // infiere para proyectos existentes; Administrador/Director lo asigna a
@@ -1023,7 +1073,7 @@ model ReciboPago {
 
   // Evidencia firmada — null hasta que se sube. El estado de pago NO se
   // duplica aquí: se lee siempre en vivo vía corteSemanal.movimientoSemanal.
-  archivoEvidenciaUrl    String?
+  archivoEvidenciaRef    String?
   archivoEvidenciaNombre String?
   fechaRecepcion         DateTime?
   subidoPor              Usuario?  @relation("ReciboPagoEvidenciaSubida", fields: [subidoPorId], references: [id])
@@ -1240,6 +1290,12 @@ model EstimacionClienteCapa {
   // tenía el padre antes del rediseño, ahora independiente por capa.
   fechaCorteDocumento    DateTime?
   montoContratoCongelado Decimal?  @db.Decimal(14, 2)
+
+  // Identidad de Empresa (nombre/razón social/logo) AL MOMENTO de emitir —
+  // mismo principio que ReciboPago.configuracionSnapshot: el documento
+  // histórico se ve igual aunque la Empresa cambie de branding después.
+  // Shape: BrandingEmpresa (lib/server/branding.ts). Null mientras BORRADOR.
+  brandingSnapshot Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1470,10 +1526,10 @@ model GastoObra {
   comentario String?
 
   requiereFactura Boolean @default(false)
-  facturaUrl      String?
+  facturaRef      String?
   facturaNombre   String?
   // estatusFiscal (NO_APLICA/PENDIENTE_FACTURA/FACTURADO) se DERIVA de
-  // requiereFactura + facturaUrl en el servicio — no es columna.
+  // requiereFactura + facturaRef en el servicio — no es columna.
 
   tratamientoCliente            TratamientoClienteGasto @default(NO_COBRABLE)
   // DEPRECATED (arquitectura por capas, agosto 2026) — reemplazada por las
@@ -1507,7 +1563,7 @@ model GastoObra {
   // gastoObraId @unique). Ver EstimacionClienteGasto.
   estimacionesClienteGasto EstimacionClienteGasto[]
 
-  ticketUrl    String?
+  ticketRef    String?
   ticketNombre String?
 
   // Trazabilidad de una OC ejecutada — null en el 100% de los gastos
@@ -1676,11 +1732,11 @@ model OrdenCompra {
   tratamientoCliente            TratamientoClienteGasto @default(NO_COBRABLE)
   incluidoEnEstimacionClienteId String?
 
-  cotizacionUrl         String?
+  cotizacionRef         String?
   cotizacionNombre      String?
-  comprobantePagoUrl    String?
+  comprobantePagoRef    String?
   comprobantePagoNombre String?
-  facturaUrl            String?
+  facturaRef            String?
   facturaNombre         String?
 
   creadoPor       Usuario   @relation("OCCreada", fields: [creadoPorId], references: [id])

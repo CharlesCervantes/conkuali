@@ -1,4 +1,4 @@
-import { Document, Page, View, Text, StyleSheet } from "@react-pdf/renderer";
+import { Document, Page, View, Text, Image, StyleSheet } from "@react-pdf/renderer";
 import type { DatosDocumentoEstimacion } from "@/lib/server/control-de-obra/documentos-estimacion";
 import { aplanarGastosCobrables } from "@/lib/control-de-obra/lineas-gasto-estimacion";
 
@@ -21,6 +21,8 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottom: "1pt solid #111827",
   },
+  identidadEmpresa: { flexDirection: "row", alignItems: "center", gap: 10 },
+  logo: { width: 130, height: 56, objectFit: "contain" },
   razonSocial: { fontSize: 13, fontWeight: 700 },
   titulo: { fontSize: 11, marginTop: 2, color: "#374151" },
   folio: { fontSize: 12, fontWeight: 700, textAlign: "right" },
@@ -94,6 +96,20 @@ const ESTADO_LABEL: Record<string, string> = {
   CUBIERTA: "Cubierta",
 };
 
+function IdentidadEmpresa({ datos }: { datos: DatosDocumentoEstimacion }) {
+  const { branding } = datos;
+  return (
+    <View style={styles.identidadEmpresa}>
+      {/* eslint-disable-next-line jsx-a11y/alt-text -- @react-pdf/renderer Image, no es <img> HTML */}
+      {datos.logoBuffer && <Image src={datos.logoBuffer} style={styles.logo} />}
+      {/* Con logo, el logo ES la identidad — se omite el nombre en texto para
+          que el logo pueda verse más grande (mismo criterio que el sidebar de
+          la app). Sin logo, el nombre sigue siendo necesario. */}
+      {!datos.logoBuffer && <Text style={styles.razonSocial}>{branding.razonSocial ?? branding.nombre}</Text>}
+    </View>
+  );
+}
+
 function ItemGrid({ etiqueta, valor }: { etiqueta: string; valor: string }) {
   return (
     <View style={styles.gridItem}>
@@ -109,7 +125,7 @@ function PaginaControlContractual({ datos }: { datos: DatosDocumentoEstimacion }
     <Page size="LETTER" style={styles.page}>
       <View style={styles.encabezado}>
         <View>
-          <Text style={styles.razonSocial}>{datos.empresaNombre}</Text>
+          <IdentidadEmpresa datos={datos} />
           <Text style={styles.titulo}>Control contractual al corte de Estimación {datos.numero}</Text>
         </View>
         <View>
@@ -221,7 +237,7 @@ function PaginaEstimacionSemanal({ datos }: { datos: DatosDocumentoEstimacion })
     <Page size="LETTER" style={styles.page}>
       <View style={styles.encabezado}>
         <View>
-          <Text style={styles.razonSocial}>{datos.empresaNombre}</Text>
+          <IdentidadEmpresa datos={datos} />
           <Text style={styles.titulo}>Estimación de obra No. {datos.numero}</Text>
         </View>
         <View>
