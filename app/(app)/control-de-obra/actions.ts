@@ -51,6 +51,7 @@ function datosDesdeFormData(formData: FormData) {
     porcentajeAdministracionPrivadoDefault: opcional(
       formData.get("porcentajeAdministracionPrivadoDefault")
     ),
+    supervisorUsuarioId: opcional(formData.get("supervisorUsuarioId")),
   };
 }
 

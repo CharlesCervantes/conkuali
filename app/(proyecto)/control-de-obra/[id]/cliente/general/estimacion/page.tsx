@@ -165,7 +165,7 @@ export default async function ClienteGeneralEstimacionPage({
               <ResumenEstimacionOperativa
                 subtotalTrabajos={congelado.estimacion.subtotal}
                 gastosCobrables={congelado.estimacion.subtotalGastosCobrables}
-                administracion={congelado.estimacion.montoAdministracionTrabajos}
+                administracion={congelado.estimacion.montoAdministracionTotal}
                 aplicaIVA={congelado.estimacion.aplicaIVA}
                 montoIVA={congelado.estimacion.montoIVA}
                 total={congelado.estimacion.total}

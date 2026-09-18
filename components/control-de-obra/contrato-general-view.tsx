@@ -2,6 +2,7 @@ import { Card } from "@/components/ui/card";
 import { FormNuevaPartida } from "./form-nueva-partida";
 import { FormNuevoConcepto } from "./form-nuevo-concepto";
 import { IconoPartida } from "./icono-partida";
+import { BotonEliminarPartida } from "./boton-eliminar-partida";
 import { TablaOperativaEditable, type ConceptoOperativoPlano } from "./tabla-operativa-editable";
 import { formatMoney } from "@/lib/dinero";
 import { calcularPrecioOperativoConcepto } from "@/lib/control-de-obra/contrato-general";
@@ -79,12 +80,14 @@ export function ContratoGeneralView({
   esquemaContractual,
   porcentajeAdministracionDefault,
   puedeAdministrar,
+  puedeEliminar,
 }: {
   proyectoId: string;
   partidas: Partidas;
   esquemaContractual: EsquemaContractual | null;
   porcentajeAdministracionDefault: number | null;
   puedeAdministrar: boolean;
+  puedeEliminar: boolean;
 }) {
   const esPrecioAlzado = esquemaContractual === "PRECIO_ALZADO";
   const esAdministracion = esquemaContractual === "ADMINISTRACION";
@@ -153,6 +156,14 @@ export function ContratoGeneralView({
                   <span className="text-sm font-semibold text-[var(--foreground)]">
                     {partida.nombre}
                   </span>
+                  {puedeEliminar && (
+                    <BotonEliminarPartida
+                      proyectoId={proyectoId}
+                      partidaId={partida.id}
+                      nombre={partida.nombre}
+                      conceptosActivos={partida.conceptos.length}
+                    />
+                  )}
                 </span>
                 {esAdministracion && partida.conceptos.length > 0 ? (
                   <div className="flex items-center gap-4 text-xs text-[var(--muted)]">
@@ -191,6 +202,7 @@ export function ContratoGeneralView({
                     subtotal={subtotal}
                     montoAdm={montoAdm}
                     puedeAdministrar={puedeAdministrar}
+                    puedeEliminar={puedeEliminar}
                   />
                 )}
 

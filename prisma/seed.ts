@@ -1,6 +1,16 @@
-// Script de siembra inicial: crea la Empresa Conkuali, su Plan "Completo"
-// (con todos los módulos documentados hasta ahora) y los usuarios base
-// (Sergio/Director, Charles/Administrador, Andrés/Supervisor).
+// Script de siembra inicial — SOLO configuración estructural para levantar
+// una Empresa nueva de forma segura: catálogo de Módulos, Plan "Completo"
+// (con todos los módulos existentes hasta ahora) y los usuarios base
+// (Master/Director/Administrador/Supervisor). Idempotente — correrlo varias
+// veces nunca duplica nada (upsert/"si ya existe, sáltalo").
+//
+// Deliberadamente NO crea proyectos/obras — el catálogo operativo real
+// (proyectos, contratistas, proveedores, contratos, avances, gastos, etc.)
+// se captura manualmente desde la aplicación una vez que el sistema está en
+// producción, nunca desde este script (Preparación de Producción — Etapa 1,
+// septiembre 2026). Antes de este cambio, un OBRAS[] hardcodeado recreaba en
+// silencio 6 proyectos reales de Conkuali si el seed volvía a correrse
+// después de borrarlos — justo lo que este cambio evita.
 //
 // Cada persona se crea solo si su variable de entorno SEED_EMAIL_* está
 // definida (correo real, nunca inventado aquí) — se puede correr de forma
@@ -16,24 +26,18 @@ import { hashPassword } from "../lib/crypto/password";
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const db = new PrismaClient({ adapter });
 
+// Catálogo completo de módulos existentes hasta ahora — mantener esta lista
+// al día conforme se agreguen módulos nuevos (mismo criterio que las
+// migraciones que dan de alta un Modulo, ver 20260910120000_gastos_transversal,
+// 20260915090000_contabilidad, 20260920100000_modulo_compras).
 const MODULOS = [
   { clave: "reporte_general", nombre: "Reporte General" },
   { clave: "control_de_obra", nombre: "Control de Obra" },
   { clave: "control_prestamos", nombre: "Control de Préstamos" },
   { clave: "catalogos", nombre: "Catálogos" },
-];
-
-// Obras reales de Conkuali (mencionadas por Charles al describir el Reporte
-// General) — no son datos de prueba inventados, son el punto de partida real
-// del catálogo de obras hasta que exista la pantalla de Etapa 5 para
-// administrarlas desde la interfaz.
-const OBRAS = [
-  "Mississippi",
-  "Villas La Herradura",
-  "Loma del Sur",
-  "Jardines",
-  "Vistancia Fraile",
-  "Pollo Loco Vasconcelos",
+  { clave: "gastos", nombre: "Gastos" },
+  { clave: "contabilidad", nombre: "Contabilidad" },
+  { clave: "compras", nombre: "Compras" },
 ];
 
 function leerEmail(varEnv: string): string | undefined {
@@ -107,19 +111,6 @@ async function main() {
     },
   });
 
-  const obrasCreadas: string[] = [];
-  for (const nombre of OBRAS) {
-    const existente = await db.proyecto.findFirst({
-      where: { empresaId: empresa.id, nombre },
-    });
-    if (existente) continue;
-
-    await db.proyecto.create({
-      data: { empresaId: empresa.id, nombre, tipo: "FORMAL" },
-    });
-    obrasCreadas.push(nombre);
-  }
-
   const credencialesNuevas: { rol: string; email: string; password: string }[] =
     [];
   const yaExistian: string[] = [];
@@ -168,9 +159,6 @@ async function main() {
   }
   if (yaExistian.length > 0) {
     console.log(`\nYa existían (sin cambios): ${yaExistian.join(", ")}`);
-  }
-  if (obrasCreadas.length > 0) {
-    console.log(`\nObras creadas: ${obrasCreadas.join(", ")}`);
   }
   if (pendientes.length > 0) {
     console.log(

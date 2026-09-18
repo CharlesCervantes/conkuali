@@ -147,7 +147,7 @@ export async function obtenerDatosDocumentoEstimacion(
     historial,
     estimacionSemanal: {
       subtotalTrabajos: congelado.estimacion.subtotal,
-      administracion: congelado.estimacion.montoAdministracionTrabajos,
+      administracion: congelado.estimacion.montoAdministracionTotal,
       gastosCobrables: congelado.estimacion.subtotalGastosCobrables,
       aplicaIVA: congelado.estimacion.aplicaIVA,
       porcentajeIVA: congelado.estimacion.porcentajeIVA,

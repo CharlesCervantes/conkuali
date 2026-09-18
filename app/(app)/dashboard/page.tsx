@@ -11,7 +11,10 @@ function aVista(valor: string | string[] | undefined): VistaDashboard {
   return valor === "privado" ? "privado" : "general";
 }
 function aPeriodo(valor: string | string[] | undefined): PeriodoDashboard {
-  return valor === "mes" ? "mes" : valor === "acumulado" ? "acumulado" : "semana";
+  if (valor === "mes") return "mes";
+  if (valor === "mes_anterior") return "mes_anterior";
+  if (valor === "acumulado") return "acumulado";
+  return "semana";
 }
 
 export default async function DashboardPage({

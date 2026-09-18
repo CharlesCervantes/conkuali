@@ -5,6 +5,7 @@ import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib
 import {
   obtenerProyecto,
   proyectoTieneInformacionContractual,
+  listarSupervisoresDisponibles,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
 import { Card } from "@/components/ui/card";
@@ -50,6 +51,8 @@ export default async function EditarProyectoPage({
   // agosto 2026).
   const puedeVerPrivado = puedeVerContratoGeneralPrivado(usuario);
 
+  const supervisoresDisponibles = await listarSupervisoresDisponibles(usuario);
+
   const accionConId = editarProyectoAction.bind(null, id);
 
   return (
@@ -76,6 +79,7 @@ export default async function EditarProyectoPage({
           requiereConfirmacionEsquema={requiereConfirmacionEsquema}
           puedeVerPrivado={puedeVerPrivado}
           imagenUrlActual={proyecto.imagenRef ? `/api/control-de-obra/proyectos/${id}/imagen` : null}
+          supervisoresDisponibles={supervisoresDisponibles}
           valoresIniciales={{
             nombre: proyecto.nombre,
             tipo: proyecto.tipo,
@@ -97,6 +101,7 @@ export default async function EditarProyectoPage({
             porcentajeAdministracionPrivadoDefault: puedeVerPrivado
               ? (proyecto.porcentajeAdministracionPrivadoDefault?.toString() ?? null)
               : null,
+            supervisorUsuarioId: proyecto.supervisorUsuarioId,
           }}
         />
       </Card>

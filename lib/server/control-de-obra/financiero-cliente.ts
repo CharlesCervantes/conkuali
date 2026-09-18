@@ -4,7 +4,7 @@ import { db } from "@/lib/server/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import type { CapaEstimacion } from "@/lib/generated/prisma/enums";
 import { formatMoney } from "@/lib/dinero";
-import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
+import { registrarAuditoriaTx } from "@/lib/server/auditoria";
 import { obtenerBrandingEmpresa, type BrandingEmpresa } from "@/lib/server/branding";
 import {
   puedeVerFinancieroCliente,
@@ -43,6 +43,74 @@ function aCapaEstimacion(capa: CapaValorizacion): CapaEstimacion {
   return capa === "privado" ? "PRIVADO" : "OPERATIVO";
 }
 
+// Redondeo a centavos — solo para el saldo PROYECTADO de Operativo (ver
+// obtenerCapaCobroReal), que se deriva multiplicando por un factor
+// proporcional y puede dejar residuos de punto flotante que no deben decidir
+// si una estimación quedó "Cubierta" o "Parcial".
+function redondear(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+// ---------------------------------------------------------------------------
+// Una sola realidad de dinero — General/Privado, septiembre 2026. La capa
+// Privada comparte la cantidad física con Operativo pero tiene su propio
+// precio (04-modulo-control-de-obra.md §24) y es la única que puede contener
+// "anticipos reales del cliente" (§32) — por eso, en cuanto una
+// EstimacionCliente tiene AMBAS capas emitidas, la capa Privada pasa a ser la
+// ÚNICA que puede recibir movimientos reales (PAGO_ESTIMACION/
+// APLICACION_ESTIMACION): un mismo depósito bancario nunca debe registrarse
+// dos veces (una por capa). Operativo, en ese caso, dejar de admitir sus
+// propios movimientos y en su lugar PROYECTA el cobro real de Privado sobre
+// su propio total (con tope — nunca más del 100% de lo que Operativo
+// factura), sin crear un segundo movimiento (decisión de sesión, Cobros de
+// cliente). Si la estimación nunca tuvo capa Privado emitida (la mayoría de
+// los proyectos), Operativo sigue siendo la única capa real, exactamente
+// como antes de este cambio.
+async function obtenerCapaCobroReal(cliente: Cliente, estimacionClienteId: string): Promise<CapaEstimacion> {
+  const privado = await cliente.estimacionClienteCapa.findFirst({
+    where: { estimacionClienteId, capa: "PRIVADO", estatus: "EMITIDA" },
+    select: { id: true },
+  });
+  return privado ? "PRIVADO" : "OPERATIVO";
+}
+
+// Cobro real (aplicadoFondo/pagoDirecto/pendiente/estado) de UNA estimación
+// en UNA capa — único lugar donde vive esta fórmula, reutilizado tanto por
+// obtenerHistorialEstimacionesCliente (fila por estimación) como por
+// obtenerControlContractual (suma de todas), para que ambas pantallas nunca
+// puedan mostrar números distintos del mismo hecho.
+// Exportada para el Dashboard ejecutivo (Inicio) — mismo cálculo exacto de
+// "cobro real" reutilizado ahí para el consolidado de "Por cobrar", nunca
+// reimplementado (una sola realidad de dinero, General/Privado, septiembre
+// 2026).
+export function calcularFinancieroCapaEstimacion(
+  capa: CapaEstimacion,
+  importe: number,
+  movimientosPropios: { tipo: string; monto: Prisma.Decimal }[],
+  siblingPrivado: { total: number; movimientos: { tipo: string; monto: Prisma.Decimal }[] } | null
+): { aplicadoFondo: number; pagoDirecto: number; pendiente: number; estado: EstadoPagoEstimacion } {
+  if (capa === "OPERATIVO" && siblingPrivado) {
+    const aplicadoFondoReal = suma(siblingPrivado.movimientos, "APLICACION_ESTIMACION");
+    const pagoDirectoReal = suma(siblingPrivado.movimientos, "PAGO_ESTIMACION");
+    const cobradoReal = aplicadoFondoReal + pagoDirectoReal;
+    const cobradoProyectado = Math.min(cobradoReal, importe);
+    // Reparte el monto proyectado entre "aplicado"/"pago directo" en la misma
+    // proporción real — nunca inventa una composición distinta de la real.
+    const factor = cobradoReal > 0 ? cobradoProyectado / cobradoReal : 0;
+    const aplicadoFondo = redondear(aplicadoFondoReal * factor);
+    const pagoDirecto = redondear(pagoDirectoReal * factor);
+    const pendiente = redondear(importe - aplicadoFondo - pagoDirecto);
+    const estado: EstadoPagoEstimacion = pendiente <= 0 ? "CUBIERTA" : cobradoProyectado > 0 ? "PARCIAL" : "PENDIENTE";
+    return { aplicadoFondo, pagoDirecto, pendiente, estado };
+  }
+
+  const aplicadoFondo = suma(movimientosPropios, "APLICACION_ESTIMACION");
+  const pagoDirecto = suma(movimientosPropios, "PAGO_ESTIMACION");
+  const pendiente = redondear(importe - aplicadoFondo - pagoDirecto);
+  const estado: EstadoPagoEstimacion = pendiente <= 0 ? "CUBIERTA" : aplicadoFondo > 0 || pagoDirecto > 0 ? "PARCIAL" : "PENDIENTE";
+  return { aplicadoFondo, pagoDirecto, pendiente, estado };
+}
+
 // ---------------------------------------------------------------------------
 // Aplicación de fondo contra una estimación (una capa) — toda obra se cobra
 // por Estimación; el fondo es una fuente de recursos opcional (existe si el
@@ -68,7 +136,7 @@ export async function aplicarFondoAEstimacionTx(
   montoSolicitado?: number
 ): Promise<{ aplicado: number }> {
   const movimientosProyecto = await tx.movimientoFinancieroCliente.findMany({
-    where: { proyectoId: ctx.proyectoId },
+    where: { proyectoId: ctx.proyectoId, estatus: "VIGENTE" },
     select: { tipo: true, monto: true, estimacionClienteCapaId: true },
   });
   // Fondo disponible del proyecto — SIEMPRE todas las capas juntas, nunca
@@ -78,6 +146,15 @@ export async function aplicarFondoAEstimacionTx(
   if (disponible <= 0) return { aplicado: 0 };
 
   const capaRow = await tx.estimacionClienteCapa.findFirstOrThrow({ where: { id: estimacionClienteCapaId } });
+  // Una sola realidad de dinero (ver obtenerCapaCobroReal) — si esta capa ya
+  // no es la que recibe movimientos reales (existe una capa Privado emitida
+  // hermana), no aplicar nada aquí. No es un error: esta función también la
+  // llama emitirEstimacion automáticamente al emitir con "aplicar fondo"
+  // marcado, y ese flujo nunca debe fallar por esto — simplemente no aplica
+  // nada en la capa que ya dejó de ser la real.
+  const capaReal = await obtenerCapaCobroReal(tx, capaRow.estimacionClienteId);
+  if (capaRow.capa !== capaReal) return { aplicado: 0 };
+
   const cubiertoDeEsta = movimientosProyecto
     .filter((m) => m.estimacionClienteCapaId === estimacionClienteCapaId && m.tipo !== "APORTACION_FONDO")
     .reduce((t, m) => t + Number(m.monto), 0);
@@ -144,6 +221,14 @@ export async function aplicarFondoAEstimacion(
     if (capaRow.estatus !== "EMITIDA") {
       throw new ValidacionError("Solo se puede aplicar fondo a una estimación emitida.");
     }
+    const capaReal = await obtenerCapaCobroReal(tx, capaRow.estimacionClienteId);
+    if (capaRow.capa !== capaReal) {
+      throw new ValidacionError(
+        capaReal === "PRIVADO"
+          ? "Esta estimación ya tiene su versión Privado emitida — aplica el fondo desde Cliente Priv."
+          : "Aplica el fondo desde Cliente (versión Operativo)."
+      );
+    }
 
     const resultado = await aplicarFondoAEstimacionTx(
       tx,
@@ -186,7 +271,11 @@ export type ControlContractual = {
   };
   avanceContractual: {
     montoContrato: number;
-    totalEstimado: number;
+    // Trabajos contractuales estimados (acumulado de subtotal +
+    // montoAdministracionTrabajos de las capas EMITIDA) — misma base que
+    // montoContrato, nunca incluye gastos cobrables/administración de
+    // gastos/IVA (ver totalTrabajosEmitidoPorCapa).
+    trabajosEstimados: number;
     saldoPorEjercer: number;
     porcentajeEjercido: number;
   };
@@ -252,6 +341,11 @@ export async function calcularMontoContrato(
   }, 0);
 }
 
+// Total completo emitido (trabajos + gastos cobrables + administración de
+// ambos + IVA) — SOLO para la situación financiera real / pendiente de
+// cobro (lo que el cliente realmente debe cubrir). Nunca se compara contra
+// montoContrato, que no incluye gastos ni IVA (ver totalTrabajosEmitidoPorCapa
+// para el avance contractual, septiembre 2026 — misma base económica).
 async function totalEmitidoPorCapa(
   proyectoId: string,
   capa: CapaEstimacion,
@@ -269,6 +363,34 @@ async function totalEmitidoPorCapa(
     _sum: { total: true },
   });
   return Number(r._sum.total ?? 0);
+}
+
+// Trabajos contractuales estimados (subtotal + administración de trabajos
+// ÚNICAMENTE) — misma composición exacta que calcularMontoContrato, así que
+// es la única base válida para comparar contra el monto del contrato
+// (avance contractual). Deliberadamente EXCLUYE gastos cobrables,
+// administración sobre gastos e IVA — esos no consumen saldo contractual,
+// solo forman parte de lo que se le cobra al cliente (situación financiera,
+// arriba). Sin esta separación, una estimación de puro gasto (sin trabajos)
+// infla el % de avance contractual artificialmente (septiembre 2026 —
+// corrección de base económica).
+async function totalTrabajosEmitidoPorCapa(
+  proyectoId: string,
+  capa: CapaEstimacion,
+  hastaSemanaFechaInicio?: Date
+): Promise<number> {
+  const r = await db.estimacionClienteCapa.aggregate({
+    where: {
+      capa,
+      estatus: "EMITIDA",
+      estimacionCliente: {
+        proyectoId,
+        ...(hastaSemanaFechaInicio && { semana: { fechaInicio: { lte: hastaSemanaFechaInicio } } }),
+      },
+    },
+    _sum: { subtotal: true, montoAdministracionTrabajos: true },
+  });
+  return Number(r._sum.subtotal ?? 0) + Number(r._sum.montoAdministracionTrabajos ?? 0);
 }
 
 export type EstimacionConCorte = {
@@ -392,32 +514,82 @@ export async function obtenerControlContractual(
     capa === "privado" ? puedeVerFinancieroCliente(usuario) : puedeVerFinancieroClienteOperativo(usuario);
   const hastaSemanaFechaInicio = corte?.hastaSemanaFechaInicio;
 
-  const [montoContrato, totalEmitidoCapa, movimientos] = await Promise.all([
+  const [montoContrato, totalEmitidoCapa, trabajosEstimados, movimientosProyecto, capasEstaCapa] = await Promise.all([
     corte
       ? Promise.resolve(corte.montoContrato)
       : calcularMontoContrato(proyectoId, proyecto.esquemaContractual, porcentajesDefault, capa),
     totalEmitidoPorCapa(proyectoId, capaEnum, hastaSemanaFechaInicio),
+    totalTrabajosEmitidoPorCapa(proyectoId, capaEnum, hastaSemanaFechaInicio),
     db.movimientoFinancieroCliente.findMany({
-      where: { proyectoId, ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
-      select: { tipo: true, monto: true, estimacionClienteCapa: { select: { capa: true } } },
+      where: { proyectoId, estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+      select: { tipo: true, monto: true },
+    }),
+    // Cobro real por estimación de esta capa, con su capa Privado hermana
+    // (si existe y ya fue emitida) para poder proyectar Operativo sin crear
+    // un segundo movimiento (ver calcularFinancieroCapaEstimacion).
+    db.estimacionClienteCapa.findMany({
+      where: {
+        capa: capaEnum,
+        estatus: "EMITIDA",
+        estimacionCliente: {
+          proyectoId,
+          ...(corte && { semana: { fechaInicio: { lte: corte.hastaSemanaFechaInicio } } }),
+        },
+      },
+      select: {
+        total: true,
+        movimientosFinancieros: {
+          select: { tipo: true, monto: true },
+          where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+        },
+        estimacionCliente: {
+          select: {
+            capas: {
+              where: { capa: "PRIVADO", estatus: "EMITIDA" },
+              select: {
+                total: true,
+                movimientosFinancieros: {
+                  select: { tipo: true, monto: true },
+                  where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+                },
+              },
+            },
+          },
+        },
+      },
     }),
   ]);
 
-  const saldoPorEjercer = montoContrato - totalEmitidoCapa;
-  const porcentajeEjercido = montoContrato > 0 ? (totalEmitidoCapa / montoContrato) * 100 : 0;
+  // Avance contractual — SOLO trabajos, misma base que montoContrato. Nunca
+  // usa totalEmitidoCapa (ese incluye gastos cobrables/administración de
+  // gastos/IVA, que no consumen saldo contractual — ver comentario en
+  // totalTrabajosEmitidoPorCapa).
+  const saldoPorEjercer = montoContrato - trabajosEstimados;
+  const porcentajeEjercido = montoContrato > 0 ? (trabajosEstimados / montoContrato) * 100 : 0;
 
   let financiero: ControlContractual["financiero"] = null;
   if (puedeVerFinanciero) {
     // Fondo — proyecto-wide, todas las capas juntas (efectivo real, único).
-    const aportado = suma(movimientos, "APORTACION_FONDO");
-    const aplicadoTotalProyecto = suma(movimientos, "APLICACION_ESTIMACION");
+    const aportado = suma(movimientosProyecto, "APORTACION_FONDO");
+    const aplicadoTotalProyecto = suma(movimientosProyecto, "APLICACION_ESTIMACION");
 
-    // Situación financiera de ESTA capa — solo sus propios movimientos
-    // (independiente de la otra capa, arquitectura por capas, agosto 2026).
-    const movimientosDeEstaCapa = movimientos.filter((m) => m.estimacionClienteCapa?.capa === capaEnum);
-    const aplicadoEstaCapa = suma(movimientosDeEstaCapa, "APLICACION_ESTIMACION");
-    const pagadoEstaCapa = suma(movimientosDeEstaCapa, "PAGO_ESTIMACION");
-    const totalCubierto = aplicadoEstaCapa + pagadoEstaCapa;
+    // Situación financiera de ESTA capa — suma, estimación por estimación,
+    // el mismo cálculo que usa el historial (una sola fórmula, ver
+    // calcularFinancieroCapaEstimacion) para que ambas pantallas nunca
+    // puedan mostrar números distintos del mismo hecho.
+    let totalCubierto = 0;
+    for (const c of capasEstaCapa) {
+      const siblingPrivado = c.estimacionCliente.capas[0] ?? null;
+      const { aplicadoFondo, pagoDirecto } = calcularFinancieroCapaEstimacion(
+        capaEnum,
+        Number(c.total),
+        c.movimientosFinancieros,
+        siblingPrivado
+          ? { total: Number(siblingPrivado.total), movimientos: siblingPrivado.movimientosFinancieros }
+          : null
+      );
+      totalCubierto += aplicadoFondo + pagoDirecto;
+    }
 
     financiero = {
       totalCubierto,
@@ -434,7 +606,7 @@ export async function obtenerControlContractual(
     },
     avanceContractual: {
       montoContrato,
-      totalEstimado: totalEmitidoCapa,
+      trabajosEstimados,
       saldoPorEjercer,
       porcentajeEjercido,
     },
@@ -489,23 +661,50 @@ export async function obtenerHistorialEstimacionesCliente(
       estimacionCliente: { include: { semana: { select: { numero: true, anio: true, fechaInicio: true } } } },
       movimientosFinancieros: {
         select: { tipo: true, monto: true },
-        ...(corte && { where: { createdAt: { lte: corte.fechaCorte } } }),
+        where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
       },
     },
     orderBy: { estimacionCliente: { semana: { fechaInicio: "asc" } } },
   });
 
+  // Capas Privado EMITIDA hermanas — una consulta aparte (no un N+1 por fila,
+  // es una sola query por el lote completo) para proyectar Operativo cuando
+  // corresponda (ver calcularFinancieroCapaEstimacion).
+  const siblingsPorEstimacionClienteId =
+    capaEnum === "OPERATIVO"
+      ? new Map(
+          (
+            await db.estimacionClienteCapa.findMany({
+              where: {
+                capa: "PRIVADO",
+                estatus: "EMITIDA",
+                estimacionClienteId: { in: capas.map((c) => c.estimacionClienteId) },
+              },
+              select: {
+                estimacionClienteId: true,
+                total: true,
+                movimientosFinancieros: {
+                  select: { tipo: true, monto: true },
+                  where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+                },
+              },
+            })
+          ).map((s) => [s.estimacionClienteId, s] as const)
+        )
+      : new Map<string, { total: Prisma.Decimal; movimientosFinancieros: { tipo: string; monto: Prisma.Decimal }[] }>();
+
   return capas.map((c) => {
     const importe = Number(c.total);
+    const sibling = siblingsPorEstimacionClienteId.get(c.estimacionClienteId) ?? null;
 
     let financiero: FilaHistorialEstimacion["financiero"] = null;
     if (puedeVerFinanciero) {
-      const aplicadoFondo = suma(c.movimientosFinancieros, "APLICACION_ESTIMACION");
-      const pagoDirecto = suma(c.movimientosFinancieros, "PAGO_ESTIMACION");
-      const pendiente = importe - aplicadoFondo - pagoDirecto;
-      const estado: EstadoPagoEstimacion =
-        pendiente <= 0 ? "CUBIERTA" : aplicadoFondo > 0 || pagoDirecto > 0 ? "PARCIAL" : "PENDIENTE";
-      financiero = { aplicadoFondo, pagoDirecto, pendiente, estado };
+      financiero = calcularFinancieroCapaEstimacion(
+        capaEnum,
+        importe,
+        c.movimientosFinancieros,
+        sibling ? { total: Number(sibling.total), movimientos: sibling.movimientosFinancieros } : null
+      );
     }
 
     return {
@@ -532,6 +731,8 @@ export type FilaAportacionFondo = {
   notas: string | null;
   monto: number;
   registradoPorNombre: string;
+  estatus: "VIGENTE" | "CANCELADO";
+  motivoCancelacion: string | null;
 };
 
 export async function obtenerAportacionesFondo(
@@ -546,6 +747,9 @@ export async function obtenerAportacionesFondo(
   if (!puedeVerFinancieroClienteOperativo(usuario)) throw new SinPermisoError();
   await obtenerProyecto(usuario, proyectoId);
 
+  // Se listan también las CANCELADAS (nunca se borran) para trazabilidad —
+  // los cálculos de fondo disponible (aplicarFondoAEstimacionTx/
+  // obtenerControlContractual) son los que las ignoran, no esta lista.
   const aportaciones = await db.movimientoFinancieroCliente.findMany({
     where: { proyectoId, tipo: "APORTACION_FONDO" },
     include: { registradoPor: { select: { nombre: true } } },
@@ -559,6 +763,8 @@ export async function obtenerAportacionesFondo(
     notas: a.notas,
     monto: Number(a.monto),
     registradoPorNombre: a.registradoPor.nombre,
+    estatus: a.estatus,
+    motivoCancelacion: a.motivoCancelacion,
   }));
 }
 
@@ -567,7 +773,44 @@ const DatosMovimientoSchema = z.object({
   fecha: z.coerce.date(),
   referencia: z.string().trim().optional().nullable(),
   notas: z.string().trim().optional().nullable(),
+  // Decoración fiscal opcional — captura en el mismo paso (Cobros de
+  // cliente, septiembre 2026). Nunca bloquean el registro del cobro si no se
+  // tienen todavía: se completan después desde Contabilidad.
+  cuentaReceptoraId: z.string().trim().optional().nullable(),
+  comprobanteRef: z.string().trim().optional().nullable(),
+  comprobanteNombre: z.string().trim().optional().nullable(),
+  facturaEsperada: z.coerce.boolean().optional().default(false),
 });
+
+// Crea la decoración Ingreso (Contabilidad) en la MISMA transacción que el
+// movimiento real, solo si se capturó al menos un dato fiscal — nunca una
+// fila vacía. Nunca se llama para APLICACION_ESTIMACION (no es dinero nuevo
+// entrando, ver comentario en aplicarFondoAEstimacionTx) para no generar un
+// segundo Ingreso del mismo depósito real.
+async function crearDecoracionIngresoSiAplica(
+  tx: Cliente,
+  ctx: { empresaId: string; movimientoFinancieroClienteId: string; registradoPorId: string },
+  datos: {
+    cuentaReceptoraId?: string | null;
+    comprobanteRef?: string | null;
+    comprobanteNombre?: string | null;
+    facturaEsperada?: boolean;
+  }
+): Promise<void> {
+  const hayDatosFiscales = !!(datos.cuentaReceptoraId || datos.comprobanteRef || datos.facturaEsperada);
+  if (!hayDatosFiscales) return;
+  await tx.ingreso.create({
+    data: {
+      empresaId: ctx.empresaId,
+      movimientoFinancieroClienteId: ctx.movimientoFinancieroClienteId,
+      cuentaReceptoraId: datos.cuentaReceptoraId || null,
+      comprobanteRef: datos.comprobanteRef || null,
+      comprobanteNombre: datos.comprobanteNombre || null,
+      facturaEsperada: datos.facturaEsperada ?? false,
+      registradoPorId: ctx.registradoPorId,
+    },
+  });
+}
 
 export async function registrarAportacionFondo(
   usuario: UsuarioSesion,
@@ -579,29 +822,36 @@ export async function registrarAportacionFondo(
   const datos = DatosMovimientoSchema.parse(datosCrudos);
   await obtenerProyecto(usuario, proyectoId);
 
-  const movimiento = await db.movimientoFinancieroCliente.create({
-    data: {
+  return db.$transaction(async (tx) => {
+    const movimiento = await tx.movimientoFinancieroCliente.create({
+      data: {
+        empresaId,
+        proyectoId,
+        tipo: "APORTACION_FONDO",
+        monto: datos.monto,
+        fecha: datos.fecha,
+        referencia: datos.referencia || null,
+        notas: datos.notas || null,
+        registradoPorId: usuario.id,
+      },
+    });
+
+    // APORTACION_FONDO es donde el dinero real entra a la Empresa — es el
+    // único momento en que este anticipo/depósito tiene cuenta receptora y
+    // comprobante propios (Cobros de cliente, septiembre 2026).
+    await crearDecoracionIngresoSiAplica(tx, { empresaId, movimientoFinancieroClienteId: movimiento.id, registradoPorId: usuario.id }, datos);
+
+    await registrarAuditoriaTx(tx, {
       empresaId,
-      proyectoId,
-      tipo: "APORTACION_FONDO",
-      monto: datos.monto,
-      fecha: datos.fecha,
-      referencia: datos.referencia || null,
-      notas: datos.notas || null,
-      registradoPorId: usuario.id,
-    },
-  });
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimiento.id,
+      accion: "CREAR",
+      valorNuevo: { tipo: "APORTACION_FONDO", monto: datos.monto, fecha: datos.fecha.toISOString() },
+    });
 
-  await registrarAuditoria({
-    empresaId,
-    usuarioId: usuario.id,
-    entidad: "MovimientoFinancieroCliente",
-    entidadId: movimiento.id,
-    accion: "CREAR",
-    valorNuevo: { tipo: "APORTACION_FONDO", monto: datos.monto, fecha: datos.fecha.toISOString() },
+    return movimiento;
   });
-
-  return movimiento;
 }
 
 // ---------------------------------------------------------------------------
@@ -639,9 +889,17 @@ export async function registrarPagoEstimacion(
     if (capaRow.estatus !== "EMITIDA") {
       throw new ValidacionError("Solo se pueden registrar pagos sobre una estimación emitida.");
     }
+    const capaReal = await obtenerCapaCobroReal(tx, capaRow.estimacionClienteId);
+    if (capaRow.capa !== capaReal) {
+      throw new ValidacionError(
+        capaReal === "PRIVADO"
+          ? "Esta estimación ya tiene su versión Privado emitida — registra el pago desde Cliente Priv."
+          : "Registra el pago desde Cliente (versión Operativo)."
+      );
+    }
 
     const movimientosPrevios = await tx.movimientoFinancieroCliente.findMany({
-      where: { estimacionClienteCapaId, tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
+      where: { estimacionClienteCapaId, estatus: "VIGENTE", tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
       select: { tipo: true, monto: true },
     });
     const totalPagado = suma(movimientosPrevios, "PAGO_ESTIMACION");
@@ -666,6 +924,8 @@ export async function registrarPagoEstimacion(
       },
     });
 
+    await crearDecoracionIngresoSiAplica(tx, { empresaId, movimientoFinancieroClienteId: movimiento.id, registradoPorId: usuario.id }, datos);
+
     await registrarAuditoriaTx(tx, {
       empresaId,
       usuarioId: usuario.id,
@@ -677,4 +937,341 @@ export async function registrarPagoEstimacion(
 
     return movimiento;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Editar / cancelar movimientos — nunca DELETE (Cobros de cliente, septiembre
+// 2026). Metadata (referencia/notas/fecha/decoración fiscal) se corrige
+// libremente, auditada con antes/después. El monto es financiero: se
+// re-valida exactamente como si se registrara de nuevo, y se BLOQUEA si ya
+// existen dependientes que la corrección dejaría inconsistentes (en vez de
+// permitir cualquier cosa) — se exige cancelar y registrar de nuevo en ese
+// caso, igual que pide la integridad del ledger.
+// ---------------------------------------------------------------------------
+
+const DatosEditarMetadataSchema = z.object({
+  fecha: z.coerce.date().optional(),
+  referencia: z.string().trim().optional().nullable(),
+  notas: z.string().trim().optional().nullable(),
+  cuentaReceptoraId: z.string().trim().optional().nullable(),
+  comprobanteRef: z.string().trim().optional().nullable(),
+  comprobanteNombre: z.string().trim().optional().nullable(),
+  facturaEsperada: z.coerce.boolean().optional(),
+});
+
+// Upsert PARCIAL — a diferencia de guardarDecoracionIngreso (Contabilidad,
+// formulario completo con reemplazo total), aquí solo se tocan las claves
+// realmente enviadas (undefined = "no tocar"), para no pisar accidentalmente
+// datos fiscales capturados en otro momento (mismo cuidado que
+// vincularFacturaAGasto/vincularFacturaAIngreso, Contabilidad).
+async function actualizarDecoracionIngresoParcial(
+  tx: Cliente,
+  ctx: { empresaId: string; movimientoFinancieroClienteId: string; registradoPorId: string },
+  cambios: {
+    cuentaReceptoraId?: string | null;
+    comprobanteRef?: string | null;
+    comprobanteNombre?: string | null;
+    facturaEsperada?: boolean;
+  }
+): Promise<void> {
+  const hayCambios = Object.values(cambios).some((v) => v !== undefined);
+  if (!hayCambios) return;
+  const datos = {
+    cuentaReceptoraId: cambios.cuentaReceptoraId === undefined ? undefined : cambios.cuentaReceptoraId || null,
+    comprobanteRef: cambios.comprobanteRef === undefined ? undefined : cambios.comprobanteRef || null,
+    comprobanteNombre: cambios.comprobanteNombre === undefined ? undefined : cambios.comprobanteNombre || null,
+    facturaEsperada: cambios.facturaEsperada,
+  };
+  await tx.ingreso.upsert({
+    where: { movimientoFinancieroClienteId: ctx.movimientoFinancieroClienteId },
+    update: datos,
+    create: {
+      empresaId: ctx.empresaId,
+      movimientoFinancieroClienteId: ctx.movimientoFinancieroClienteId,
+      registradoPorId: ctx.registradoPorId,
+      cuentaReceptoraId: datos.cuentaReceptoraId ?? null,
+      comprobanteRef: datos.comprobanteRef ?? null,
+      comprobanteNombre: datos.comprobanteNombre ?? null,
+      facturaEsperada: datos.facturaEsperada ?? false,
+    },
+  });
+}
+
+// Metadata de un PAGO_ESTIMACION — fecha/referencia/notas/decoración fiscal.
+// Nunca el monto (ver editarMontoPagoEstimacion).
+export async function editarPagoEstimacion(usuario: UsuarioSesion, movimientoId: string, datosCrudos: unknown) {
+  const empresaId = requerirEmpresa(usuario);
+  const datos = DatosEditarMetadataSchema.parse(datosCrudos);
+
+  const movimiento = await db.movimientoFinancieroCliente.findFirst({
+    where: { id: movimientoId, empresaId, tipo: "PAGO_ESTIMACION" },
+    include: { estimacionClienteCapa: { select: { capa: true } } },
+  });
+  if (!movimiento || !movimiento.estimacionClienteCapa) throw new RegistroNoEncontradoError("El pago");
+  if (movimiento.estatus === "CANCELADO") throw new ValidacionError("Este pago está cancelado — no se puede editar.");
+  if (!puedeRegistrarParaCapa(usuario, movimiento.estimacionClienteCapa.capa)) throw new SinPermisoError();
+
+  const anterior = { fecha: movimiento.fecha.toISOString(), referencia: movimiento.referencia, notas: movimiento.notas };
+
+  await db.$transaction(async (tx) => {
+    await tx.movimientoFinancieroCliente.update({
+      where: { id: movimientoId },
+      data: {
+        ...(datos.fecha !== undefined && { fecha: datos.fecha }),
+        ...(datos.referencia !== undefined && { referencia: datos.referencia || null }),
+        ...(datos.notas !== undefined && { notas: datos.notas || null }),
+      },
+    });
+    await actualizarDecoracionIngresoParcial(tx, { empresaId, movimientoFinancieroClienteId: movimientoId, registradoPorId: usuario.id }, datos);
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimientoId,
+      accion: "EDITAR",
+      valorAnterior: anterior,
+      valorNuevo: {
+        fecha: (datos.fecha ?? movimiento.fecha).toISOString(),
+        referencia: datos.referencia !== undefined ? datos.referencia || null : anterior.referencia,
+        notas: datos.notas !== undefined ? datos.notas || null : anterior.notas,
+      },
+    });
+  });
+}
+
+// Monto de un PAGO_ESTIMACION — se re-valida exactamente como al registrar
+// (nunca puede superar el saldo de la capa, calculado excluyendo este mismo
+// movimiento).
+export async function editarMontoPagoEstimacion(usuario: UsuarioSesion, movimientoId: string, montoCrudo: unknown) {
+  const empresaId = requerirEmpresa(usuario);
+  const nuevoMonto = z.coerce.number().positive("El monto debe ser mayor a cero.").parse(montoCrudo);
+
+  const movimiento = await db.movimientoFinancieroCliente.findFirst({
+    where: { id: movimientoId, empresaId, tipo: "PAGO_ESTIMACION" },
+    include: { estimacionClienteCapa: { select: { capa: true } } },
+  });
+  if (!movimiento || !movimiento.estimacionClienteCapaId || !movimiento.estimacionClienteCapa) {
+    throw new RegistroNoEncontradoError("El pago");
+  }
+  if (movimiento.estatus === "CANCELADO") throw new ValidacionError("Este pago está cancelado — no se puede editar.");
+  if (!puedeRegistrarParaCapa(usuario, movimiento.estimacionClienteCapa.capa)) throw new SinPermisoError();
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM estimacion_cliente_capas WHERE id = ${movimiento.estimacionClienteCapaId} FOR UPDATE`;
+    const capaRow = await tx.estimacionClienteCapa.findFirstOrThrow({ where: { id: movimiento.estimacionClienteCapaId! } });
+    const otros = await tx.movimientoFinancieroCliente.findMany({
+      where: {
+        estimacionClienteCapaId: movimiento.estimacionClienteCapaId!,
+        estatus: "VIGENTE",
+        tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] },
+        id: { not: movimientoId },
+      },
+      select: { tipo: true, monto: true },
+    });
+    const saldoSinEste = Number(capaRow.total) - suma(otros, "PAGO_ESTIMACION") - suma(otros, "APLICACION_ESTIMACION");
+    if (nuevoMonto > saldoSinEste) {
+      throw new ValidacionError(
+        `El nuevo monto excede el saldo disponible (${formatMoney(saldoSinEste)}). Cancela este pago y registra uno nuevo si necesitas otra cifra.`
+      );
+    }
+    await tx.movimientoFinancieroCliente.update({ where: { id: movimientoId }, data: { monto: nuevoMonto } });
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimientoId,
+      accion: "EDITAR",
+      valorAnterior: { monto: Number(movimiento.monto) },
+      valorNuevo: { monto: nuevoMonto },
+    });
+  });
+}
+
+// Metadata de una APORTACION_FONDO.
+export async function editarAportacionFondo(usuario: UsuarioSesion, movimientoId: string, datosCrudos: unknown) {
+  if (!puedeRegistrarMovimientoFinancieroCliente(usuario)) throw new SinPermisoError();
+  const empresaId = requerirEmpresa(usuario);
+  const datos = DatosEditarMetadataSchema.parse(datosCrudos);
+
+  const movimiento = await db.movimientoFinancieroCliente.findFirst({
+    where: { id: movimientoId, empresaId, tipo: "APORTACION_FONDO" },
+  });
+  if (!movimiento) throw new RegistroNoEncontradoError("La aportación");
+  if (movimiento.estatus === "CANCELADO") throw new ValidacionError("Esta aportación está cancelada — no se puede editar.");
+
+  const anterior = { fecha: movimiento.fecha.toISOString(), referencia: movimiento.referencia, notas: movimiento.notas };
+
+  await db.$transaction(async (tx) => {
+    await tx.movimientoFinancieroCliente.update({
+      where: { id: movimientoId },
+      data: {
+        ...(datos.fecha !== undefined && { fecha: datos.fecha }),
+        ...(datos.referencia !== undefined && { referencia: datos.referencia || null }),
+        ...(datos.notas !== undefined && { notas: datos.notas || null }),
+      },
+    });
+    await actualizarDecoracionIngresoParcial(tx, { empresaId, movimientoFinancieroClienteId: movimientoId, registradoPorId: usuario.id }, datos);
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimientoId,
+      accion: "EDITAR",
+      valorAnterior: anterior,
+      valorNuevo: {
+        fecha: (datos.fecha ?? movimiento.fecha).toISOString(),
+        referencia: datos.referencia !== undefined ? datos.referencia || null : anterior.referencia,
+        notas: datos.notas !== undefined ? datos.notas || null : anterior.notas,
+      },
+    });
+  });
+}
+
+// Monto de una APORTACION_FONDO — el fondo es compartido por ambas capas
+// (ver aplicarFondoAEstimacionTx); reducirlo por debajo de lo ya aplicado
+// dejaría aplicaciones sin respaldo real, así que se BLOQUEA en ese caso.
+export async function editarMontoAportacionFondo(usuario: UsuarioSesion, movimientoId: string, montoCrudo: unknown) {
+  if (!puedeRegistrarMovimientoFinancieroCliente(usuario)) throw new SinPermisoError();
+  const empresaId = requerirEmpresa(usuario);
+  const nuevoMonto = z.coerce.number().positive("El monto debe ser mayor a cero.").parse(montoCrudo);
+
+  const movimiento = await db.movimientoFinancieroCliente.findFirst({
+    where: { id: movimientoId, empresaId, tipo: "APORTACION_FONDO" },
+  });
+  if (!movimiento) throw new RegistroNoEncontradoError("La aportación");
+  if (movimiento.estatus === "CANCELADO") throw new ValidacionError("Esta aportación está cancelada — no se puede editar.");
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM proyectos WHERE id = ${movimiento.proyectoId} FOR UPDATE`;
+    const movimientosProyecto = await tx.movimientoFinancieroCliente.findMany({
+      where: { proyectoId: movimiento.proyectoId, estatus: "VIGENTE" },
+      select: { id: true, tipo: true, monto: true },
+    });
+    const aportadoSinEste = suma(movimientosProyecto.filter((m) => m.id !== movimientoId), "APORTACION_FONDO");
+    const aplicadoTotal = suma(movimientosProyecto, "APLICACION_ESTIMACION");
+    const nuevoDisponible = aportadoSinEste + nuevoMonto - aplicadoTotal;
+    if (nuevoDisponible < 0) {
+      throw new ValidacionError(
+        "Esta aportación ya tiene aplicaciones de fondo hechas contra ella — cancela esas aplicaciones o registra la corrección como un nuevo movimiento en vez de reducir esta aportación."
+      );
+    }
+    await tx.movimientoFinancieroCliente.update({ where: { id: movimientoId }, data: { monto: nuevoMonto } });
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimientoId,
+      accion: "EDITAR",
+      valorAnterior: { monto: Number(movimiento.monto) },
+      valorNuevo: { monto: nuevoMonto },
+    });
+  });
+}
+
+const DatosCancelacionSchema = z.object({
+  motivo: z.string().trim().min(3, "Indica un motivo para cancelar este movimiento."),
+});
+
+// Cancela cualquiera de los 3 tipos de movimiento — nunca DELETE. Bloquea
+// cancelar una APORTACION_FONDO que ya tiene aplicaciones de fondo hechas
+// contra ella (las dejaría sin respaldo real); PAGO_ESTIMACION y
+// APLICACION_ESTIMACION nunca tienen dependientes (nada más los referencia),
+// así que siempre pueden cancelarse.
+export async function cancelarMovimientoFinancieroCliente(
+  usuario: UsuarioSesion,
+  movimientoId: string,
+  datosCrudos: unknown
+) {
+  const empresaId = requerirEmpresa(usuario);
+  const datos = DatosCancelacionSchema.parse(datosCrudos);
+
+  const movimiento = await db.movimientoFinancieroCliente.findFirst({
+    where: { id: movimientoId, empresaId },
+    include: { estimacionClienteCapa: { select: { capa: true } } },
+  });
+  if (!movimiento) throw new RegistroNoEncontradoError("El movimiento");
+  if (movimiento.estatus === "CANCELADO") throw new ValidacionError("Este movimiento ya está cancelado.");
+
+  const puedeGestionar =
+    movimiento.tipo === "APORTACION_FONDO"
+      ? puedeRegistrarMovimientoFinancieroCliente(usuario)
+      : puedeRegistrarParaCapa(usuario, movimiento.estimacionClienteCapa!.capa);
+  if (!puedeGestionar) throw new SinPermisoError();
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM proyectos WHERE id = ${movimiento.proyectoId} FOR UPDATE`;
+
+    if (movimiento.tipo === "APORTACION_FONDO") {
+      const movimientosProyecto = await tx.movimientoFinancieroCliente.findMany({
+        where: { proyectoId: movimiento.proyectoId, estatus: "VIGENTE" },
+        select: { id: true, tipo: true, monto: true },
+      });
+      const aportadoSinEste = suma(movimientosProyecto.filter((m) => m.id !== movimientoId), "APORTACION_FONDO");
+      const aplicadoTotal = suma(movimientosProyecto, "APLICACION_ESTIMACION");
+      if (aportadoSinEste - aplicadoTotal < 0) {
+        throw new ValidacionError("Esta aportación ya tiene aplicaciones de fondo hechas contra ella — cancela primero esas aplicaciones.");
+      }
+    }
+
+    await tx.movimientoFinancieroCliente.update({
+      where: { id: movimientoId },
+      data: { estatus: "CANCELADO", motivoCancelacion: datos.motivo, canceladoPorId: usuario.id, canceladoEn: new Date() },
+    });
+
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "MovimientoFinancieroCliente",
+      entidadId: movimientoId,
+      accion: "CAMBIAR_ESTATUS",
+      valorAnterior: { estatus: "VIGENTE" },
+      valorNuevo: { estatus: "CANCELADO", motivo: datos.motivo, tipo: movimiento.tipo, monto: Number(movimiento.monto) },
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Listado individual de pagos/aplicaciones de UNA capa — para poder
+// editar/cancelar cada movimiento (el historial semanal solo trae el
+// agregado por estimación, ver FilaHistorialEstimacion).
+// ---------------------------------------------------------------------------
+
+export type FilaMovimientoCapa = {
+  id: string;
+  tipo: "PAGO_ESTIMACION" | "APLICACION_ESTIMACION";
+  fecha: string;
+  monto: number;
+  referencia: string | null;
+  notas: string | null;
+  estatus: "VIGENTE" | "CANCELADO";
+  motivoCancelacion: string | null;
+  registradoPorNombre: string;
+};
+
+export async function obtenerMovimientosCapa(
+  usuario: UsuarioSesion,
+  estimacionClienteCapaId: string
+): Promise<FilaMovimientoCapa[]> {
+  const capaRow = await db.estimacionClienteCapa.findFirst({ where: { id: estimacionClienteCapaId } });
+  if (!capaRow) throw new RegistroNoEncontradoError("La estimación");
+  const puedeVer = capaRow.capa === "PRIVADO" ? puedeVerFinancieroCliente(usuario) : puedeVerFinancieroClienteOperativo(usuario);
+  if (!puedeVer) throw new SinPermisoError();
+
+  const movimientos = await db.movimientoFinancieroCliente.findMany({
+    where: { estimacionClienteCapaId, tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
+    include: { registradoPor: { select: { nombre: true } } },
+    orderBy: { fecha: "desc" },
+  });
+
+  return movimientos.map((m) => ({
+    id: m.id,
+    tipo: m.tipo as "PAGO_ESTIMACION" | "APLICACION_ESTIMACION",
+    fecha: m.fecha.toISOString(),
+    monto: Number(m.monto),
+    referencia: m.referencia,
+    notas: m.notas,
+    estatus: m.estatus,
+    motivoCancelacion: m.motivoCancelacion,
+    registradoPorNombre: m.registradoPor.nombre,
+  }));
 }

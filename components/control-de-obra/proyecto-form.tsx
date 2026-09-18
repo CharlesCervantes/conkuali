@@ -36,6 +36,7 @@ type ValoresProyecto = {
   porcentajeUtilidadDefault?: string | null;
   porcentajeAdministracionDefault?: string | null;
   porcentajeAdministracionPrivadoDefault?: string | null;
+  supervisorUsuarioId?: string | null;
 };
 
 export function ProyectoForm({
@@ -47,11 +48,16 @@ export function ProyectoForm({
   requiereConfirmacionEsquema = false,
   puedeVerPrivado = false,
   imagenUrlActual = null,
+  supervisoresDisponibles = [],
 }: {
   action: (state: FormState, formData: FormData) => Promise<FormState>;
   modo: "crear" | "editar";
   valoresIniciales?: ValoresProyecto;
   textoBoton: string;
+  // Usuarios activos con rol Supervisor de la empresa — solo se pide/muestra
+  // en modo "editar" (Contratistas: Control Contractual + Estimaciones,
+  // septiembre 2026). No obligatorio.
+  supervisoresDisponibles?: { id: string; nombre: string }[];
   // Imagen de portada actual (solo modo "editar") — Inicio: dashboard
   // ejecutivo, agosto 2026.
   imagenUrlActual?: string | null;
@@ -151,6 +157,29 @@ export function ProyectoForm({
           name="numeroContrato"
           defaultValue={valoresIniciales?.numeroContrato ?? undefined}
         />
+
+        {modo === "editar" && (
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
+              Supervisor responsable
+            </label>
+            <select
+              name="supervisorUsuarioId"
+              defaultValue={valoresIniciales?.supervisorUsuarioId ?? ""}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+            >
+              <option value="">Sin asignar</option>
+              {supervisoresDisponibles.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.nombre}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-xs text-[var(--muted)]">
+              Aparece en las estimaciones de contratista generadas para este proyecto.
+            </p>
+          </div>
+        )}
 
         <Campo
           label="Fecha de inicio"

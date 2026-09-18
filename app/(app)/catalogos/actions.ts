@@ -45,11 +45,13 @@ export type CatalogoFormState = { error?: string; guardado?: boolean } | undefin
 function datosProveedorDesdeFormData(formData: FormData) {
   return {
     nombre: formData.get("nombre"),
+    razonSocial: opcional(formData.get("razonSocial")),
     giro: opcional(formData.get("giro")),
     vendedor: opcional(formData.get("vendedor")),
     telefono: opcional(formData.get("telefono")),
     credito: opcional(formData.get("credito")),
     cuentaBancaria: opcional(formData.get("cuentaBancaria")),
+    clabe: opcional(formData.get("clabe")),
     rfc: opcional(formData.get("rfc")),
     mismaPersonaQueId: opcional(formData.get("mismaPersonaQueId")),
   };

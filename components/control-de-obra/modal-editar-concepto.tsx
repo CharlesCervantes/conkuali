@@ -4,16 +4,19 @@ import { useActionState, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { formatMoney } from "@/lib/dinero";
 import {
   obtenerConceptoDetalleAction,
   editarConceptoEstructuralAction,
   editarConceptoPrivadoAction,
+  eliminarConceptoAction,
   type ConceptoDetalle,
   type BitacoraEntrada,
   type EditarConceptoEstructuralFormState,
   type EditarConceptoPrivadoFormState,
+  type EliminarConceptoFormState,
 } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 
 const ETIQUETA_ACCION: Record<string, string> = {
@@ -114,11 +117,16 @@ export function ModalEditarConcepto({
   proyectoId,
   conceptoId,
   modo,
+  puedeEliminar = false,
   onClose,
 }: {
   proyectoId: string;
   conceptoId: string;
   modo: "operativo" | "privado";
+  // Solo aplica al modo "operativo" — eliminar es una acción estructural de
+  // Contrato General, no de la capa privada (Eliminar Partidas/Conceptos,
+  // septiembre 2026).
+  puedeEliminar?: boolean;
   onClose: () => void;
 }) {
   const [estado, setEstado] = useState<
@@ -190,6 +198,7 @@ export function ModalEditarConcepto({
               proyectoId={proyectoId}
               concepto={estado.concepto}
               bitacora={estado.bitacoraOperativo}
+              puedeEliminar={puedeEliminar}
               onClose={onClose}
             />
           ) : (
@@ -272,11 +281,13 @@ function FormularioOperativo({
   proyectoId,
   concepto,
   bitacora,
+  puedeEliminar,
   onClose,
 }: {
   proyectoId: string;
   concepto: ConceptoDetalle;
   bitacora: BitacoraEntrada[];
+  puedeEliminar: boolean;
   onClose: () => void;
 }) {
   const action = editarConceptoEstructuralAction.bind(null, concepto.id, proyectoId);
@@ -290,14 +301,31 @@ function FormularioOperativo({
     if (state?.guardado) onClose();
   }
 
+  const [eliminando, setEliminando] = useState(false);
+
   const esPrecioAlzado = concepto.esquemaContractual === "PRECIO_ALZADO";
+
+  if (eliminando) {
+    return (
+      <div>
+        <Encabezado titulo="Editar concepto — Contrato General" partidaNombre={concepto.partidaNombre} onClose={onClose} />
+        <EliminarConceptoInline
+          proyectoId={proyectoId}
+          conceptoId={concepto.id}
+          descripcion={concepto.descripcion}
+          onCancelar={() => setEliminando(false)}
+          onEliminado={onClose}
+        />
+      </div>
+    );
+  }
 
   return (
     <div>
       <Encabezado titulo="Editar concepto — Contrato General" partidaNombre={concepto.partidaNombre} onClose={onClose} />
 
       <form action={formAction} className="space-y-4">
-        <Campo label="Descripción" name="descripcion" defaultValue={concepto.descripcion} required />
+        <Campo label="Descripción" name="descripcion" defaultValue={concepto.descripcion} required multiline />
 
         <div className="grid grid-cols-2 gap-3">
           <Campo label="Unidad" name="unidad" defaultValue={concepto.unidad} required />
@@ -356,11 +384,85 @@ function FormularioOperativo({
           >
             Cancelar
           </button>
+          {puedeEliminar && (
+            <button
+              type="button"
+              onClick={() => setEliminando(true)}
+              className="ml-auto text-sm text-red-700 transition-colors duration-150 ease-out hover:text-red-800"
+            >
+              Eliminar concepto
+            </button>
+          )}
           {state?.error && <p className="text-sm text-red-700">{state.error}</p>}
         </div>
       </form>
 
       <Bitacora bitacora={bitacora} />
+    </div>
+  );
+}
+
+// Confirma la eliminación de un Concepto con motivo obligatorio — el
+// servidor decide si es borrado físico o CANCELADO según si tiene historial
+// (eliminarConcepto, estructura-contractual.ts). Mismo patrón que
+// ModalCancelarAportacion (aportaciones-fondo.tsx): motivo en <textarea>,
+// nunca un simple confirm().
+function EliminarConceptoInline({
+  proyectoId,
+  conceptoId,
+  descripcion,
+  onCancelar,
+  onEliminado,
+}: {
+  proyectoId: string;
+  conceptoId: string;
+  descripcion: string;
+  onCancelar: () => void;
+  onEliminado: () => void;
+}) {
+  const action = eliminarConceptoAction.bind(null, conceptoId, proyectoId);
+  const [state, formAction, pending] = useActionState<EliminarConceptoFormState, FormData>(
+    action,
+    undefined
+  );
+  const [stateAnterior, setStateAnterior] = useState(state);
+  if (state !== stateAnterior) {
+    setStateAnterior(state);
+    if (state?.resultado) onEliminado();
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-[var(--muted)]">
+        Vas a eliminar <span className="font-medium text-[var(--foreground)]">&ldquo;{descripcion}&rdquo;</span>. Si
+        no tiene historial (avance, contratista asignado, estimaciones emitidas), se elimina por completo; si sí lo
+        tiene, queda cancelado. Esta acción no se puede deshacer.
+      </p>
+      <form action={formAction} className="space-y-3">
+        <div>
+          <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">Motivo</label>
+          <textarea
+            name="motivo"
+            rows={2}
+            required
+            minLength={3}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+          />
+        </div>
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Eliminando…" : "Eliminar concepto"}
+          </Button>
+          <button
+            type="button"
+            onClick={onCancelar}
+            className="text-sm text-[var(--muted)] transition-colors duration-150 ease-out hover:text-[var(--foreground)]"
+          >
+            Cancelar
+          </button>
+          {state?.error && <p className="text-sm text-red-700">{state.error}</p>}
+        </div>
+      </form>
     </div>
   );
 }
@@ -404,6 +506,7 @@ function FormularioPrivado({
           name="descripcionPrivado"
           defaultValue={concepto.descripcionPrivado ?? concepto.descripcion}
           placeholder="Igual a Contrato General si se deja vacío"
+          multiline
         />
 
         <div className="grid grid-cols-2 gap-3">
@@ -505,6 +608,7 @@ function Campo({
   step,
   min,
   placeholder,
+  multiline,
 }: {
   label: string;
   name: string;
@@ -514,21 +618,35 @@ function Campo({
   step?: string;
   min?: string;
   placeholder?: string;
+  // Admite varias líneas (saltos de línea) — para Descripción, cuando el
+  // concepto necesita especificaciones largas. Se conservan tal cual al
+  // mostrarse en pantalla y en los PDFs que las reflejan (Contrato General,
+  // septiembre 2026).
+  multiline?: boolean;
 }) {
   return (
     <div>
       <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
         {label}
       </label>
-      <Input
-        name={name}
-        defaultValue={defaultValue}
-        required={required}
-        type={type}
-        step={step}
-        min={min}
-        placeholder={placeholder}
-      />
+      {multiline ? (
+        <Textarea
+          name={name}
+          defaultValue={defaultValue}
+          required={required}
+          placeholder={placeholder}
+        />
+      ) : (
+        <Input
+          name={name}
+          defaultValue={defaultValue}
+          required={required}
+          type={type}
+          step={step}
+          min={min}
+          placeholder={placeholder}
+        />
+      )}
     </div>
   );
 }

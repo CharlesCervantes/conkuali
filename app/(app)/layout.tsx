@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { redirect } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
-import { esMaster } from "@/lib/server/permisos";
+import { esMaster, obtenerModulosVisibles } from "@/lib/server/permisos";
 import { RUTA_MODULO } from "@/lib/modulos";
 import { NOMBRE_ROL } from "@/lib/roles";
 import { AppShell } from "./_components/app-shell";
@@ -19,10 +19,11 @@ export default async function AppLayout({
   // portal de una Empresa (decisión de sesión, Portal Master).
   if (esMaster(usuario)) redirect("/master");
 
-  const modulos = (usuario.empresa?.plan?.modulos ?? []).map((pm) => ({
-    clave: pm.modulo.clave,
-    nombre: RUTA_MODULO[pm.modulo.clave]?.label ?? pm.modulo.nombre,
-    href: RUTA_MODULO[pm.modulo.clave]?.href ?? null,
+  const modulosVisibles = await obtenerModulosVisibles(usuario);
+  const modulos = modulosVisibles.map((m) => ({
+    clave: m.clave,
+    nombre: RUTA_MODULO[m.clave]?.label ?? m.nombre,
+    href: RUTA_MODULO[m.clave]?.href ?? null,
   }));
 
   // El bucket de almacenamiento es privado — nunca se usa logoRef

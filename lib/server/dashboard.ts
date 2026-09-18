@@ -2,9 +2,17 @@ import "server-only";
 import { db } from "@/lib/server/db";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError } from "@/lib/server/control-de-obra/proyectos";
-import { puedeVerInformacionPrivada } from "@/lib/server/permisos";
+import { puedeVerInformacionPrivada, puedeVerContabilidad } from "@/lib/server/permisos";
 import { obtenerOCrearSemanaActual, formatearRangoSemana } from "@/lib/server/semanas";
-import { calcularMontoContrato } from "@/lib/server/control-de-obra/financiero-cliente";
+import {
+  asegurarGastosRecurrentesGenerados,
+  obtenerOcurrenciasRecurrentesPendientes,
+} from "@/lib/server/control-de-obra/gastos-recurrentes";
+import { obtenerReposicionesPendientes } from "@/lib/server/control-de-obra/reposiciones";
+import { calcularMontoContrato, calcularFinancieroCapaEstimacion } from "@/lib/server/control-de-obra/financiero-cliente";
+import { obtenerResumenFiscalPeriodo } from "@/lib/server/contabilidad/resumen";
+import { obtenerFacturasPendientes } from "@/lib/server/contabilidad/facturas-pendientes";
+import { obtenerFacturasConDiferencia } from "@/lib/server/contabilidad/facturas";
 import {
   calcularPrecioOperativoConcepto,
   calcularPrecioConcepto,
@@ -44,8 +52,13 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 // ---------------------------------------------------------------------------
 
 export type VistaDashboard = "general" | "privado";
-export type PeriodoDashboard = "semana" | "mes" | "acumulado";
+export type PeriodoDashboard = "semana" | "mes" | "mes_anterior" | "acumulado";
 export type EstadoSalud = "SALUDABLE" | "ATENCION" | "REQUIERE_ACCION" | "EN_SEGUIMIENTO";
+// "completo" = Administrador/Director (puedeVerContabilidad) — ve montos,
+// flujo, Contabilidad y compromisos. "operativo" = Supervisor — nunca ve
+// montos financieros, Contabilidad ni compromisos, aunque siga originando
+// los Gastos que los alimentan (Rediseño de Inicio, septiembre 2026).
+export type NivelAccesoDashboard = "completo" | "operativo";
 
 const UMBRAL_DESVIACION_PP = 15;
 const DIAS_PAGO_PENDIENTE_CRITICO = 14;
@@ -84,6 +97,14 @@ function resolverRangoPeriodo(periodo: PeriodoDashboard, hoy: Date): RangoPeriod
     const fin = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 1);
     const inicioAnterior = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
     return { inicio, fin, inicioAnterior, finAnterior: inicio };
+  }
+  if (periodo === "mes_anterior") {
+    // El mes ya cerrado — sin comparación propia (comparar un periodo ya
+    // cerrado contra el anterior a él es ambiguo y no se pidió; mismo
+    // criterio que "acumulado", C.9 del rediseño de Inicio).
+    const inicio = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+    const fin = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    return { inicio, fin, inicioAnterior: null, finAnterior: null };
   }
   // Acumulado — sin límite inferior, sin comparación.
   return { inicio: new Date(0), fin: new Date(8640000000000000), inicioAnterior: null, finAnterior: null };
@@ -200,13 +221,33 @@ export type AlertaDashboard = {
     | "gastos_pendientes"
     | "estimaciones_listas"
     | "pendiente_cobro"
-    | "desviacion";
+    | "desviacion"
+    | "facturas_pendientes"
+    | "cfdi_diferencia"
+    | "reposicion_pendiente_antigua"
+    | "gasto_recurrente_variable_pendiente"
+    | "sin_avance_reciente";
   severidad: "ATENCION" | "REQUIERE_ACCION";
   titulo: string;
   detalle: string;
   monto?: number;
   proyectoNombre?: string;
   href: string;
+};
+
+// Utilidad/margen — SIEMPRE "a la fecha" (acumulado desde el inicio del
+// proyecto), nunca recortado al periodo seleccionado: son relaciones contra
+// el contrato completo o lo emitido/pagado hasta hoy, igual criterio que
+// avanceFinancieroPorcentaje/desviacionPrivadaPP, que tampoco respetan
+// `periodo` (Rediseño de Inicio, C.9 — un indicador acumulado por
+// naturaleza nunca cambia de significado silenciosamente). Solo se llenan
+// si puedeVerInformacionPrivada; null en General.
+export type UtilidadProyecto = {
+  costoRealPagado: number;
+  utilidadPresupuestada: number | null;
+  margenPresupuestadoPct: number | null;
+  utilidadReal: number | null;
+  margenRealPct: number | null;
 };
 
 export type FilaProyectoDashboard = {
@@ -217,11 +258,14 @@ export type FilaProyectoDashboard = {
   estatus: "ACTIVO" | "PAUSADO";
   etapa: "EN_EJECUCION" | "POR_INICIAR";
   avanceFisico: ResultadoAvanceFisico;
+  // Financiero — null para nivelAcceso "operativo" (Supervisor nunca ve
+  // montos, aunque el cálculo ya haya corrido para el resto del dashboard).
   avanceFinancieroPorcentaje: number | null;
   ejecutado: number | null;
   montoContrato: number | null;
   ejecutadoPeriodoAnterior: number | null;
-  porPagar: number;
+  porPagar: number | null;
+  utilidad: UtilidadProyecto | null;
   salud: EstadoSalud;
   // Señales crudas expuestas para construir las alertas de "Requiere tu
   // atención" sin volver a re-derivarlas a partir de `salud` (que ya las
@@ -230,6 +274,7 @@ export type FilaProyectoDashboard = {
   semanasSinCerrarDias: number;
   diasPagoPendienteMax: number;
   gastosPendientesCount: number;
+  semanasSinAvance: number;
 };
 
 export type ActividadItem = {
@@ -243,10 +288,42 @@ export type ActividadItem = {
   usuarioNombre: string | null;
 };
 
+// Gasto recurrente de monto variable sin capturar, reposición abierta o pago
+// aprobado esperando liquidación — "Próximos compromisos" (Rediseño de
+// Inicio, septiembre 2026). Reemplaza Actividad reciente como bloque
+// prioritario de Inicio; obtenerActividadReciente se conserva en este mismo
+// archivo para quien la necesite después, solo deja de llamarse aquí.
+export type CompromisoDashboard = {
+  tipo: "gasto_recurrente_variable" | "reposicion_pendiente" | "pago_pendiente";
+  titulo: string;
+  detalle: string;
+  monto: number | null;
+  href: string;
+};
+
+// Fiscal (Contabilidad: solo lo marcado requiereFactura/Ingreso.facturaEsperada)
+// — DELIBERADAMENTE distinto de `flujoDinero` (operativo: todo movimiento
+// real, con o sin factura). Nunca se muestran como si fueran el mismo
+// número (Rediseño de Inicio, C. Fiscal vs Operativo). null para
+// nivelAcceso "operativo".
+export type ResumenFiscalDashboard = {
+  ingresosFiscales: number;
+  egresosFiscales: number;
+  resultado: number;
+};
+
+export type UtilidadConsolidada = {
+  utilidadPresupuestada: number;
+  margenPresupuestadoPct: number | null;
+  utilidadReal: number;
+  margenRealPct: number | null;
+};
+
 export type ResumenEjecutivo = {
   saludo: string;
   empresaNombre: string;
   semanaLabel: string;
+  nivelAcceso: NivelAccesoDashboard;
   puedeVerPrivado: boolean;
   vista: VistaDashboard;
   periodo: PeriodoDashboard;
@@ -257,12 +334,20 @@ export type ResumenEjecutivo = {
     proyectosConsiderados: number;
     deltaVsAnterior: number | null;
   };
-  porPagar: number;
-  porCobrar: number;
-  flujoDinero: { entradas: number; pagosDeObra: number; gastosReposicionesDentro: number; neto: number };
+  // "Por pagar" separado Obras vs. Empresa (nunca una sola cifra mezclada —
+  // mismo criterio que Reporte General) — null para nivelAcceso "operativo".
+  porPagarObras: number | null;
+  porPagarEmpresa: number | null;
+  porPagarTotal: number | null;
+  porCobrar: number | null;
+  flujoDinero: { entradas: number; pagosDeObra: number; gastosReposicionesDentro: number; neto: number } | null;
+  resumenFiscal: ResumenFiscalDashboard | null;
+  gastosProyectoPeriodo: number | null;
+  gastosEmpresaPeriodo: number | null;
+  utilidadConsolidada: UtilidadConsolidada | null;
   alertas: AlertaDashboard[];
+  compromisos: CompromisoDashboard[];
   proyectos: FilaProyectoDashboard[];
-  actividadReciente: ActividadItem[];
 };
 
 // ---------------------------------------------------------------------------
@@ -278,13 +363,26 @@ export async function obtenerResumenEjecutivo(
   const empresaId = usuario.empresa.id;
   const puedeVerPrivado = puedeVerInformacionPrivada(usuario);
   const vistaEfectiva: VistaDashboard = vista === "privado" && !puedeVerPrivado ? "general" : vista;
+  // Corte de acceso real (Rediseño de Inicio, septiembre 2026) — Supervisor
+  // nunca ve montos financieros, Contabilidad ni compromisos, aunque siga
+  // originando los Gastos que los alimentan. Mismo permiso ya usado para
+  // gatear el módulo Contabilidad completo (Administrador/Director, nunca
+  // Master) — no se inventa un permiso nuevo para esto.
+  const nivelAcceso: NivelAccesoDashboard = puedeVerContabilidad(usuario) ? "completo" : "operativo";
 
   const hoy = new Date();
   const rango = resolverRangoPeriodo(periodo, hoy);
   const semanaActual = await obtenerOCrearSemanaActual(empresaId);
+  // Perezoso e idempotente — asegura que los gastos recurrentes del periodo
+  // en curso ya existan aunque nadie haya entrado a Gastos/Reporte General
+  // todavía (Gastos transversal — recurrentes, septiembre 2026).
+  await asegurarGastosRecurrentesGenerados(empresaId, semanaActual.id);
 
   const proyectos = await db.proyecto.findMany({
-    where: { empresaId, estatus: { in: ["ACTIVO", "PAUSADO"] } },
+    // tipo != OFICINA — ese Proyecto es el vehículo interno de Gastos de
+    // Empresa (ver proyecto-oficina.ts), nunca una obra real; no debe
+    // distorsionar el dashboard ejecutivo (Gastos transversal, sept. 2026).
+    where: { empresaId, estatus: { in: ["ACTIVO", "PAUSADO"] }, tipo: { not: "OFICINA" } },
     select: {
       id: true,
       nombre: true,
@@ -305,17 +403,24 @@ export async function obtenerResumenEjecutivo(
       saludo: saludo(usuario.nombre),
       empresaNombre: usuario.empresa.nombre,
       semanaLabel: formatearRangoSemana(semanaActual),
+      nivelAcceso,
       puedeVerPrivado,
       vista: vistaEfectiva,
       periodo,
       obrasActivas: { total: 0, enEjecucion: 0, porIniciar: 0, pausadas: 0 },
       avanceFisicoConsolidado: { porcentaje: null, proyectosIncompletos: 0, proyectosConsiderados: 0, deltaVsAnterior: null },
-      porPagar: 0,
-      porCobrar: 0,
-      flujoDinero: { entradas: 0, pagosDeObra: 0, gastosReposicionesDentro: 0, neto: 0 },
+      porPagarObras: null,
+      porPagarEmpresa: null,
+      porPagarTotal: null,
+      porCobrar: null,
+      flujoDinero: null,
+      resumenFiscal: null,
+      gastosProyectoPeriodo: null,
+      gastosEmpresaPeriodo: null,
+      utilidadConsolidada: null,
       alertas: [],
+      compromisos: [],
       proyectos: [],
-      actividadReciente: [],
     };
   }
 
@@ -346,6 +451,8 @@ export async function obtenerResumenEjecutivo(
   const capasEmitidas = await db.estimacionClienteCapa.findMany({
     where: { estatus: "EMITIDA", estimacionCliente: { proyectoId: { in: proyectoIds } } },
     select: {
+      id: true,
+      estimacionClienteId: true,
       capa: true,
       subtotal: true,
       montoAdministracionTrabajos: true,
@@ -368,9 +475,18 @@ export async function obtenerResumenEjecutivo(
     },
   });
 
+  // estatus: VIGENTE — un movimiento CANCELADO nunca debe contar en ningún
+  // agregado financiero (Cobros de cliente, septiembre 2026).
   const movimientosFinancieros = await db.movimientoFinancieroCliente.findMany({
-    where: { proyectoId: { in: proyectoIds } },
-    select: { proyectoId: true, tipo: true, monto: true, fecha: true, estimacionClienteCapa: { select: { capa: true } } },
+    where: { proyectoId: { in: proyectoIds }, estatus: "VIGENTE" },
+    select: {
+      proyectoId: true,
+      tipo: true,
+      monto: true,
+      fecha: true,
+      estimacionClienteCapaId: true,
+      estimacionClienteCapa: { select: { capa: true } },
+    },
   });
 
   const gastosPendientes = await db.gastoObra.groupBy({
@@ -479,6 +595,78 @@ export async function obtenerResumenEjecutivo(
     )
   );
 
+  // --- Gastos transversal / Contabilidad — SOLO si hay acceso completo o
+  // Privado, respectivamente. Supervisor (nivelAcceso "operativo") nunca
+  // dispara estas queries — ahorro real, no solo un campo oculto en la UI
+  // (Rediseño de Inicio, septiembre 2026).
+  //
+  // "Costo real pagado" (Privado) — audit deliberada para no doblar conteo:
+  // financieroPrivado.ejercido (ya existente) YA suma TODO MovimientoSemanal
+  // liquidado/pagado-puente sin filtrar por origen — cubre CORTE_CONTRATISTA
+  // (mano de obra), REPOSICION_GASTOS (gastos pagados personalmente, ya
+  // reembolsados) y ORDEN_COMPRA (compras a proveedor) en una sola suma, sin
+  // riesgo de contarlos dos veces porque son movimientos, no gastos. Lo único
+  // que ese número NUNCA ha incluido es un GastoObra pagado DIRECTO por la
+  // empresa (sin pagador, sin orden de compra) — ese nunca genera
+  // MovimientoSemanal (confirmado en gastos.ts: asignarGastoAReposicionTx
+  // solo corre si hay pagador), así que es invisible para `ejercido` y debe
+  // sumarse aparte, una sola vez, aquí.
+  const costoDirectoEmpresaPorProyecto = puedeVerPrivado
+    ? new Map(
+        (
+          await db.gastoObra.groupBy({
+            by: ["proyectoId"],
+            where: {
+              proyectoId: { in: proyectoIds },
+              estatus: "APROBADO",
+              pagadorBeneficiarioId: null,
+              ordenCompraId: null,
+            },
+            _sum: { monto: true },
+          })
+        ).map((g) => [g.proyectoId, num(g._sum.monto)] as const)
+      )
+    : new Map<string, number>();
+
+  const [
+    resumenFiscalPeriodo,
+    facturasPendientesLista,
+    facturasConDiferencia,
+    reposicionesPendientesLista,
+    ocurrenciasRecurrentesPendientesLista,
+    gastosProyectoPeriodoAgg,
+    gastosEmpresaPeriodoAgg,
+    porPagarEmpresaAgg,
+  ] = await Promise.all([
+    nivelAcceso === "completo" ? obtenerResumenFiscalPeriodo(usuario, rango.inicio, rango.fin) : Promise.resolve(null),
+    nivelAcceso === "completo" ? obtenerFacturasPendientes(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerFacturasConDiferencia(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerReposicionesPendientes(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerOcurrenciasRecurrentesPendientes(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo"
+      ? db.gastoObra.aggregate({
+          where: { proyectoId: { in: proyectoIds }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
+          _sum: { monto: true },
+        })
+      : Promise.resolve(null),
+    nivelAcceso === "completo"
+      ? db.gastoObra.aggregate({
+          where: { empresaId, proyecto: { tipo: "OFICINA" }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
+          _sum: { monto: true },
+        })
+      : Promise.resolve(null),
+    nivelAcceso === "completo"
+      ? db.movimientoSemanal.aggregate({
+          where: {
+            beneficiarioProyecto: { proyecto: { tipo: "OFICINA", empresaId } },
+            estatusAprobacion: "APROBADO",
+            estatusPago: "PENDIENTE_PAGO",
+          },
+          _sum: { montoFinSemana: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
   // --- Cálculo por proyecto ---------------------------------------------------
 
   const filas: FilaProyectoDashboard[] = [];
@@ -488,6 +676,14 @@ export async function obtenerResumenEjecutivo(
   let proyectosConsiderados = 0;
   let sumaNumFisicoAnterior = 0;
   let sumaDenFisicoAnterior = 0;
+  // Consolidado de utilidad/margen (Privado) — sumas crudas, nunca un
+  // promedio de porcentajes (el margen % consolidado se deriva al final,
+  // sobre estas sumas, para que quede correctamente ponderado por tamaño de
+  // obra).
+  let sumaMontoContratoGeneral = 0;
+  let sumaEjecutadoGeneral = 0;
+  let sumaPresupuestoCosto = 0;
+  let sumaCostoRealPagado = 0;
 
   for (const proyecto of proyectos) {
     const conceptos = conceptosPorProyecto.get(proyecto.id) ?? [];
@@ -570,6 +766,30 @@ export async function obtenerResumenEjecutivo(
       financieroPrivado = { presupuestoCosto, ejercido, porcentaje: presupuestoCosto > 0 ? (ejercido / presupuestoCosto) * 100 : null };
     }
 
+    // Utilidad/margen — SIEMPRE "a la fecha" (acumulado, nunca recortado al
+    // periodo — ver comentario de UtilidadProyecto). Presupuestada compara
+    // el CONTRATO COMPLETO contra el presupuesto interno completo (línea
+    // base estable); real compara lo YA FACTURADO contra el costo YA
+    // PAGADO (fluctúa con el tiempo de pago) — nunca se mezclan en un solo
+    // número (Rediseño de Inicio, septiembre 2026).
+    let utilidadProyecto: UtilidadProyecto | null = null;
+    if (financieroPrivado) {
+      const costoRealPagado = financieroPrivado.ejercido + (costoDirectoEmpresaPorProyecto.get(proyecto.id) ?? 0);
+      const utilidadPresupuestada = montoContratoGeneral - financieroPrivado.presupuestoCosto;
+      const utilidadReal = ejecutadoGeneral - costoRealPagado;
+      utilidadProyecto = {
+        costoRealPagado,
+        utilidadPresupuestada,
+        margenPresupuestadoPct: montoContratoGeneral > 0 ? (utilidadPresupuestada / montoContratoGeneral) * 100 : null,
+        utilidadReal,
+        margenRealPct: ejecutadoGeneral > 0 ? (utilidadReal / ejecutadoGeneral) * 100 : null,
+      };
+      sumaMontoContratoGeneral += montoContratoGeneral;
+      sumaEjecutadoGeneral += ejecutadoGeneral;
+      sumaPresupuestoCosto += financieroPrivado.presupuestoCosto;
+      sumaCostoRealPagado += costoRealPagado;
+    }
+
     const ejecutado = vistaEfectiva === "privado" && financieroPrivado ? financieroPrivado.ejercido : ejecutadoGeneral;
     const montoContrato = vistaEfectiva === "privado" && financieroPrivado ? financieroPrivado.presupuestoCosto : montoContratoGeneral;
     const avanceFinancieroPorcentaje =
@@ -627,6 +847,7 @@ export async function obtenerResumenEjecutivo(
       semanasSinAvance: tieneAvanceHistorico ? semanasSinAvance : 0,
     });
 
+    const esCompleto = nivelAcceso === "completo";
     filas.push({
       id: proyecto.id,
       nombre: proyecto.nombre,
@@ -635,16 +856,19 @@ export async function obtenerResumenEjecutivo(
       estatus: proyecto.estatus as "ACTIVO" | "PAUSADO",
       etapa,
       avanceFisico,
-      avanceFinancieroPorcentaje,
-      ejecutado,
-      montoContrato,
+      // Financiero — null para Supervisor, nunca solo ocultado en la UI.
+      avanceFinancieroPorcentaje: esCompleto ? avanceFinancieroPorcentaje : null,
+      ejecutado: esCompleto ? ejecutado : null,
+      montoContrato: esCompleto ? montoContrato : null,
       ejecutadoPeriodoAnterior: null,
-      porPagar: porPagarProyecto,
+      porPagar: esCompleto ? porPagarProyecto : null,
+      utilidad: utilidadProyecto,
       salud,
       desviacionPrivadaPP,
       semanasSinCerrarDias: semanasSinCerrarDiasMax,
       diasPagoPendienteMax,
       gastosPendientesCount,
+      semanasSinAvance: tieneAvanceHistorico ? semanasSinAvance : 0,
     });
   }
 
@@ -657,22 +881,59 @@ export async function obtenerResumenEjecutivo(
 
   // --- Tarjetas globales -----------------------------------------------------
 
-  const porPagarTotal = movimientosSemanales
+  // "Por pagar Obras" — ya son las obras reales (proyectoIds excluye
+  // Proyecto-Oficina desde su origen); "Por pagar Empresa" es la Reposición/
+  // OC del lado de Gastos de Empresa, mostrada SIEMPRE aparte, nunca
+  // mezclada en una sola cifra (mismo criterio que Reporte General —
+  // confirmado explícitamente).
+  const porPagarObras = movimientosSemanales
     .filter((m) => m.estatusAprobacion === "APROBADO" && m.estatusPago === "PENDIENTE_PAGO")
     .reduce((t, m) => t + num(m.montoFinSemana), 0);
+  const porPagarEmpresa = num(porPagarEmpresaAgg?._sum.montoFinSemana ?? null);
 
+  // Por cobrar — MISMA fórmula exacta que Cliente/Cliente Priv.
+  // (calcularFinancieroCapaEstimacion, financiero-cliente.ts), estimación
+  // por estimación, nunca reimplementada aparte. Necesario desde que una
+  // EstimacionCliente con AMBAS capas emitidas deja de registrar cobro real
+  // en Operativo (ver "una sola realidad de dinero", General/Privado,
+  // septiembre 2026) — sumar solo los movimientos propios de Operativo daría
+  // un "por cobrar" fantasma para esos proyectos.
   const capaParaCobrar = vistaEfectiva === "privado" ? "PRIVADO" : "OPERATIVO";
-  const capasParaCobrar = capasEmitidas.filter((c) => c.capa === capaParaCobrar);
-  const totalEmitidoParaCobrar = capasParaCobrar.reduce((t, c) => t + num(c.total), 0);
-  const pagosAplicadosParaCobrar = movimientosFinancieros
-    .filter(
-      (m) =>
-        (m.tipo === "PAGO_ESTIMACION" || m.tipo === "APLICACION_ESTIMACION") &&
-        m.estimacionClienteCapa?.capa === capaParaCobrar
-    )
-    .reduce((t, m) => t + num(m.monto), 0);
-  const porCobrarTotal = totalEmitidoParaCobrar - pagosAplicadosParaCobrar;
+  const capasPorEstimacionClienteId = new Map<string, typeof capasEmitidas>();
+  for (const c of capasEmitidas) {
+    const arr = capasPorEstimacionClienteId.get(c.estimacionClienteId) ?? [];
+    arr.push(c);
+    capasPorEstimacionClienteId.set(c.estimacionClienteId, arr);
+  }
+  const movimientosPorCapaId = new Map<string, typeof movimientosFinancieros>();
+  for (const m of movimientosFinancieros) {
+    if (!m.estimacionClienteCapaId) continue;
+    const arr = movimientosPorCapaId.get(m.estimacionClienteCapaId) ?? [];
+    arr.push(m);
+    movimientosPorCapaId.set(m.estimacionClienteCapaId, arr);
+  }
+  let porCobrarTotal = 0;
+  for (const c of capasEmitidas) {
+    if (c.capa !== capaParaCobrar) continue;
+    const siblingPrivado =
+      capaParaCobrar === "OPERATIVO"
+        ? (capasPorEstimacionClienteId.get(c.estimacionClienteId) ?? []).find((s) => s.capa === "PRIVADO")
+        : undefined;
+    const { pendiente } = calcularFinancieroCapaEstimacion(
+      capaParaCobrar,
+      num(c.total),
+      movimientosPorCapaId.get(c.id) ?? [],
+      siblingPrivado
+        ? { total: num(siblingPrivado.total), movimientos: movimientosPorCapaId.get(siblingPrivado.id) ?? [] }
+        : null
+    );
+    porCobrarTotal += pendiente;
+  }
 
+  // Flujo operativo — TODO movimiento real, con o sin factura. Deliberadamente
+  // distinto de `resumenFiscal` (Contabilidad, abajo) — nunca se muestran
+  // como si fueran el mismo número (Rediseño de Inicio, C. Fiscal vs
+  // Operativo).
   const entradas = movimientosFinancieros
     .filter((m) => m.tipo === "PAGO_ESTIMACION" && m.fecha >= rango.inicio && m.fecha < rango.fin)
     .reduce((t, m) => t + num(m.monto), 0);
@@ -701,19 +962,51 @@ export async function obtenerResumenEjecutivo(
     pausadas: proyectos.filter((p) => p.estatus === "PAUSADO").length,
   };
 
-  const alertas = construirAlertas({
-    proyectos: filas,
-    capasListasParaEmitirCount: capasListasParaEmitir.length,
-    porCobrarTotal,
-    puedeVerPrivado,
-  });
+  const alertas =
+    nivelAcceso === "completo"
+      ? construirAlertas({
+          proyectos: filas,
+          capasListasParaEmitirCount: capasListasParaEmitir.length,
+          porCobrarTotal,
+          puedeVerPrivado,
+          facturasPendientesCount: facturasPendientesLista.length,
+          facturasConDiferencia,
+          reposicionesPendientes: reposicionesPendientesLista,
+          ocurrenciasRecurrentesPendientesCount: ocurrenciasRecurrentesPendientesLista.length,
+        })
+      : construirAlertasOperativas(filas);
 
-  const actividadReciente = await obtenerActividadReciente(empresaId, proyectoIds);
+  const compromisos =
+    nivelAcceso === "completo"
+      ? construirCompromisos({
+          ocurrenciasRecurrentesPendientes: ocurrenciasRecurrentesPendientesLista,
+          reposicionesPendientes: reposicionesPendientesLista,
+          proyectos: filas,
+        })
+      : [];
+
+  const resumenFiscal: ResumenFiscalDashboard | null = resumenFiscalPeriodo;
+  const gastosProyectoPeriodo = nivelAcceso === "completo" ? num(gastosProyectoPeriodoAgg?._sum.monto ?? null) : null;
+  const gastosEmpresaPeriodo = nivelAcceso === "completo" ? num(gastosEmpresaPeriodoAgg?._sum.monto ?? null) : null;
+
+  const utilidadConsolidada: UtilidadConsolidada | null = puedeVerPrivado
+    ? (() => {
+        const utilidadPresupuestada = sumaMontoContratoGeneral - sumaPresupuestoCosto;
+        const utilidadReal = sumaEjecutadoGeneral - sumaCostoRealPagado;
+        return {
+          utilidadPresupuestada,
+          margenPresupuestadoPct: sumaMontoContratoGeneral > 0 ? (utilidadPresupuestada / sumaMontoContratoGeneral) * 100 : null,
+          utilidadReal,
+          margenRealPct: sumaEjecutadoGeneral > 0 ? (utilidadReal / sumaEjecutadoGeneral) * 100 : null,
+        };
+      })()
+    : null;
 
   return {
     saludo: saludo(usuario.nombre),
     empresaNombre: usuario.empresa.nombre,
     semanaLabel: formatearRangoSemana(semanaActual),
+    nivelAcceso,
     puedeVerPrivado,
     vista: vistaEfectiva,
     periodo,
@@ -724,12 +1017,18 @@ export async function obtenerResumenEjecutivo(
       proyectosConsiderados,
       deltaVsAnterior,
     },
-    porPagar: porPagarTotal,
-    porCobrar: porCobrarTotal,
-    flujoDinero,
+    porPagarObras: nivelAcceso === "completo" ? porPagarObras : null,
+    porPagarEmpresa: nivelAcceso === "completo" ? porPagarEmpresa : null,
+    porPagarTotal: nivelAcceso === "completo" ? porPagarObras + porPagarEmpresa : null,
+    porCobrar: nivelAcceso === "completo" ? porCobrarTotal : null,
+    flujoDinero: nivelAcceso === "completo" ? flujoDinero : null,
+    resumenFiscal,
+    gastosProyectoPeriodo,
+    gastosEmpresaPeriodo,
+    utilidadConsolidada,
     alertas,
+    compromisos,
     proyectos: filas,
-    actividadReciente,
   };
 }
 
@@ -784,13 +1083,17 @@ function construirAlertas(ctx: {
   capasListasParaEmitirCount: number;
   porCobrarTotal: number;
   puedeVerPrivado: boolean;
+  facturasPendientesCount: number;
+  facturasConDiferencia: { facturaId: string; razonSocial: string; diferencia: number }[];
+  reposicionesPendientes: { id: string; beneficiarioNombre: string; saldoPendiente: number; diasAbierta: number }[];
+  ocurrenciasRecurrentesPendientesCount: number;
 }): AlertaDashboard[] {
   const alertas: AlertaDashboard[] = [];
 
   // Pagos pendientes — proyectos con algo APROBADO+PENDIENTE_PAGO.
-  const conPagoPendiente = ctx.proyectos.filter((p) => p.porPagar > 0);
+  const conPagoPendiente = ctx.proyectos.filter((p) => (p.porPagar ?? 0) > 0);
   if (conPagoPendiente.length > 0) {
-    const monto = conPagoPendiente.reduce((t, p) => t + p.porPagar, 0);
+    const monto = conPagoPendiente.reduce((t, p) => t + (p.porPagar ?? 0), 0);
     alertas.push({
       tipo: "pagos_pendientes",
       severidad: conPagoPendiente.some((p) => p.diasPagoPendienteMax >= DIAS_PAGO_PENDIENTE_CRITICO) ? "REQUIERE_ACCION" : "ATENCION",
@@ -865,7 +1168,127 @@ function construirAlertas(ctx: {
     }
   }
 
+  // Facturas pendientes (Contabilidad) — nunca duplica la pantalla, solo
+  // avisa y lleva al módulo (Rediseño de Inicio, septiembre 2026).
+  if (ctx.facturasPendientesCount > 0) {
+    alertas.push({
+      tipo: "facturas_pendientes",
+      severidad: "ATENCION",
+      titulo: `${ctx.facturasPendientesCount} factura${ctx.facturasPendientesCount === 1 ? "" : "s"} pendiente${ctx.facturasPendientesCount === 1 ? "" : "s"}`,
+      detalle: "Gastos/ingresos marcados con factura que todavía no se ha cargado.",
+      href: "/contabilidad/facturas",
+    });
+  }
+
+  // CFDI con diferencia de monto contra el gasto/pago vinculado.
+  if (ctx.facturasConDiferencia.length > 0) {
+    alertas.push({
+      tipo: "cfdi_diferencia",
+      severidad: "ATENCION",
+      titulo: `${ctx.facturasConDiferencia.length} factura${ctx.facturasConDiferencia.length === 1 ? "" : "s"} con diferencia de monto`,
+      detalle: ctx.facturasConDiferencia.map((f) => f.razonSocial).slice(0, 3).join(", "),
+      href: "/contabilidad/facturas",
+    });
+  }
+
+  // Reposiciones abiertas antiguas — mismo umbral crítico que pagos
+  // pendientes (DIAS_PAGO_PENDIENTE_CRITICO), es el mismo tipo de espera.
+  const reposicionesAntiguas = ctx.reposicionesPendientes.filter((r) => r.diasAbierta > 0);
+  if (reposicionesAntiguas.length > 0) {
+    const monto = reposicionesAntiguas.reduce((t, r) => t + r.saldoPendiente, 0);
+    alertas.push({
+      tipo: "reposicion_pendiente_antigua",
+      severidad: reposicionesAntiguas.some((r) => r.diasAbierta >= DIAS_PAGO_PENDIENTE_CRITICO) ? "REQUIERE_ACCION" : "ATENCION",
+      titulo: `${formatMoneySimple(monto)} en reposiciones abiertas`,
+      detalle: `${reposicionesAntiguas.length} reposición${reposicionesAntiguas.length === 1 ? "" : "es"} pendiente${reposicionesAntiguas.length === 1 ? "" : "s"} de pagar.`,
+      monto,
+      href: "/contabilidad/egresos",
+    });
+  }
+
+  // Gastos recurrentes de monto variable sin capturar todavía.
+  if (ctx.ocurrenciasRecurrentesPendientesCount > 0) {
+    alertas.push({
+      tipo: "gasto_recurrente_variable_pendiente",
+      severidad: "ATENCION",
+      titulo: `${ctx.ocurrenciasRecurrentesPendientesCount} gasto${ctx.ocurrenciasRecurrentesPendientesCount === 1 ? "" : "s"} recurrente${ctx.ocurrenciasRecurrentesPendientesCount === 1 ? "" : "s"} sin monto`,
+      detalle: "Monto variable pendiente de capturar antes de poder aprobarse.",
+      href: "/gastos/recurrentes",
+    });
+  }
+
   return alertas.sort((a, b) => (a.severidad === b.severidad ? 0 : a.severidad === "REQUIERE_ACCION" ? -1 : 1));
+}
+
+// Supervisor — solo señales operativas, nunca montos ni nada de Contabilidad
+// (Rediseño de Inicio, septiembre 2026). Hoy la única señal genuinamente
+// operativa y accionable por Supervisor con datos ya existentes es "sin
+// avance reciente" (ya se calculaba para `salud`, aquí se expone como su
+// propia alerta) — semanas sin cerrar y gastos pendientes de revisión son
+// acciones de Administrador/Director, no de Supervisor.
+function construirAlertasOperativas(proyectos: FilaProyectoDashboard[]): AlertaDashboard[] {
+  const sinAvance = proyectos.filter((p) => p.estatus === "ACTIVO" && p.etapa === "EN_EJECUCION" && p.semanasSinAvance >= SEMANAS_SIN_AVANCE_ATENCION);
+  if (sinAvance.length === 0) return [];
+  return [
+    {
+      tipo: "sin_avance_reciente",
+      severidad: sinAvance.some((p) => p.semanasSinAvance >= SEMANAS_SIN_AVANCE_CRITICO) ? "REQUIERE_ACCION" : "ATENCION",
+      titulo: `${sinAvance.length} proyecto${sinAvance.length === 1 ? "" : "s"} sin avance capturado reciente`,
+      detalle: sinAvance.map((p) => p.nombre).slice(0, 3).join(", "),
+      href: "/control-de-obra",
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Próximos compromisos — reemplaza Actividad reciente en Inicio (más
+// accionable para el uso diario). Solo compromisos financieros/operativos
+// reales, nunca un calendario de todo lo que existe (Rediseño de Inicio,
+// septiembre 2026).
+// ---------------------------------------------------------------------------
+
+function construirCompromisos(ctx: {
+  ocurrenciasRecurrentesPendientes: { gastoObraId: string; descripcion: string; proyectoNombre: string }[];
+  reposicionesPendientes: { id: string; folio: string; proyectoNombre: string; beneficiarioNombre: string; saldoPendiente: number }[];
+  proyectos: FilaProyectoDashboard[];
+}): CompromisoDashboard[] {
+  const compromisos: CompromisoDashboard[] = [];
+
+  for (const o of ctx.ocurrenciasRecurrentesPendientes) {
+    compromisos.push({
+      tipo: "gasto_recurrente_variable",
+      titulo: o.descripcion,
+      detalle: `${o.proyectoNombre} · monto pendiente de capturar`,
+      monto: null,
+      href: "/gastos/recurrentes",
+    });
+  }
+
+  for (const r of ctx.reposicionesPendientes) {
+    compromisos.push({
+      tipo: "reposicion_pendiente",
+      titulo: `Reposición ${r.folio} — ${r.beneficiarioNombre}`,
+      detalle: r.proyectoNombre,
+      monto: r.saldoPendiente,
+      href: "/contabilidad/egresos",
+    });
+  }
+
+  for (const p of ctx.proyectos) {
+    if ((p.porPagar ?? 0) > 0 && p.diasPagoPendienteMax > 0) {
+      compromisos.push({
+        tipo: "pago_pendiente",
+        titulo: `Pago pendiente — ${p.nombre}`,
+        detalle: `${Math.floor(p.diasPagoPendienteMax)} día${Math.floor(p.diasPagoPendienteMax) === 1 ? "" : "s"} esperando liquidación`,
+        monto: p.porPagar,
+        href: `/control-de-obra/${p.id}`,
+      });
+    }
+  }
+
+  // Más urgente primero — reposiciones/pagos con monto mayor y recurrentes
+  // sin capturar (que bloquean su propia aprobación) al frente.
+  return compromisos.sort((a, b) => (b.monto ?? 0) - (a.monto ?? 0));
 }
 
 function formatMoneySimple(n: number): string {

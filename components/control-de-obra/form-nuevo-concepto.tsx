@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { CampoDinero } from "@/components/ui/campo-dinero";
 import { crearConceptoAction, type FormState } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
@@ -31,8 +32,13 @@ export function FormNuevoConcepto({
 
   return (
     <form action={formAction} className="space-y-4">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[2fr_1fr_1fr]">
-        <Input name="descripcion" required placeholder="Descripción" />
+      <Textarea
+        name="descripcion"
+        required
+        placeholder="Descripción — admite varias líneas para especificaciones largas"
+      />
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Input name="unidad" required placeholder="Unidad (m², ml…)" />
         <Input
           name="cantidadContratada"

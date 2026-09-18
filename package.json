@@ -2,6 +2,9 @@
   "name": "conkuali",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -15,12 +18,12 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1124.0",
     "@aws-sdk/s3-request-presigner": "^3.1124.0",
-    "@prisma/adapter-pg": "^7.9.1",
-    "@prisma/client": "^7.9.1",
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "@react-pdf/renderer": "^4.6.1",
-    "lightningcss-win32-x64-msvc": "^1.33.0",
+    "fast-xml-parser": "^5.11.1",
     "lucide-react": "^1.31.0",
-    "next": "16.3.0",
+    "next": "16.3.5",
     "pg": "^8.23.0",
     "react": "19.2.8",
     "react-dom": "19.2.8",
@@ -29,14 +32,14 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^22",
     "@types/pg": "^8.21.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.3.0",
-    "prisma": "^7.9.1",
+    "eslint-config-next": "16.3.5",
+    "prisma": "^7.10.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"

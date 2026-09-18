@@ -65,24 +65,16 @@ export function FormularioGastoDesdeOC({
           Registrar gasto real — {orden.folio}
         </h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
-          Autorizado: {formatMoney(orden.total)}. Captura lo que en verdad se pagó.
+          El monto del gasto es siempre el autorizado en la Orden de Compra — no se vuelve a capturar.
         </p>
 
         <form action={formAction} className="mt-4 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">
-                Monto pagado
-              </label>
-              <input
-                name="monto"
-                type="number"
-                step="0.01"
-                min="0.01"
-                required
-                defaultValue={orden.total}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
-              />
+              <p className="mb-1 text-sm font-medium text-[var(--foreground)]">Monto (autorizado)</p>
+              <p className="rounded-lg border border-[var(--border)] bg-black/[0.02] px-3.5 py-2.5 text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                {formatMoney(orden.total)}
+              </p>
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">

@@ -11,11 +11,15 @@ import {
   obraTieneEstado,
   obraCoincideBusqueda,
 } from "@/lib/reporte-general/estado";
+import { asegurarGastosRecurrentesGenerados } from "@/lib/server/control-de-obra/gastos-recurrentes";
+import { obtenerResumenGastosEmpresaPorCategoria } from "@/lib/server/control-de-obra/gastos";
+import { obtenerProyectoOficinaId } from "@/lib/server/control-de-obra/proyecto-oficina";
 import { ResumenSemana } from "@/components/reporte-general/resumen-semana";
 import { NavegacionSemana } from "@/components/reporte-general/navegacion-semana";
 import { FiltrosProyectos } from "@/components/reporte-general/filtros-proyectos";
 import { TablaProyectosHeader } from "@/components/reporte-general/tabla-proyectos-header";
 import { ObraCard } from "@/components/reporte-general/obra-card";
+import { GastosEmpresaCard } from "@/components/reporte-general/gastos-empresa-card";
 import { Card } from "@/components/ui/card";
 import type { EstatusPago } from "@/lib/generated/prisma/enums";
 
@@ -57,11 +61,34 @@ export default async function ReporteGeneralPage(
     usuario.empresa.id,
     parametroAFecha(fechaParam)
   );
-  const todasLasObras = await obtenerReporteSemana(usuario.empresa.id, semana.id);
+  // Perezoso e idempotente — asegura que los gastos recurrentes de esta
+  // semana ya existan aunque nadie haya entrado antes a Gastos (Gastos
+  // transversal — recurrentes, septiembre 2026).
+  await asegurarGastosRecurrentesGenerados(usuario.empresa.id, semana.id);
+
+  const proyectoOficinaId = await obtenerProyectoOficinaId(usuario.empresa.id);
+  const [reporteCompleto, resumenGastosEmpresa] = await Promise.all([
+    obtenerReporteSemana(usuario.empresa.id, semana.id),
+    proyectoOficinaId
+      ? obtenerResumenGastosEmpresaPorCategoria(usuario, proyectoOficinaId, semana.id)
+      : Promise.resolve(null),
+  ]);
+
+  // El Proyecto(tipo=OFICINA) es el vehículo interno de Gastos de Empresa —
+  // nunca se pinta como una obra más (su agregación por beneficiario está
+  // incompleta a propósito: un gasto de Empresa pagado directo, sin
+  // pagador, nunca genera MovimientoSemanal — obtenerResumenGastosEmpresaPorCategoria
+  // es la fuente correcta y completa para este bloque, ver ese comentario en
+  // gastos.ts). Se excluye por completo de la lista de obras (Gastos
+  // transversal, septiembre 2026).
+  const todasLasObras = reporteCompleto.filter((o) => o.proyecto.tipo !== "OFICINA");
 
   const totalEntreSemana = todasLasObras.reduce((t, o) => t + o.totalEntreSemana, 0);
   const totalFinSemana = todasLasObras.reduce((t, o) => t + o.totalFinSemana, 0);
   const pendienteDePago = todasLasObras.reduce((t, o) => t + o.pendienteSemana, 0);
+
+  const totalProyectos = todasLasObras.reduce((t, o) => t + o.totalSemana, 0);
+  const totalGastosEmpresa = resumenGastosEmpresa?.total ?? 0;
 
   const estatusFiltro = ESTADO_A_ESTATUS[estadoParam];
   const obrasFiltradas = todasLasObras.filter((obra) => {
@@ -93,6 +120,14 @@ export default async function ReporteGeneralPage(
           Control y planeación semanal de pagos · {formatearRangoSemana(semana)}
         </p>
       </div>
+
+      {resumenGastosEmpresa && (
+        <GastosEmpresaCard
+          totalProyectos={totalProyectos}
+          resumen={resumenGastosEmpresa}
+          totalGeneral={totalProyectos + totalGastosEmpresa}
+        />
+      )}
 
       <ResumenSemana
         totalEntreSemana={totalEntreSemana}

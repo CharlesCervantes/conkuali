@@ -1,8 +1,13 @@
 import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
-import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeAdministrarProyectos, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
+import { Prisma } from "@/lib/generated/prisma/client";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
+import {
+  puedeAdministrarProyectos,
+  puedeEliminarEstructuraContractual,
+  puedeVerContratoGeneralPrivado,
+} from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import type { ConceptoEstatus, EsquemaContractual } from "@/lib/generated/prisma/enums";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
@@ -93,7 +98,12 @@ export async function obtenerPartidasProyectoPrivado(
 // agosto 2026: antes reusaba partidasConConceptos, que trae todo).
 export function partidasConConceptosOperativo(proyectoId: string) {
   return db.partida.findMany({
-    where: { proyectoId },
+    // CANCELADA/CANCELADO nunca aparece en pantallas activas (Contrato
+    // General, Avance, selector "asignar concepto" en Contratistas, todos
+    // reutilizan esta consulta) — eliminar una Partida/Concepto debe verse
+    // como eliminado aquí, aunque la fila se conserve en la base cuando tiene
+    // historial (Eliminar Partidas/Conceptos, septiembre 2026).
+    where: { proyectoId, estatus: "ACTIVA" },
     // `orden` casi siempre es 0 (nada en la UI lo captura hoy) — sin un
     // desempate estable, Postgres puede devolver los empates en distinto
     // orden entre una consulta y otra (más notorio justo después de un
@@ -106,6 +116,7 @@ export function partidasConConceptosOperativo(proyectoId: string) {
       icono: true,
       color: true,
       conceptos: {
+        where: { estatus: "ACTIVO" },
         orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
         select: {
           id: true,
@@ -152,9 +163,15 @@ export async function obtenerContratistasProyecto(
 // consulta, evita duplicarla).
 export function partidasConConceptos(proyectoId: string) {
   return db.partida.findMany({
-    where: { proyectoId },
+    // Mismo filtro que partidasConConceptosOperativo — ver ese comentario.
+    where: { proyectoId, estatus: "ACTIVA" },
     orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
-    include: { conceptos: { orderBy: [{ orden: "asc" }, { createdAt: "asc" }] } },
+    include: {
+      conceptos: {
+        where: { estatus: "ACTIVO" },
+        orderBy: [{ orden: "asc" }, { createdAt: "asc" }],
+      },
+    },
   });
 }
 
@@ -173,6 +190,13 @@ function contratosConConceptos(proyectoId: string) {
         select: { id: true, beneficiario: { select: { nombre: true } } },
       },
       conceptos: {
+        // Un concepto eliminado/cancelado (Eliminar Partidas/Conceptos,
+        // septiembre 2026) no puede borrar la asignación ya congelada
+        // (ContratoConcepto tiene su propio historial de avance/cortes), pero
+        // sí debe dejar de contar en "Contrato vigente" del contratista y de
+        // mostrarse en su tabla — mismo criterio que Contrato General, que ya
+        // lo excluye.
+        where: { concepto: { estatus: "ACTIVO" } },
         select: {
           id: true,
           conceptoId: true,
@@ -634,6 +658,182 @@ export async function cambiarEstatusConcepto(
   });
 
   return concepto;
+}
+
+// ---------------------------------------------------------------------------
+// Eliminar Partidas y Conceptos — Administrador/Director (septiembre 2026).
+//
+// Mismo patrón que evaluarEliminacionBeneficiario/eliminarBeneficiario en
+// lib/server/catalogos.ts: se precalcula si el Concepto tiene historial real
+// (nunca se depende solo de que la base de datos truene) y, según eso, se
+// decide borrado físico o estado CANCELADO — nunca a medias.
+//
+// Relaciones que cuentan como "historial real" de un Concepto (todas FK sin
+// onDelete explícito, protegidas por RESTRICT):
+// - asignaciones (ContratoConcepto) — ya asignado a un contratista.
+// - avances (AvanceConcepto) — avance físico ya reportado (aprobado o no).
+// - corteDetalles (CorteSemanalConcepto) — ya en un corte de contratista.
+// - estimacionCapaDetalles (EstimacionClienteCapaConcepto) — ya en una
+//   Estimación Cliente EMITIDA (congelada para siempre).
+// - requisiciones (Requisicion.conceptoContractualId) — ya referenciado en
+//   una requisición de compra.
+// Deliberadamente NO cuenta estimacionDetalles (EstimacionClienteConcepto):
+// es un snapshot semanal que se borra y recrea en cada recálculo de
+// borrador — existir ahí no es un evento de negocio irreversible.
+// ---------------------------------------------------------------------------
+
+async function evaluarEliminacionConcepto(conceptoId: string): Promise<boolean> {
+  const [asignaciones, avances, cortes, estimacionesCapa, requisiciones] = await Promise.all([
+    db.contratoConcepto.count({ where: { conceptoId } }),
+    db.avanceConcepto.count({ where: { conceptoId } }),
+    db.corteSemanalConcepto.count({ where: { conceptoId } }),
+    db.estimacionClienteCapaConcepto.count({ where: { conceptoId } }),
+    db.requisicion.count({ where: { conceptoContractualId: conceptoId } }),
+  ]);
+  return asignaciones + avances + cortes + estimacionesCapa + requisiciones === 0;
+}
+
+// Decide y ejecuta, para UN Concepto ya cargado: borrado físico si no tiene
+// historial, o CANCELADO (con motivo) si sí lo tiene. Reutilizado tanto por
+// eliminarConcepto como por eliminarPartida (cascada).
+async function resolverEliminacionConcepto(
+  tx: Prisma.TransactionClient,
+  empresaId: string,
+  usuarioId: string,
+  concepto: { id: string; [campo: string]: unknown },
+  motivo: string
+): Promise<"ELIMINADO" | "CANCELADO"> {
+  const puedeEliminar = await evaluarEliminacionConcepto(concepto.id);
+
+  if (puedeEliminar) {
+    await tx.concepto.delete({ where: { id: concepto.id } });
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId,
+      entidad: "Concepto",
+      entidadId: concepto.id,
+      accion: "ELIMINAR",
+      valorAnterior: { ...concepto, motivo },
+    });
+    return "ELIMINADO";
+  }
+
+  await tx.concepto.update({ where: { id: concepto.id }, data: { estatus: "CANCELADO" } });
+  await registrarAuditoriaTx(tx, {
+    empresaId,
+    usuarioId,
+    entidad: "Concepto",
+    entidadId: concepto.id,
+    accion: "CAMBIAR_ESTATUS",
+    valorAnterior: { estatus: "ACTIVO" },
+    valorNuevo: { estatus: "CANCELADO", motivo },
+  });
+  return "CANCELADO";
+}
+
+const MotivoSchema = z
+  .string()
+  .trim()
+  .min(1, "El motivo es obligatorio.");
+
+export async function eliminarConcepto(
+  usuario: UsuarioSesion,
+  id: string,
+  motivoCrudo: unknown
+): Promise<{ resultado: "ELIMINADO" | "CANCELADO" }> {
+  if (!puedeEliminarEstructuraContractual(usuario)) throw new SinPermisoError();
+  if (!usuario.empresa) throw new SinPermisoError();
+  const empresaId = usuario.empresa.id;
+  const motivo = MotivoSchema.parse(motivoCrudo);
+
+  const concepto = await db.concepto.findFirst({
+    where: { id, partida: { proyecto: { empresaId } } },
+  });
+  if (!concepto) throw new RegistroNoEncontradoError("El concepto");
+  if (concepto.estatus === "CANCELADO") {
+    throw new ValidacionError("Este concepto ya está cancelado.");
+  }
+
+  try {
+    return await db.$transaction((tx) =>
+      resolverEliminacionConcepto(tx, empresaId, usuario.id, concepto, motivo).then((resultado) => ({
+        resultado,
+      }))
+    );
+  } catch (error) {
+    // Red de seguridad ante una carrera real (alguien creó una fila RESTRICT
+    // justo entre el check y el delete) — mismo criterio que eliminarBeneficiario.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      throw new ValidacionError(`No se puede eliminar "${concepto.descripcion}" porque tiene historial.`);
+    }
+    throw error;
+  }
+}
+
+export async function eliminarPartida(
+  usuario: UsuarioSesion,
+  id: string,
+  motivoCrudo: unknown
+): Promise<{ resultado: "ELIMINADO" | "CANCELADO"; conceptosAfectados: number }> {
+  if (!puedeEliminarEstructuraContractual(usuario)) throw new SinPermisoError();
+  if (!usuario.empresa) throw new SinPermisoError();
+  const empresaId = usuario.empresa.id;
+  const motivo = MotivoSchema.parse(motivoCrudo);
+
+  const partida = await db.partida.findFirst({
+    where: { id, proyecto: { empresaId } },
+    include: { conceptos: { where: { estatus: "ACTIVO" } } },
+  });
+  if (!partida) throw new RegistroNoEncontradoError("La partida");
+  if (partida.estatus === "CANCELADA") {
+    throw new ValidacionError("Esta partida ya está cancelada.");
+  }
+
+  try {
+    return await db.$transaction(async (tx) => {
+      // Cascada: cada Concepto activo se resuelve con el mismo criterio
+      // individual (borrado físico o CANCELADO) antes de decidir la Partida.
+      for (const concepto of partida.conceptos) {
+        await resolverEliminacionConcepto(tx, empresaId, usuario.id, concepto, motivo);
+      }
+
+      // Si ya no queda ningún Concepto bajo esta Partida (todos se borraron
+      // físicamente), la Partida también se borra físicamente. Si queda al
+      // menos uno (cancelado, con historial), el FK lo impide — la Partida
+      // queda como CANCELADA.
+      const restantes = await tx.concepto.count({ where: { partidaId: id } });
+
+      if (restantes === 0) {
+        await tx.partida.delete({ where: { id } });
+        await registrarAuditoriaTx(tx, {
+          empresaId,
+          usuarioId: usuario.id,
+          entidad: "Partida",
+          entidadId: id,
+          accion: "ELIMINAR",
+          valorAnterior: { nombre: partida.nombre, motivo },
+        });
+        return { resultado: "ELIMINADO" as const, conceptosAfectados: partida.conceptos.length };
+      }
+
+      await tx.partida.update({ where: { id }, data: { estatus: "CANCELADA" } });
+      await registrarAuditoriaTx(tx, {
+        empresaId,
+        usuarioId: usuario.id,
+        entidad: "Partida",
+        entidadId: id,
+        accion: "CAMBIAR_ESTATUS",
+        valorAnterior: { estatus: "ACTIVA" },
+        valorNuevo: { estatus: "CANCELADA", motivo },
+      });
+      return { resultado: "CANCELADO" as const, conceptosAfectados: partida.conceptos.length };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      throw new ValidacionError(`No se puede eliminar "${partida.nombre}" porque tiene historial.`);
+    }
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

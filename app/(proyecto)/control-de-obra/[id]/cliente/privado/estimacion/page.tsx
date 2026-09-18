@@ -190,7 +190,7 @@ export default async function ClientePrivadoEstimacionPage({
                 esquemaContractual={proyecto.esquemaContractual}
                 subtotalTrabajos={congelado.estimacion.subtotal}
                 gastosCobrables={congelado.estimacion.subtotalGastosCobrables}
-                administracion={congelado.estimacion.montoAdministracionTrabajos}
+                administracion={congelado.estimacion.montoAdministracionTotal}
                 aplicaIVA={congelado.estimacion.aplicaIVA}
                 montoIVA={congelado.estimacion.montoIVA}
                 total={congelado.estimacion.total}

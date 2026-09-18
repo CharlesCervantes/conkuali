@@ -74,11 +74,19 @@ model Empresa {
   // marca/leyenda del recibo — no ameritan una entidad de Configuración
   // aparte, se guardan igual que colorPrimario/colorSecundario/logoRef.
   ultimoFolioRecibo    Int     @default(0)
-  reciboTitulo         String  @default("Recibo de pago")
+  reciboTitulo         String  @default("ESTIMACIÓN DE CONTRATISTA")
   reciboLeyenda        String?
   reciboRazonSocial    String?
   reciboMostrarDetalle Boolean @default(true)
   reciboMostrarPU      Boolean @default(true)
+  // Bloque de declaraciones/conformidad — toggle independiente de si hay
+  // texto guardado (permite redactarlo y decidir después si se muestra, sin
+  // borrarlo) y título del bloque, separado de reciboTitulo (que es el
+  // título del documento completo). Config de Empresa, Master-only (Portal
+  // Master → Empresas → Documentos, septiembre 2026) — mismo patrón que sus
+  // hermanos de arriba, sin entidad de Configuración aparte.
+  reciboMostrarLeyenda Boolean @default(true)
+  reciboTituloLeyenda  String  @default("DECLARACIONES Y ACEPTACIÓN DE LA ESTIMACIÓN")
 
   // Gastos de Obra (sección "Gastos de Obra" de 04-modulo-control-de-obra.md)
   // — mismo mecanismo atómico que ultimoFolioRecibo, folio único por empresa.
@@ -100,6 +108,12 @@ model Empresa {
   gastosObra             GastoObra[]
   reposicionesGastos     ReposicionGastos[]
   ordenesCompra          OrdenCompra[]
+  requisiciones          Requisicion[]
+  gastosRecurrentes      GastoRecurrente[]
+  mediosFinancieros      MedioFinanciero[]
+  egresos                Egreso[]
+  ingresos               Ingreso[]
+  facturas               Factura[]
 
   @@map("empresas")
 }
@@ -195,6 +209,7 @@ model Usuario {
   cierresSemanaGenerados  CierreSemanaProyecto[] @relation("CierreSemanaGenerado")
   cierresSemanaReabiertos CierreSemanaProyecto[] @relation("CierreSemanaReabierto")
   cortesSemanaGenerados   CorteSemanal[]         @relation("CorteSemanalGenerado")
+  proyectosSupervisados   Proyecto[]             @relation("ProyectoSupervisor")
 
   recibosGenerados       ReciboPago[] @relation("ReciboPagoGenerado")
   recibosEvidenciaSubida ReciboPago[] @relation("ReciboPagoEvidenciaSubida")
@@ -204,6 +219,7 @@ model Usuario {
   estimacionesClienteCapaGeneradas         EstimacionClienteCapa[]       @relation("EstimacionClienteCapaGenerada")
   estimacionesClienteCapaEmitidas          EstimacionClienteCapa[]       @relation("EstimacionClienteCapaEmitida")
   movimientosFinancierosClienteRegistrados MovimientoFinancieroCliente[]
+  movimientosFinancierosClienteCancelados  MovimientoFinancieroCliente[] @relation("MovimientoFinancieroClienteCancelado")
 
   gastosCapturados GastoObra[] @relation("GastoCapturado")
   gastosRevisados  GastoObra[] @relation("GastoRevisado")
@@ -213,6 +229,18 @@ model Usuario {
 
   ordenesCompraCreadas     OrdenCompra[] @relation("OCCreada")
   ordenesCompraAutorizadas OrdenCompra[] @relation("OCAutorizada")
+  ordenesCompraRecibidas   OrdenCompra[] @relation("OCRecibida")
+
+  requisicionesSolicitadas Requisicion[] @relation("RequisicionSolicitada")
+  requisicionesRevisadas   Requisicion[] @relation("RequisicionRevisada")
+  cotizacionesRegistradas  Cotizacion[]  @relation("CotizacionRegistrada")
+
+  gastosRecurrentesCreados     GastoRecurrente[] @relation("GastoRecurrenteCreado")
+  abonosReposicionRegistrados  AbonoReposicion[] @relation("AbonoReposicionRegistrado")
+
+  egresosRegistrados  Egreso[]  @relation("EgresoRegistrado")
+  ingresosRegistrados Ingreso[] @relation("IngresoRegistrado")
+  facturasSubidas     Factura[] @relation("FacturaSubida")
 
   // Vínculo opcional con la identidad de pago (Beneficiario) de esta misma
   // persona — ver Beneficiario.usuarioId para la relación completa. Un
@@ -366,6 +394,16 @@ model Proyecto {
   notas                String?
   fechaEstimadaTermino DateTime?
 
+  // Supervisor responsable del proyecto (Contratistas: Control Contractual +
+  // Estimaciones, septiembre 2026) — opcional, nunca inferido de
+  // CierreSemanaProyecto.cerradoPor (eso lo cierra Administrador/Director,
+  // nunca un Supervisor — ver puedeCerrarSemana) ni de ningún otro usuario
+  // "de paso". Se congela por nombre en ReciboPago.configuracionSnapshot al
+  // generar el documento: reasignar el Supervisor del proyecto después nunca
+  // altera un documento ya generado.
+  supervisorUsuario   Usuario? @relation("ProyectoSupervisor", fields: [supervisorUsuarioId], references: [id])
+  supervisorUsuarioId String?
+
   // Imagen de portada (Inicio: dashboard ejecutivo, agosto 2026) — mismo
   // patrón que GastoObra.ticketRef/ReciboPago.archivoEvidenciaRef: solo se
   // guarda la referencia de almacenamiento + nombre original (Cloudflare R2
@@ -422,8 +460,13 @@ model Proyecto {
   gastosObra             GastoObra[]
   reposicionesGastos     ReposicionGastos[]
   ordenesCompra          OrdenCompra[]
+  requisiciones          Requisicion[]
+  gastosRecurrentes      GastoRecurrente[]
+  egresos                Egreso[]
+  ingresos               Ingreso[]
 
   @@index([empresaId])
+  @@index([supervisorUsuarioId])
   @@map("proyectos")
 }
 
@@ -451,6 +494,8 @@ model Beneficiario {
   gastosProveedor        GastoObra[]             @relation("GastoProveedor")
   reposicionesGastos     ReposicionGastos[]
   ordenesCompra          OrdenCompra[]
+  cotizaciones           Cotizacion[]
+  gastosRecurrentes      GastoRecurrente[]
 
   // Vínculo opcional y explícito con el Usuario que inicia sesión como esta
   // misma persona real (ej. Andrés es Usuario/Supervisor y también
@@ -485,11 +530,19 @@ model Beneficiario {
 model Proveedor {
   beneficiario   Beneficiario @relation(fields: [beneficiarioId], references: [id], onDelete: Cascade)
   beneficiarioId String       @id
+  // Nombre comercial ya vive en Beneficiario.nombre — razonSocial es el dato
+  // fiscal completo, cuando difiere (Compras, septiembre 2026). Nullable:
+  // ningún proveedor histórico lo tiene todavía.
+  razonSocial    String?
   giro           String?
   vendedor       String?
   telefono       String?
   credito        String? // solo informativo, no afecta cálculos
   cuentaBancaria String? // solo informativo, no afecta cálculos
+  // Dato estructurado (18 dígitos, validado en el servicio al capturar) — a
+  // diferencia de cuentaBancaria, que sigue siendo texto libre. Nullable:
+  // ningún proveedor histórico lo tiene todavía.
+  clabe          String?
   // Dato de identidad fiscal — se guarda desde ya sin ninguna validación de
   // formato ni lógica fiscal asociada; se reutilizará cuando exista el
   // Estado de Cuenta Fiscal (fuera de alcance de esta etapa).
@@ -715,6 +768,11 @@ enum ConceptoEstatus {
   CANCELADO
 }
 
+enum EstatusPartida {
+  ACTIVA
+  CANCELADA
+}
+
 model Partida {
   id         String   @id @default(cuid())
   proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
@@ -729,6 +787,13 @@ model Partida {
   // actual, no afecta nada del modelo contractual).
   icono String?
   color String?
+
+  // Eliminar una Partida — mismo criterio que ConceptoEstatus: si no tiene
+  // ningún Concepto con historial real, se borra la fila de verdad; si le
+  // queda al menos un Concepto cancelado (con historial), la Partida misma
+  // no se puede borrar por FK y queda como CANCELADA (Eliminar Partidas/
+  // Conceptos, septiembre 2026).
+  estatus EstatusPartida @default(ACTIVA)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -793,6 +858,7 @@ model Concepto {
   corteDetalles          CorteSemanalConcepto[]
   estimacionDetalles     EstimacionClienteConcepto[]
   estimacionCapaDetalles EstimacionClienteCapaConcepto[]
+  requisiciones          Requisicion[]
 
   @@index([partidaId])
   @@map("conceptos")
@@ -1428,6 +1494,16 @@ model MovimientoFinancieroCliente {
   referencia String?
   notas      String?
 
+  // Nunca se borra un cobro/aportación real — se cancela (mismo criterio que
+  // Egreso/Ingreso/Factura/ReposicionGastos). TODO cálculo financiero
+  // (saldo de estimación, fondo disponible, Contabilidad, Dashboard) debe
+  // ignorar los movimientos CANCELADOS (Cobros de cliente, septiembre 2026).
+  estatus           EstatusRegistroContable @default(VIGENTE)
+  motivoCancelacion String?
+  canceladoPor      Usuario?                @relation("MovimientoFinancieroClienteCancelado", fields: [canceladoPorId], references: [id])
+  canceladoPorId    String?
+  canceladoEn       DateTime?
+
   // Obligatorio en PAGO_ESTIMACION y APLICACION_ESTIMACION — una estimación
   // puede tener varios de cada uno (pagos parciales, y ahora también varias
   // aplicaciones de fondo en fechas distintas — una al emitir si se elige, y
@@ -1454,6 +1530,11 @@ model MovimientoFinancieroCliente {
   registradoPor   Usuario  @relation(fields: [registradoPorId], references: [id])
   registradoPorId String
   createdAt       DateTime @default(now())
+
+  // Decoración fiscal opcional (Contabilidad, septiembre 2026) — mismo
+  // criterio que GastoObra.egreso: null hasta que alguien agregue datos
+  // fiscales a este pago de cliente.
+  ingreso Ingreso?
 
   @@index([proyectoId])
   @@index([estimacionClienteId])
@@ -1587,6 +1668,18 @@ model GastoObra {
   reposicion         ReposicionGastos? @relation(fields: [reposicionGastosId], references: [id])
   reposicionGastosId String?
 
+  // Origen recurrente — null si se capturó a mano (el caso normal de hoy).
+  // Cada ocurrencia generada es su propia fila GastoObra, independiente para
+  // siempre: editar/desactivar el GastoRecurrente nunca reescribe esta fila
+  // (Gastos transversal — recurrentes, septiembre 2026).
+  recurrente   GastoRecurrente? @relation(fields: [recurrenteId], references: [id])
+  recurrenteId String?
+
+  // Decoración fiscal opcional (Contabilidad, septiembre 2026) — null hasta
+  // que alguien agregue medio financiero/factura/notas contables a este
+  // gasto. Nunca se crea automáticamente al aprobar el gasto.
+  egreso Egreso?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1596,6 +1689,13 @@ model GastoObra {
   @@index([incluidoEnEstimacionClienteId])
   @@index([incluidoEnCapaOperativoId])
   @@index([incluidoEnCapaPrivadoId])
+  // A lo más UNA ocurrencia generada por GastoRecurrente+Semana — la garantía
+  // real de idempotencia de asegurarGastosRecurrentesGenerados, no solo un
+  // chequeo en el servicio. Filas con recurrenteId = NULL (la inmensa
+  // mayoría, todo gasto capturado a mano) nunca chocan entre sí: Postgres
+  // trata NULL como distinto de NULL en un índice único (Gastos transversal
+  // — recurrentes, septiembre 2026).
+  @@unique([recurrenteId, semanaId])
   @@map("gastos_obra")
 }
 
@@ -1674,6 +1774,12 @@ model ReposicionGastos {
   // aprobación Gastos→Reposiciones, agosto 2026).
   cerrada Boolean @default(false)
 
+  // Trazabilidad de reposiciones parciales — ver AbonoReposicion. "Saldo
+  // pendiente" (total gastos − Σ abonos.monto) es siempre derivado en el
+  // servicio, nunca una columna aquí (reposiciones parciales, septiembre
+  // 2026).
+  abonos AbonoReposicion[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1688,12 +1794,133 @@ model ReposicionGastos {
   @@map("reposiciones_gastos")
 }
 
+// ---------------------------------------------------------------------------
+// Compras — Etapa previa a la Orden de Compra (septiembre 2026). Requisición
+// = la necesidad detectada en obra/Empresa, sin proveedor ni precio todavía;
+// Cotización = una opción comercial de UN proveedor para esa necesidad;
+// Orden de Compra = la decisión formal (documento completo, sin relajar sus
+// validaciones actuales). Cada etapa referencia a la anterior, nunca la
+// vuelve a capturar — "capturar una sola vez".
+// ---------------------------------------------------------------------------
+
+enum PrioridadRequisicion {
+  NORMAL
+  URGENTE
+}
+
+enum EstatusRequisicion {
+  PENDIENTE
+  EN_COTIZACION
+  CONVERTIDA
+  RECHAZADA
+  CANCELADA
+}
+
+// La necesidad, tal como la reporta quien está en obra — sin proveedor ni
+// precio (eso es Cotizacion/OrdenCompra). Puede ser de un Proyecto real o de
+// Empresa (Proyecto tipo OFICINA, mismo mecanismo ya usado en Gastos
+// transversal — nunca un segundo concepto de "requisición de empresa").
+model Requisicion {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+
+  solicitante     Usuario  @relation("RequisicionSolicitada", fields: [solicitantePorId], references: [id])
+  solicitantePorId String
+  fecha           DateTime @default(now())
+
+  concepto      String
+  descripcion   String?
+  cantidad      Decimal  @db.Decimal(14, 3)
+  unidad        String
+  prioridad     PrioridadRequisicion @default(NORMAL)
+  fechaRequerida DateTime?
+  comentarios   String?
+
+  // Referencia opcional a un Concepto del contrato — nunca obligatoria,
+  // muchas necesidades de obra no mapean 1:1 a un concepto contractual.
+  conceptoContractual   Concepto? @relation(fields: [conceptoContractualId], references: [id])
+  conceptoContractualId String?
+
+  // Evidencia — mismo mecanismo de storage que GastoObra.ticketRef (subirArchivo,
+  // lib/server/archivos.ts), un solo archivo, no una galería.
+  evidenciaRef    String?
+  evidenciaNombre String?
+
+  estatus       EstatusRequisicion @default(PENDIENTE)
+  motivoRechazo String?
+  revisadoPor   Usuario?  @relation("RequisicionRevisada", fields: [revisadoPorId], references: [id])
+  revisadoPorId String?
+  revisadoEn    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cotizaciones Cotizacion[]
+  // La OC generada desde esta Requisición — ver OrdenCompra.requisicionId
+  // (el @unique vive ahí, garantiza que una Requisición nunca se convierta
+  // en más de una OC).
+  ordenCompra  OrdenCompra?
+
+  @@index([empresaId, proyectoId])
+  @@index([estatus])
+  @@map("requisiciones")
+}
+
+// Una opción comercial de UN proveedor para una Requisición — nunca desglose
+// por línea (eso lo resuelve OrdenCompraConcepto al formalizar la compra).
+// A lo más UNA fila por Requisición puede tener seleccionada = true —
+// garantizado por un índice único PARCIAL en la migración
+// (WHERE seleccionada = true), no solo un checkbox visual — mismo patrón que
+// ReposicionGastos/APLICACION_ESTIMACION, no representable en este DSL de
+// Prisma.
+model Cotizacion {
+  id             String      @id @default(cuid())
+  requisicion    Requisicion @relation(fields: [requisicionId], references: [id])
+  requisicionId  String
+
+  // Proveedor existente, Beneficiario tipo PROVEEDOR — nunca un catálogo
+  // nuevo (mismo criterio que OrdenCompra.proveedorBeneficiarioId).
+  proveedor               Beneficiario @relation(fields: [proveedorBeneficiarioId], references: [id])
+  proveedorBeneficiarioId String
+
+  importe           Decimal  @db.Decimal(14, 2)
+  vigenciaHasta      DateTime?
+  tiempoEntregaDias  Int?
+  observaciones      String?
+  archivoRef         String?
+  archivoNombre      String?
+  seleccionada       Boolean  @default(false)
+
+  registradoPor   Usuario @relation("CotizacionRegistrada", fields: [registradoPorId], references: [id])
+  registradoPorId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([requisicionId])
+  @@index([proveedorBeneficiarioId])
+  @@map("cotizaciones")
+}
+
 enum EstatusOrdenCompra {
   BORRADOR
   PENDIENTE_AUTORIZACION
   AUTORIZADA
   RECHAZADA
   CANCELADA
+}
+
+// Estatus de recepción del material/servicio — INDEPENDIENTE del pago
+// (OrdenCompra.movimientoSemanal.estatusPago). Pueden ocurrir en cualquier
+// orden: recibir antes de que el pago se refleje como gasto, o al revés
+// (Compras, septiembre 2026).
+enum EstatusRecepcionOrdenCompra {
+  PENDIENTE
+  PARCIAL
+  COMPLETA
 }
 
 // Compra planeada/autorizada que Conkuali hace directamente a un proveedor —
@@ -1712,6 +1939,14 @@ model OrdenCompra {
   folio       String // OC-000456, único por empresa
   numeroFolio Int
 
+  // Requisición de la que se generó esta OC — null si se creó directo
+  // (siempre permitido, no toda compra nace de una requisición formal). El
+  // @unique garantiza que una misma Requisición nunca se convierta en más de
+  // una OC (Compras, septiembre 2026) — dividir una requisición entre varios
+  // proveedores queda fuera de alcance de V1.
+  requisicion   Requisicion? @relation(fields: [requisicionId], references: [id])
+  requisicionId String?      @unique
+
   // Proveedor existente, Beneficiario tipo PROVEEDOR — nunca un catálogo
   // nuevo.
   proveedor               Beneficiario @relation(fields: [proveedorBeneficiarioId], references: [id])
@@ -1722,6 +1957,18 @@ model OrdenCompra {
   metodoPago      MetodoPagoGasto? // previsto; puede no saberse hasta pagar
   requiereFactura Boolean            @default(false)
   notas           String?
+
+  // Recepción — INDEPENDIENTE del pago (movimientoSemanal.estatusPago, abajo)
+  // y del Gasto documental (gastosGenerados). Puede completarse antes,
+  // después o al mismo tiempo que cualquiera de esos dos (Compras, septiembre
+  // 2026).
+  estatusRecepcion        EstatusRecepcionOrdenCompra @default(PENDIENTE)
+  recibidoEn              DateTime?
+  recibidoPor             Usuario?                    @relation("OCRecibida", fields: [recibidoPorId], references: [id])
+  recibidoPorId           String?
+  evidenciaRecepcionRef   String?
+  evidenciaRecepcionNombre String?
+  comentarioRecepcion     String?
 
   // Snapshot al autorizar — una OC ya autorizada es una obligación formal, su
   // total no debe moverse solo porque alguien edite precios del detalle
@@ -1771,4 +2018,303 @@ model OrdenCompraConcepto {
 
   @@index([ordenCompraId])
   @@map("ordenes_compra_conceptos")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Gastos transversal — Proyecto o Empresa, recurrentes, reposiciones
+// parciales (septiembre 2026). Un gasto de Empresa sigue siendo un GastoObra
+// normal, apuntando al Proyecto(tipo=OFICINA) canónico de esa Empresa — no
+// existe ninguna entidad "gasto de empresa" paralela (ver
+// lib/server/control-de-obra/proyecto-oficina.ts).
+// ---------------------------------------------------------------------------
+
+enum FrecuenciaGasto {
+  SEMANAL
+  QUINCENAL
+  MENSUAL
+}
+
+// Plantilla de una obligación recurrente (nómina, renta, gasolina...) — NO es
+// un gasto en sí, es el origen que genera ocurrencias reales (GastoObra) de
+// forma perezosa e idempotente (ver asegurarGastosRecurrentesGenerados).
+// Editar o desactivar esta plantilla nunca reescribe una ocurrencia ya
+// generada — cada GastoObra.recurrenteId apunta aquí pero es su propia fila
+// independiente para siempre.
+model GastoRecurrente {
+  id         String   @id @default(cuid())
+  empresa    Empresa  @relation(fields: [empresaId], references: [id])
+  empresaId  String
+  proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
+  proyectoId String
+
+  descripcion String
+  // Mismo catálogo curado que GastoObra.categoria (lib/control-de-obra/
+  // categorias-gasto.ts) — nunca un catálogo propio.
+  categoria   String
+  frecuencia  FrecuenciaGasto
+
+  // null = monto variable: cada ocurrencia nace en BORRADOR con el monto
+  // pendiente de captura, en vez de un campo "montoPendiente" aparte —
+  // reutiliza el mismo EstatusGasto.BORRADOR que ya existe en el enum de
+  // GastoObra pero que hoy ningún flujo usa (encaja exactamente aquí).
+  montoFijo Decimal? @db.Decimal(14, 2)
+
+  // Igual significado que GastoObra.pagadorBeneficiarioId (null = lo paga la
+  // empresa directo) — aquí es un FK directo, no un modo "YO/OTRO/EMPRESA",
+  // porque al generar una ocurrencia no hay un usuario actual con sesión.
+  pagador               Beneficiario? @relation(fields: [pagadorBeneficiarioId], references: [id])
+  pagadorBeneficiarioId String?
+
+  fechaInicio DateTime
+  activo      Boolean  @default(true)
+
+  creadoPor   Usuario @relation("GastoRecurrenteCreado", fields: [creadoPorId], references: [id])
+  creadoPorId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ocurrencias GastoObra[]
+
+  @@index([empresaId, proyectoId])
+  @@index([pagadorBeneficiarioId])
+  @@map("gastos_recurrentes")
+}
+
+// Pago parcial contra una Reposición — permite "Gasto $10,000 / Repuesto
+// $6,000 / Pendiente $4,000" sin inventar un estado nuevo en EstatusPago: el
+// saldo pendiente (reposicion.total − Σ abonos.monto) se calcula siempre en
+// el servicio, nunca se persiste. Cuando el saldo llega a $0 se dispara el
+// liquidarMovimiento() normal sobre el MovimientoSemanal de la reposición
+// (reposiciones parciales, septiembre 2026).
+model AbonoReposicion {
+  id                 String           @id @default(cuid())
+  reposicion         ReposicionGastos @relation(fields: [reposicionGastosId], references: [id])
+  reposicionGastosId String
+
+  monto      Decimal         @db.Decimal(14, 2)
+  fecha      DateTime
+  metodoPago MetodoPagoGasto
+  referencia String?
+  notas      String?
+
+  registradoPor   Usuario @relation("AbonoReposicionRegistrado", fields: [registradoPorId], references: [id])
+  registradoPorId String
+
+  createdAt DateTime @default(now())
+
+  @@index([reposicionGastosId])
+  @@map("abonos_reposicion")
+}
+
+// ---------------------------------------------------------------------------
+// Módulo Contabilidad — Ingresos, Egresos, Facturas pendientes (septiembre
+// 2026). Filosofía "capturar una sola vez": Egreso/Ingreso NUNCA duplican
+// monto/fecha/concepto/proyecto/pagador de GastoObra/MovimientoFinancieroCliente
+// — son una DECORACIÓN fiscal opcional, creada perezosamente solo cuando hay
+// información contable real que agregar (medio financiero, factura, notas).
+// "Factura pendiente" nunca depende de que exista un Egreso — se deriva
+// directamente de GastoObra.requiereFactura (igual criterio que
+// calcularEstatusFiscal en gastos.ts), confirmado explícitamente así.
+// ---------------------------------------------------------------------------
+
+enum TipoMedioFinanciero {
+  BANCO
+  TARJETA
+  EFECTIVO
+}
+
+// Catálogo simple por Empresa — identifica POR QUÉ MEDIO entró/salió el
+// dinero (ej. "BBVA — Cuenta fiscal", "Caja / Efectivo"). Deliberadamente sin
+// saldos, sin conciliación, sin movimientos propios — solo una etiqueta
+// reutilizable en Ingreso.cuentaReceptoraId / Egreso.medioFinancieroId.
+model MedioFinanciero {
+  id        String              @id @default(cuid())
+  empresa   Empresa             @relation(fields: [empresaId], references: [id])
+  empresaId String
+  nombre    String
+  tipo      TipoMedioFinanciero
+  activo    Boolean             @default(true)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+
+  egresos           Egreso[]
+  ingresosReceptora Ingreso[]
+
+  @@index([empresaId])
+  @@map("medios_financieros")
+}
+
+enum MetodoIngreso {
+  TRANSFERENCIA
+  DEPOSITO
+  CHEQUE
+  OTRO
+}
+
+// Estado compartido por Ingreso/Egreso/Factura — nunca se borra un registro
+// financiero, se cancela (mismo criterio que ReposicionGastos/ReciboPago).
+enum EstatusRegistroContable {
+  VIGENTE
+  CANCELADO
+}
+
+enum DireccionFactura {
+  EMITIDA // Conkuali factura a un cliente (Ingreso) — Conkuali es el RFC emisor
+  RECIBIDA // Conkuali recibe la factura de un proveedor (Egreso) — Conkuali es el RFC receptor
+}
+
+// CFDI estructurado — la fuente fiscal principal es SIEMPRE el XML (xmlRef);
+// el PDF es solo la representación/documento adjunto (nunca se lee por OCR).
+// Una Factura puede decorar varios Egresos ("1 factura cubre varios gastos",
+// V1) — la relación inversa ("1 gasto con varias facturas") queda para V2,
+// necesitaría una tabla de unión con monto por factura (mismo patrón que
+// AbonoReposicion) que no se construye todavía.
+model Factura {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  direccion DireccionFactura
+
+  xmlRef    String
+  xmlNombre String
+  pdfRef    String?
+  pdfNombre String?
+
+  // Campos parseados del XML CFDI — nunca recalculados después de cargarse,
+  // el XML original (xmlRef) sigue siendo la fuente de verdad si hay dudas.
+  uuid                String
+  rfcEmisor           String
+  razonSocialEmisor   String
+  rfcReceptor         String
+  razonSocialReceptor String?
+  fechaEmision        DateTime
+  subtotal            Decimal  @db.Decimal(14, 2)
+  totalImpuestos      Decimal  @default(0) @db.Decimal(14, 2)
+  total               Decimal  @db.Decimal(14, 2)
+  moneda              String
+  // MetodoPago = PUE/PPD (forma de exigibilidad); FormaPago = catálogo SAT
+  // (01 efectivo, 03 transferencia, etc.) — dos atributos CFDI distintos, se
+  // guardan tal cual vienen, sin traducir a nuestro propio enum.
+  metodoPago String?
+  formaPago  String?
+  serie      String?
+  folio      String?
+
+  estatus EstatusRegistroContable @default(VIGENTE)
+
+  egresos  Egreso[]
+  ingresos Ingreso[]
+
+  subidoPor   Usuario  @relation("FacturaSubida", fields: [subidoPorId], references: [id])
+  subidoPorId String
+  createdAt   DateTime @default(now())
+
+  // Un UUID de CFDI es único por definición — se hace cumplir por Empresa
+  // (aislamiento multiempresa), no globalmente.
+  @@unique([empresaId, uuid])
+  @@index([empresaId])
+  @@map("facturas")
+}
+
+// Egreso fiscal — decora un GastoObra existente (gastoObraId, la relación
+// común) SIN duplicar nada de él, o representa un egreso manual sin origen
+// operativo (gastoObraId null, ej. una comisión bancaria) usando sus propios
+// campos. Se crea perezosamente: mientras nadie agregue medio financiero,
+// factura o notas contables a un GastoObra fiscalmente relevante
+// (requiereFactura = true), no existe ninguna fila aquí — la lista de
+// Egresos de Contabilidad se arma leyendo GastoObra directo y decorando con
+// esta fila SI existe (Contabilidad, septiembre 2026).
+model Egreso {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  gastoObra   GastoObra? @relation(fields: [gastoObraId], references: [id])
+  gastoObraId String?    @unique
+
+  // Solo se usan/requieren cuando gastoObraId es null (egreso manual) — con
+  // gastoObraId presente, fecha/concepto/monto/proyecto se LEEN del gasto,
+  // nunca se vuelven a capturar aquí.
+  fecha      DateTime?
+  concepto   String?
+  monto      Decimal?  @db.Decimal(14, 2)
+  proyecto   Proyecto? @relation(fields: [proyectoId], references: [id])
+  proyectoId String?
+
+  medioFinanciero   MedioFinanciero? @relation(fields: [medioFinancieroId], references: [id])
+  medioFinancieroId String?
+
+  factura   Factura? @relation(fields: [facturaId], references: [id])
+  facturaId String?
+
+  notasContables String?
+
+  estatus EstatusRegistroContable @default(VIGENTE)
+
+  registradoPor   Usuario  @relation("EgresoRegistrado", fields: [registradoPorId], references: [id])
+  registradoPorId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([facturaId])
+  @@index([medioFinancieroId])
+  @@map("egresos")
+}
+
+// Ingreso fiscal — mismo criterio que Egreso: decora un
+// MovimientoFinancieroCliente existente (pago de cliente ya trackeado) sin
+// duplicar monto/fecha/proyecto, o representa un ingreso manual sin origen
+// previo (ej. un anticipo todavía no ligado a una estimación).
+model Ingreso {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  movimientoFinancieroCliente   MovimientoFinancieroCliente? @relation(fields: [movimientoFinancieroClienteId], references: [id])
+  movimientoFinancieroClienteId String?                      @unique
+
+  // Solo se usan/requieren cuando movimientoFinancieroClienteId es null.
+  fecha      DateTime?
+  proyecto   Proyecto? @relation(fields: [proyectoId], references: [id])
+  proyectoId String?
+  monto      Decimal?  @db.Decimal(14, 2)
+  concepto   String?
+  // Texto libre — no existe catálogo de Clientes con RFC en el sistema
+  // (mismo criterio que Proyecto.cliente), fuera de alcance de esta etapa.
+  clienteNombre String?
+
+  metodoIngreso     MetodoIngreso?
+  cuentaReceptora   MedioFinanciero? @relation(fields: [cuentaReceptoraId], references: [id])
+  cuentaReceptoraId String?
+
+  referencia        String?
+  comprobanteRef    String?
+  comprobanteNombre String?
+
+  factura   Factura? @relation(fields: [facturaId], references: [id])
+  facturaId String?
+
+  // Equivalente a GastoObra.requiereFactura — permite derivar "Facturas
+  // pendientes" del lado Ingreso con el mismo criterio (sin Egreso/Ingreso
+  // materializado de por medio para el lado Gastos; aquí si aplica porque
+  // Ingreso manual sí es la única fuente de este dato).
+  facturaEsperada Boolean @default(false)
+
+  comentarios String?
+
+  estatus EstatusRegistroContable @default(VIGENTE)
+
+  registradoPor   Usuario  @relation("IngresoRegistrado", fields: [registradoPorId], references: [id])
+  registradoPorId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([empresaId])
+  @@index([facturaId])
+  @@map("ingresos")
 }

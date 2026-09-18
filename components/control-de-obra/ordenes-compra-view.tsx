@@ -14,6 +14,7 @@ import {
 } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import { FormularioOrdenCompra } from "./formulario-orden-compra";
 import { FormularioGastoDesdeOC } from "./formulario-gasto-desde-oc";
+import { FormularioRecepcionOC } from "./formulario-recepcion-oc";
 import type { FilaOrdenCompra } from "@/lib/server/control-de-obra/ordenes-compra";
 
 const ESTATUS_ESTILO: Record<string, string> = {
@@ -32,6 +33,20 @@ const ESTATUS_LABEL: Record<string, string> = {
   CANCELADA: "Cancelada",
 };
 
+// Recepción — SIEMPRE un indicador separado de estatus/estatusPago (Compras,
+// septiembre 2026), nunca combinado en una sola insignia.
+const RECEPCION_ESTILO: Record<string, string> = {
+  PENDIENTE: "bg-black/[0.05] text-[var(--muted)]",
+  PARCIAL: "bg-amber-100 text-amber-800",
+  COMPLETA: "bg-emerald-100 text-emerald-700",
+};
+
+const RECEPCION_LABEL: Record<string, string> = {
+  PENDIENTE: "Recepción pendiente",
+  PARCIAL: "Recibido parcial",
+  COMPLETA: "Recibido completo",
+};
+
 export function OrdenesCompraView({
   proyectoId,
   semanaId,
@@ -48,6 +63,7 @@ export function OrdenesCompraView({
   const [modalAbierto, setModalAbierto] = useState(false);
   const [ordenEditando, setOrdenEditando] = useState<FilaOrdenCompra | null>(null);
   const [ordenParaGasto, setOrdenParaGasto] = useState<FilaOrdenCompra | null>(null);
+  const [ordenParaRecepcion, setOrdenParaRecepcion] = useState<FilaOrdenCompra | null>(null);
 
   return (
     <div className="space-y-4">
@@ -71,12 +87,17 @@ export function OrdenesCompraView({
                       <p className="font-medium text-[var(--foreground)]">
                         {oc.folio} · {oc.proveedorNombre}
                       </p>
-                      <p className="mt-0.5 text-xs text-[var(--muted)]">
-                        {formatearFecha(new Date(oc.fecha))} ·{" "}
+                      <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
+                        {formatearFecha(new Date(oc.fecha))}
                         <span className={`rounded-full px-2 py-0.5 ${ESTATUS_ESTILO[oc.estatus]}`}>
                           {ESTATUS_LABEL[oc.estatus]}
                         </span>
-                        {oc.estatusPago && ` · Pago: ${oc.estatusPago}`}
+                        {oc.estatusPago && <span>Pago: {oc.estatusPago}</span>}
+                        {oc.estatus === "AUTORIZADA" && (
+                          <span className={`rounded-full px-2 py-0.5 ${RECEPCION_ESTILO[oc.estatusRecepcion]}`}>
+                            {RECEPCION_LABEL[oc.estatusRecepcion]}
+                          </span>
+                        )}
                       </p>
                     </div>
                     <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
@@ -138,7 +159,7 @@ export function OrdenesCompraView({
                         Cancelar
                       </button>
                     )}
-                    {oc.estatus === "AUTORIZADA" && puedeAutorizar && (
+                    {oc.estatus === "AUTORIZADA" && puedeAutorizar && !oc.tieneGastoGenerado && (
                       <button
                         type="button"
                         onClick={() => setOrdenParaGasto(oc)}
@@ -147,6 +168,23 @@ export function OrdenesCompraView({
                         Registrar gasto real
                       </button>
                     )}
+                    {oc.estatus === "AUTORIZADA" && oc.estatusRecepcion !== "COMPLETA" && (
+                      <button
+                        type="button"
+                        onClick={() => setOrdenParaRecepcion(oc)}
+                        className="text-sm font-medium text-[var(--brand)] hover:underline"
+                      >
+                        Marcar recepción
+                      </button>
+                    )}
+                    <a
+                      href={`/api/control-de-obra/proyectos/${proyectoId}/ordenes-compra/${oc.id}/pdf`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-medium text-[var(--muted)] hover:underline"
+                    >
+                      Descargar PDF
+                    </a>
                   </div>
                 </div>
               </details>
@@ -173,6 +211,14 @@ export function OrdenesCompraView({
           proyectoId={proyectoId}
           orden={ordenParaGasto}
           onClose={() => setOrdenParaGasto(null)}
+        />
+      )}
+
+      {ordenParaRecepcion && (
+        <FormularioRecepcionOC
+          proyectoId={proyectoId}
+          orden={ordenParaRecepcion}
+          onClose={() => setOrdenParaRecepcion(null)}
         />
       )}
     </div>

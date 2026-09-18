@@ -153,12 +153,14 @@ function FormularioProveedor({
   return (
     <form action={formAction} className="space-y-3">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <Input name="nombre" placeholder="Nombre / razón social" required defaultValue={proveedor?.nombre} />
+        <Input name="nombre" placeholder="Nombre comercial" required defaultValue={proveedor?.nombre} />
+        <Input name="razonSocial" placeholder="Razón social (opcional)" defaultValue={proveedor?.razonSocial ?? ""} />
         <Input name="giro" placeholder="Giro (opcional)" defaultValue={proveedor?.giro ?? ""} />
         <Input name="vendedor" placeholder="Vendedor / contacto (opcional)" defaultValue={proveedor?.vendedor ?? ""} />
         <Input name="telefono" placeholder="Teléfono (opcional)" defaultValue={proveedor?.telefono ?? ""} />
         <Input name="credito" placeholder="Crédito (opcional, informativo)" defaultValue={proveedor?.credito ?? ""} />
         <Input name="cuentaBancaria" placeholder="Cuenta bancaria (opcional, informativo)" defaultValue={proveedor?.cuentaBancaria ?? ""} />
+        <Input name="clabe" placeholder="CLABE (18 dígitos, opcional)" defaultValue={proveedor?.clabe ?? ""} />
         <Input name="rfc" placeholder="RFC (opcional)" defaultValue={proveedor?.rfc ?? ""} />
       </div>
       {proveedor && (

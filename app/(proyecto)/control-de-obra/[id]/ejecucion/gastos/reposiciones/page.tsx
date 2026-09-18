@@ -2,7 +2,9 @@ import { requireSession } from "@/lib/server/auth/dal";
 import {
   puedeCapturarGastos,
   puedeAprobarGastos,
+  puedeRegistrarAbonoReposicion,
 } from "@/lib/server/permisos";
+import { asegurarGastosRecurrentesGenerados } from "@/lib/server/control-de-obra/gastos-recurrentes";
 import {
   obtenerOCrearSemana,
   formatearRangoSemana,
@@ -47,6 +49,11 @@ export default async function ReposicionesPage({
   }
 
   const semana = await obtenerOCrearSemana(usuario.empresa.id, parametroAFecha(fechaParam));
+  // Perezoso e idempotente — asegura que los gastos recurrentes de esta
+  // semana ya existan aunque nadie haya entrado antes a Reporte General
+  // (Gastos transversal — recurrentes, septiembre 2026).
+  await asegurarGastosRecurrentesGenerados(usuario.empresa.id, semana.id);
+
   const [gastos, reposiciones, beneficiarios, beneficiarioVinculado] = await Promise.all([
     obtenerGastos(usuario, id, semana.id),
     obtenerReposiciones(usuario, id, semana.id),
@@ -86,6 +93,7 @@ export default async function ReposicionesPage({
         beneficiarioVinculado={beneficiarioVinculado}
         dashboard={dashboard}
         puedeAprobar={puedeAprobarGastos(usuario)}
+        puedeRegistrarAbono={puedeRegistrarAbonoReposicion(usuario)}
         usuarioId={usuario.id}
       />
     </div>

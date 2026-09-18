@@ -12,6 +12,10 @@ export default async function GastosLayout({
         variante="secundaria"
         tabs={[
           {
+            href: `/control-de-obra/${id}/ejecucion/gastos/requisiciones`,
+            label: "Requisiciones",
+          },
+          {
             href: `/control-de-obra/${id}/ejecucion/gastos/reposiciones`,
             label: "Reposiciones",
           },

@@ -14,8 +14,10 @@ import {
   enviarGastoARevisionAction,
   aprobarGastoAction,
   rechazarGastoAction,
+  registrarAbonoReposicionAction,
   type AprobarGastoFormState,
   type RechazarGastoFormState,
+  type AbonoReposicionFormState,
 } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import { FormularioGasto } from "./formulario-gasto";
 import type { FilaGasto, DashboardGastos } from "@/lib/server/control-de-obra/gastos";
@@ -57,6 +59,7 @@ export function GastosReposicionesView({
   beneficiarioVinculado,
   dashboard,
   puedeAprobar,
+  puedeRegistrarAbono,
   usuarioId,
 }: {
   proyectoId: string;
@@ -67,6 +70,7 @@ export function GastosReposicionesView({
   beneficiarioVinculado: { id: string; nombre: string } | null;
   dashboard: DashboardGastos;
   puedeAprobar: boolean;
+  puedeRegistrarAbono: boolean;
   usuarioId: string;
 }) {
   const [modalNuevoGasto, setModalNuevoGasto] = useState(false);
@@ -245,6 +249,11 @@ export function GastosReposicionesView({
                       </p>
                     </div>
                     <div className="flex items-center gap-3">
+                      {r.esParcial && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Reposición parcial
+                        </span>
+                      )}
                       <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
                         {formatMoney(r.total)}
                       </p>
@@ -267,6 +276,42 @@ export function GastosReposicionesView({
                       </div>
                     ))}
                   </div>
+
+                  {r.cerrada ? null : (
+                    <div className="mt-3 border-t border-[var(--border)] pt-3">
+                      <div className="mb-2 flex items-center justify-between text-sm">
+                        <span className="text-[var(--muted)]">Repuesto</span>
+                        <span className="tabular-nums text-[var(--foreground)]">
+                          {formatMoney(r.abonado)}
+                        </span>
+                      </div>
+                      <div className="mb-2 flex items-center justify-between text-sm font-medium">
+                        <span className="text-[var(--foreground)]">Saldo pendiente</span>
+                        <span className="tabular-nums text-[var(--foreground)]">
+                          {formatMoney(r.saldoPendiente)}
+                        </span>
+                      </div>
+                      {r.abonos.length > 0 && (
+                        <ul className="mb-2 space-y-0.5 text-xs text-[var(--muted)]">
+                          {r.abonos.map((a) => (
+                            <li key={a.id} className="flex items-center justify-between">
+                              <span>
+                                {formatearFecha(new Date(a.fecha))} · {a.registradoPorNombre}
+                              </span>
+                              <span className="tabular-nums">{formatMoney(a.monto)}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      {puedeRegistrarAbono && r.saldoPendiente > 0 && (
+                        <FormularioAbonoReposicion
+                          proyectoId={proyectoId}
+                          reposicionGastosId={r.id}
+                          saldoPendiente={r.saldoPendiente}
+                        />
+                      )}
+                    </div>
+                  )}
                 </details>
               </Card>
             ))}
@@ -338,6 +383,68 @@ function BotonAprobarGasto({ proyectoId, gastoId }: { proyectoId: string; gastoI
         {pending ? "Aprobando…" : "Aprobar"}
       </button>
       {state?.error && <p className="mt-1 text-[10px] text-red-700">{state.error}</p>}
+    </form>
+  );
+}
+
+function FormularioAbonoReposicion({
+  proyectoId,
+  reposicionGastosId,
+  saldoPendiente,
+}: {
+  proyectoId: string;
+  reposicionGastosId: string;
+  saldoPendiente: number;
+}) {
+  const action = registrarAbonoReposicionAction.bind(null, proyectoId, reposicionGastosId);
+  const [state, formAction, pending] = useActionState<AbonoReposicionFormState, FormData>(
+    action,
+    undefined
+  );
+  const hoy = new Date().toISOString().slice(0, 10);
+
+  if (state?.guardado) {
+    return <p className="text-sm text-emerald-700">Abono registrado ✓</p>;
+  }
+
+  return (
+    <form action={formAction} className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <input
+        name="monto"
+        type="number"
+        step="0.01"
+        min="0.01"
+        max={saldoPendiente}
+        required
+        placeholder={`Monto (máx. ${formatMoney(saldoPendiente)})`}
+        className="col-span-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm sm:col-span-1"
+      />
+      <input
+        name="fecha"
+        type="date"
+        required
+        defaultValue={hoy}
+        className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+      />
+      <select
+        name="metodoPago"
+        required
+        defaultValue=""
+        className="rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2.5 py-2 text-sm"
+      >
+        <option value="" disabled>
+          Método
+        </option>
+        {Object.entries(METODO_PAGO_LABEL).map(([value, label]) => (
+          <option key={value} value={value}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <Button type="submit" disabled={pending} className="px-3 py-2 text-xs">
+        {pending ? "Guardando…" : "Registrar abono"}
+      </Button>
+      {state?.error && <p className="col-span-full text-xs text-red-700">{state.error}</p>}
     </form>
   );
 }

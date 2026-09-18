@@ -107,11 +107,11 @@ function ContenidoDetalleCorte({
       <div className="mb-5 flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-[var(--foreground)]">
-            Corte {String(detalle.numero).padStart(3, "0")} — Semana {detalle.semanaNumero}/
-            {detalle.semanaAnio}
+            {detalle.numeroEstimacion} — Semana {detalle.semanaNumero}/{detalle.semanaAnio}
           </h2>
           <p className="mt-0.5 text-xs text-[var(--muted)]">
             {detalle.proyectoNombre} · {detalle.contratistaNombre}
+            {detalle.especialidadContratista ? ` (${detalle.especialidadContratista})` : ""}
           </p>
         </div>
         <button
@@ -136,6 +136,25 @@ function ContenidoDetalleCorte({
         <Dato etiqueta="Importe neto" valor={formatMoney(detalle.montoNeto)} destacar />
       </div>
 
+      {detalle.resumenContractual && (
+        <div className="mt-5 border-t border-[var(--border)] pt-4">
+          <p className="mb-3 text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
+            Resumen contractual
+          </p>
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
+            <Dato etiqueta="Monto contratado" valor={formatMoney(detalle.resumenContractual.montoContrato)} />
+            <Dato etiqueta="Estimado anterior" valor={formatMoney(detalle.resumenContractual.estimadoAnterior)} />
+            <Dato etiqueta="Esta estimación" valor={formatMoney(detalle.resumenContractual.estaEstimacion)} />
+            <Dato etiqueta="Estimado acumulado" valor={formatMoney(detalle.resumenContractual.estimadoAcumulado)} />
+            <Dato etiqueta="Saldo contractual" valor={formatMoney(detalle.resumenContractual.saldoContractual)} />
+            <Dato
+              etiqueta="% avance"
+              valor={`${detalle.resumenContractual.porcentajeAvance.toLocaleString("es-MX", { maximumFractionDigits: 1 })}%`}
+            />
+          </div>
+        </div>
+      )}
+
       <div className="mt-5 border-t border-[var(--border)] pt-4">
         <p className="mb-3 text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
           Detalle congelado (no se recalcula)
@@ -146,7 +165,9 @@ function ContenidoDetalleCorte({
               <Th>Partida</Th>
               <Th>Concepto</Th>
               <Th>Unidad</Th>
-              <Th className="text-right">Cantidad</Th>
+              <Th className="text-right">Contratada</Th>
+              <Th className="text-right">Esta semana</Th>
+              <Th className="text-right">Acumulada</Th>
               <Th className="text-right">P.U.</Th>
               <Th className="text-right">Importe</Th>
             </Tr>
@@ -158,7 +179,13 @@ function ContenidoDetalleCorte({
                 <Td className="font-medium">{d.descripcionConcepto}</Td>
                 <Td className="text-[var(--muted)]">{d.unidad}</Td>
                 <Td className="text-right tabular-nums">
+                  {d.cantidadContratada.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
+                </Td>
+                <Td className="text-right tabular-nums">
                   {d.cantidadEjecutada.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
+                </Td>
+                <Td className="text-right tabular-nums">
+                  {d.cantidadAcumulada.toLocaleString("es-MX", { maximumFractionDigits: 3 })}
                 </Td>
                 <Td className="text-right tabular-nums">{formatMoney(d.precioUnitarioContratista)}</Td>
                 <Td className="text-right font-medium tabular-nums">{formatMoney(d.importe)}</Td>

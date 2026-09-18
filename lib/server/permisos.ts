@@ -1,4 +1,5 @@
 import "server-only";
+import { db } from "@/lib/server/db";
 import type { UsuarioSesion } from "@/lib/server/session";
 
 /**
@@ -29,6 +30,23 @@ export function esMaster(usuario: UsuarioSesion): boolean {
   return usuario.rol === "MASTER";
 }
 
+// Único punto de construcción de "qué módulos ve este usuario en la nav" —
+// recorre TODO el catálogo de Modulo (no solo lo que trae el Plan) y filtra
+// con empresaTieneModulo, así un override de Portal Master que CONCEDE un
+// módulo fuera del Plan también aparece. Antes, el nav global
+// (app/(app)/layout.tsx) leía usuario.empresa.plan.modulos directo, sin
+// pasar por empresaTieneModulo — un override que apagara o encendiera un
+// módulo específico por Empresa no tenía ningún efecto visual en el sidebar
+// (bug encontrado en sesión, Gastos transversal, septiembre 2026). Centraliza
+// la resolución aquí para que ninguna otra pantalla necesite reimplementar
+// este mismo recorrido.
+export async function obtenerModulosVisibles(
+  usuario: UsuarioSesion
+): Promise<{ clave: string; nombre: string }[]> {
+  const catalogo = await db.modulo.findMany({ select: { clave: true, nombre: true } });
+  return catalogo.filter((m) => empresaTieneModulo(usuario, m.clave));
+}
+
 /**
  * Administrar el catálogo de proyectos (crear/editar/cambiar estatus) es
  * exclusivo de Administrador/Director/Master — el Supervisor puede consultar
@@ -49,6 +67,17 @@ export function puedeAdministrarProyectos(usuario: UsuarioSesion): boolean {
  * casualmente desde esta pantalla).
  */
 export function puedeEliminarProyectos(usuario: UsuarioSesion): boolean {
+  return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
+}
+
+/**
+ * Eliminar una Partida o un Concepto de Contrato General — mismo criterio
+ * restringido que eliminar proyectos/catálogos: es irreversible cuando no
+ * hay historial (borrado real) y afecta presupuesto/contrato cuando sí lo
+ * hay (queda cancelado), así que sigue el mismo rol-set sin Master (Eliminar
+ * Partidas/Conceptos, septiembre 2026).
+ */
+export function puedeEliminarEstructuraContractual(usuario: UsuarioSesion): boolean {
   return usuario.rol === "ADMINISTRADOR" || usuario.rol === "DIRECTOR";
 }
 
@@ -130,15 +159,17 @@ export function puedeVerContratoGeneralPrivado(usuario: UsuarioSesion): boolean 
 
 /**
  * Recibos financieros (expediente de contratista: estimado/pagado acumulado,
- * saldo, historial de cortes, generar/ver/subir evidencia de recibo) — misma
- * capa de información privada que Contrato General Privado, aunque viva
- * dentro de Avance/Contratistas en vez de una ruta /privado/ propia
- * (04-modulo-control-de-obra.md, sección 49.9 y "Recibo de Pago" de
- * 02-control-de-obra.md). Supervisor no ve precios de recibo ni puede
- * generar/subir nada.
+ * saldo, historial de cortes/estimaciones, generar/ver/subir evidencia de
+ * recibo) — deliberadamente SIN exigir Vista privada (mismo criterio que
+ * puedeVerFinancieroClienteOperativo/puedeRegistrarMovimientoFinancieroClienteOperativo,
+ * corregido en sesión: una obra sin capa privada, o un Administrador/Director
+ * con Vista privada apagada, sigue necesitando ver y generar las estimaciones
+ * de sus contratistas sin depender de ese interruptor — septiembre 2026). El
+ * rol-set no cambia (ADMINISTRADOR/DIRECTOR, igual que puedeCerrarSemana):
+ * Supervisor sigue sin ver precios de recibo ni poder generar/subir nada.
  */
 export function puedeVerRecibosFinancieros(usuario: UsuarioSesion): boolean {
-  return puedeVerInformacionPrivada(usuario);
+  return puedeCerrarSemana(usuario);
 }
 
 /**
@@ -246,6 +277,112 @@ export function puedeAprobarGastos(usuario: UsuarioSesion): boolean {
  */
 export function puedeAutorizarOrdenesCompra(usuario: UsuarioSesion): boolean {
   return puedeCerrarSemana(usuario);
+}
+
+/**
+ * Capturar/editar un Gasto de una CATEGORÍA específica — Gastos transversal,
+ * septiembre 2026. Extiende puedeCapturarGastos (el techo de rol de siempre)
+ * con un segundo eje, por dato: las categorías marcadas sensibles en
+ * lib/control-de-obra/categorias-gasto.ts (Nómina, Renta, Impuestos,
+ * Servicios de Empresa) exigen además puedeAprobarGastos — un Supervisor
+ * sigue capturando cualquier categoría operativa (obra completa, y de
+ * Empresa: gasolina/papelería/viáticos) exactamente igual que hoy, pero no
+ * puede registrar categorías financieras sensibles de Empresa aunque tenga
+ * el permiso general de capturar gastos. La sensibilidad es dato del
+ * catálogo (una sola fuente), nunca un segundo hardcode por rol aquí.
+ * Server-side siempre — nunca basta con ocultar la opción en el <select>.
+ */
+export function puedeCapturarCategoriaGasto(
+  usuario: UsuarioSesion,
+  categoriaEsSensible: boolean
+): boolean {
+  if (!puedeCapturarGastos(usuario)) return false;
+  if (categoriaEsSensible) return puedeAprobarGastos(usuario);
+  return true;
+}
+
+/**
+ * Ver el listado/desglose de Gastos de Empresa en categorías sensibles
+ * (Nómina, Renta, Impuestos, Servicios de Empresa) — mismo rol-set que
+ * capturarlas (puedeAprobarGastos: Administrador/Director). Un Supervisor
+ * sin este permiso sigue viendo el total de Gastos de Empresa y sus propias
+ * categorías operativas, pero las filas/montos sensibles se omiten de la
+ * lectura, no solo se ocultan en la UI (Gastos transversal, septiembre
+ * 2026).
+ */
+export function puedeVerGastosEmpresaSensibles(usuario: UsuarioSesion): boolean {
+  return puedeAprobarGastos(usuario);
+}
+
+/**
+ * Crear/editar/activar/desactivar una plantilla de Gasto Recurrente —
+ * definir una obligación recurrente es más sensible que capturar un gasto
+ * puntual, así que exige el mismo techo que aprobar gastos (Administrador/
+ * Director). Un Supervisor puede seguir interactuando con una OCURRENCIA ya
+ * generada (completar el monto variable, mandarla a revisión) exactamente
+ * con los mismos permisos que cualquier otro GastoObra — solo la plantilla
+ * en sí queda fuera de su alcance (Gastos transversal, septiembre 2026).
+ */
+export function puedeAdministrarGastosRecurrentes(usuario: UsuarioSesion): boolean {
+  return puedeAprobarGastos(usuario);
+}
+
+/**
+ * Registrar un abono (pago parcial) contra una Reposición — mismo nivel de
+ * autorización que liquidar un pago: es un evento financiero real, nunca
+ * algo que un Supervisor pueda declarar (Gastos transversal, septiembre
+ * 2026).
+ */
+export function puedeRegistrarAbonoReposicion(usuario: UsuarioSesion): boolean {
+  return puedeLiquidarPagos(usuario);
+}
+
+/**
+ * Techo de acceso a TODO el módulo Contabilidad (Resumen/Ingresos/Egresos/
+ * Facturas pendientes/Cuentas) — Administrador/Director únicamente, nunca
+ * Master (rol de plataforma, no opera dentro de una Empresa) ni Supervisor,
+ * aunque Supervisor siga originando los Gastos que Contabilidad después
+ * decora (Contabilidad, septiembre 2026). No se combina con Vista privada —
+ * es un dominio distinto de Contrato General Privado/Cliente Priv.
+ */
+export function puedeVerContabilidad(usuario: UsuarioSesion): boolean {
+  return puedeAprobarGastos(usuario);
+}
+
+/**
+ * Registrar un Ingreso/Egreso (manual o decorando un GastoObra/
+ * MovimientoFinancieroCliente existente) — mismo techo que ver el módulo;
+ * Administrador/Director capturan ya con nivel de confianza suficiente, sin
+ * un paso de aprobación aparte (mismo criterio que Gastos capturados
+ * directamente por Admin/Director).
+ */
+export function puedeRegistrarMovimientoContable(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
+}
+
+/**
+ * Cargar un XML/PDF de Factura (CFDI) y vincularlo a un Egreso/Ingreso — es
+ * una acción de Contabilidad, no de Gastos: el checkbox "☐ lleva factura" y
+ * adjuntar una foto/PDF simple siguen siendo de Supervisor vía
+ * puedeCapturarGastos, sin cambio; la factura estructurada exige el mismo
+ * techo que el resto del módulo.
+ */
+export function puedeCargarFacturaCFDI(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
+}
+
+/** Editar datos fiscales ya cargados de una Factura — mismo techo. */
+export function puedeEditarDatosFiscales(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
+}
+
+/**
+ * Cancelar (nunca eliminar) un Ingreso/Egreso/Factura — mismo criterio que
+ * el resto del sistema financiero (ReposicionGastos/ReciboPago: estatus, no
+ * DELETE). Mismo techo que el resto del módulo.
+ */
+export function puedeCancelarRegistroContable(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
 }
 
 /**

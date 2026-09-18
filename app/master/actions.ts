@@ -11,6 +11,7 @@ import {
   cambiarPrivadoEmpresa,
   actualizarModuloEmpresa,
   actualizarLogoEmpresa,
+  actualizarConfiguracionRecibosEmpresa,
   crearUsuarioEmpresa,
   cambiarEstatusUsuarioEmpresa,
   regenerarPasswordUsuarioEmpresa,
@@ -156,6 +157,25 @@ export async function quitarLogoEmpresaAction(empresaId: string) {
   await actualizarLogoEmpresa(usuario, empresaId, null);
   revalidatePath(`/master/empresas/${empresaId}`);
   revalidatePath("/master/empresas");
+}
+
+export async function actualizarConfiguracionRecibosAction(
+  empresaId: string,
+  _state: MasterFormState,
+  formData: FormData
+): Promise<MasterFormState> {
+  const usuario = await requireSession();
+  try {
+    await actualizarConfiguracionRecibosEmpresa(usuario, empresaId, {
+      reciboMostrarLeyenda: formData.get("reciboMostrarLeyenda") === "on",
+      reciboTituloLeyenda: formData.get("reciboTituloLeyenda"),
+      reciboLeyenda: opcional(formData.get("reciboLeyenda")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/master/empresas/${empresaId}`);
+  return { guardado: true };
 }
 
 export async function crearUsuarioEmpresaAction(

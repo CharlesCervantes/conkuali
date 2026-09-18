@@ -24,6 +24,31 @@ export function ResumenControlContractual({
 }) {
   return (
     <div className="space-y-4">
+      {/* Estado de cuenta del cliente — CONTRATO/ESTIMADO/COBRADO/POR COBRAR
+          (Cobros de cliente, septiembre 2026). Vive aquí, dentro de Cliente/
+          Cliente Priv., no en un módulo aparte. */}
+      <Card className="enter p-5">
+        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Dato etiqueta="Contrato" valor={formatMoney(datos.avanceContractual.montoContrato)} />
+          <Dato etiqueta="Estimado" valor={formatMoney(datos.avanceContractual.trabajosEstimados)} />
+          {datos.financiero ? (
+            <>
+              <Dato etiqueta="Cobrado" valor={formatMoney(datos.financiero.totalCubierto)} />
+              <Dato
+                etiqueta="Por cobrar"
+                valor={formatMoney(datos.financiero.pendienteFinancieroReal)}
+                resaltar={datos.financiero.pendienteFinancieroReal > 0}
+              />
+            </>
+          ) : (
+            <>
+              <Dato etiqueta="Cobrado" valor="—" />
+              <Dato etiqueta="Por cobrar" valor="—" />
+            </>
+          )}
+        </dl>
+      </Card>
+
       <Card className="enter p-5">
         <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
           Información contractual
@@ -55,8 +80,8 @@ export function ResumenControlContractual({
         </p>
         <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
           <Dato
-            etiqueta="Total estimado emitido"
-            valor={formatMoney(datos.avanceContractual.totalEstimado)}
+            etiqueta="Trabajos contractuales estimados"
+            valor={formatMoney(datos.avanceContractual.trabajosEstimados)}
           />
           <Dato
             etiqueta="Saldo contractual por ejercer"
@@ -68,22 +93,6 @@ export function ResumenControlContractual({
           />
         </dl>
       </Card>
-
-      {datos.financiero && (
-        <Card className="enter p-5">
-          <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
-            Situación financiera real
-          </p>
-          <dl className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3">
-            <Dato etiqueta="Total cubierto" valor={formatMoney(datos.financiero.totalCubierto)} />
-            <Dato
-              etiqueta="Pendiente por cobrar"
-              valor={formatMoney(datos.financiero.pendienteFinancieroReal)}
-              resaltar={datos.financiero.pendienteFinancieroReal > 0}
-            />
-          </dl>
-        </Card>
-      )}
 
       {datos.financiero?.fondo && (
         <Card className="enter p-5">

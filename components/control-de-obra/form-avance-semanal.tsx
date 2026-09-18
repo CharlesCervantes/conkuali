@@ -309,7 +309,7 @@ function FilaConcepto({
 
   return (
     <Tr>
-      <Td className="font-medium">{concepto.descripcion}</Td>
+      <Td className="align-top font-medium whitespace-pre-line">{concepto.descripcion}</Td>
       <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
       <Td className="text-right tabular-nums">{formatCantidad(concepto.cantidadTotal)}</Td>
       <Td className="text-right tabular-nums text-[var(--muted)]">

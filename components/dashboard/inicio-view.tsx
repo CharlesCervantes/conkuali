@@ -17,6 +17,12 @@ import {
   CircleCheckBig,
   AlertOctagon,
   PauseCircle,
+  FileWarning,
+  ScanEye,
+  RotateCcw,
+  CalendarClock,
+  ArrowDownLeft,
+  ArrowUpRight,
   type LucideIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
@@ -27,26 +33,28 @@ import type {
   FilaProyectoDashboard,
   EstadoSalud,
   AlertaDashboard,
-  ActividadItem,
+  CompromisoDashboard,
 } from "@/lib/server/dashboard";
 
 // Inicio es un resumen de una sola pantalla, no una bitácora — cada bloque
 // de la fila inferior tiene una altura fija y limita CUÁNTOS registros
 // muestra (nunca deja que la cantidad de datos haga crecer la tarjeta).
-// Rediseño visual, septiembre 2026 — solo presentación (composición,
-// jerarquía, iconografía, color semántico vía tokens de globals.css); los
-// cálculos y las reglas de negocio siguen viviendo enteros e intactos en
-// lib/server/dashboard.ts. Ningún número ni permiso cambia aquí.
+// Rediseño de Inicio, septiembre 2026 — extiende el rediseño visual de
+// agosto/septiembre con Gastos transversal/Contabilidad, sin tocar la
+// técnica de "sin scroll" ya probada. nivelAcceso decide qué tanto se
+// renderiza (Supervisor = "operativo": nunca montos/Contabilidad/
+// compromisos, ni solo ocultos — el dato mismo llega null desde
+// dashboard.ts).
 const MAX_OBRAS_VISIBLES = 4;
 const MAX_PROYECTOS_GRAFICA = 4;
 const MAX_ALERTAS_VISIBLES = 4;
-const MAX_ACTIVIDAD_VISIBLE = 5;
+const MAX_COMPROMISOS_VISIBLES = 5;
 const ALTURA_FILA_INFERIOR = "h-[252px]";
 
 const TIPO_LABEL: Record<string, string> = {
   FORMAL: "Obra",
   MOMENTANEA: "Obra momentánea",
-  OFICINA: "Oficina",
+  OFICINA: "Empresa",
 };
 
 const SALUD_ICONO: Record<EstadoSalud, LucideIcon> = {
@@ -63,9 +71,6 @@ const SALUD_LABEL: Record<EstadoSalud, string> = {
   EN_SEGUIMIENTO: "En seguimiento",
 };
 
-// Clases de texto/fondo suave por estado — un solo lugar, reutilizado por
-// badges de fila, chips de salud y el punto de la franja inferior (sistema
-// visual consistente).
 const SALUD_TOKEN: Record<EstadoSalud, { text: string; soft: string; dot: string }> = {
   SALUDABLE: { text: "text-success", soft: "bg-success-soft", dot: "bg-success" },
   ATENCION: { text: "text-warning", soft: "bg-warning-soft", dot: "bg-warning" },
@@ -80,6 +85,24 @@ const ALERTA_ICONO: Record<AlertaDashboard["tipo"], LucideIcon> = {
   estimaciones_listas: FileCheck,
   pendiente_cobro: HandCoins,
   desviacion: TrendingDown,
+  facturas_pendientes: FileWarning,
+  cfdi_diferencia: ScanEye,
+  reposicion_pendiente_antigua: RotateCcw,
+  gasto_recurrente_variable_pendiente: CalendarClock,
+  sin_avance_reciente: AlertTriangle,
+};
+
+const COMPROMISO_ICONO: Record<CompromisoDashboard["tipo"], LucideIcon> = {
+  gasto_recurrente_variable: CalendarClock,
+  reposicion_pendiente: RotateCcw,
+  pago_pendiente: CreditCard,
+};
+
+const PERIODO_LABEL: Record<ResumenEjecutivo["periodo"], string> = {
+  semana: "la semana",
+  mes: "el mes",
+  mes_anterior: "el mes anterior",
+  acumulado: "lo acumulado",
 };
 
 function pct(n: number | null, decimales = 1): string {
@@ -91,20 +114,26 @@ export function InicioView({ resumen }: { resumen: ResumenEjecutivo }) {
     saludo,
     empresaNombre,
     semanaLabel,
+    nivelAcceso,
     puedeVerPrivado,
     vista,
     periodo,
     obrasActivas,
     avanceFisicoConsolidado,
-    porPagar,
+    porPagarObras,
+    porPagarEmpresa,
     porCobrar,
     flujoDinero,
+    resumenFiscal,
+    utilidadConsolidada,
     alertas,
+    compromisos,
     proyectos,
-    actividadReciente,
   } = resumen;
 
+  const esCompleto = nivelAcceso === "completo";
   const proyectosActivos = proyectos.filter((p) => p.estatus === "ACTIVO");
+  const mostrarUtilidad = esCompleto && vista === "privado" && puedeVerPrivado && utilidadConsolidada !== null;
 
   return (
     <div className="enter space-y-4 lg:h-[calc(100vh-4rem)] lg:flex lg:flex-col lg:overflow-hidden">
@@ -117,26 +146,61 @@ export function InicioView({ resumen }: { resumen: ResumenEjecutivo }) {
         periodo={periodo}
       />
 
-      <div className="grid shrink-0 grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div
+        className={cn(
+          "grid shrink-0 grid-cols-1 gap-4 sm:grid-cols-2",
+          esCompleto ? "lg:grid-cols-5" : "lg:grid-cols-2 lg:max-w-xl"
+        )}
+      >
         <TarjetaObrasActivas obrasActivas={obrasActivas} />
         <TarjetaAvanceFisico avanceFisicoConsolidado={avanceFisicoConsolidado} periodo={periodo} />
-        <TarjetaPorPagar monto={porPagar} />
-        <TarjetaPorCobrar monto={porCobrar} vista={vista} />
+        {esCompleto && resumenFiscal && (
+          <>
+            <TarjetaKPI
+              icono={ArrowDownLeft}
+              tinte="bg-success-soft text-success"
+              etiqueta="Ingresos fiscales"
+              valor={formatMoney(resumenFiscal.ingresosFiscales)}
+              detalle={`${PERIODO_LABEL[periodo]} · Contabilidad`}
+              href="/contabilidad"
+            />
+            <TarjetaKPI
+              icono={ArrowUpRight}
+              tinte="bg-danger-soft text-danger"
+              etiqueta="Egresos fiscales"
+              valor={formatMoney(resumenFiscal.egresosFiscales)}
+              detalle={`${PERIODO_LABEL[periodo]} · Contabilidad`}
+              href="/contabilidad"
+            />
+            <TarjetaKPI
+              icono={Scale}
+              tinte={resumenFiscal.resultado >= 0 ? "bg-success-soft text-success" : "bg-danger-soft text-danger"}
+              etiqueta="Resultado fiscal"
+              valor={formatMoney(resumenFiscal.resultado)}
+              detalle={`${PERIODO_LABEL[periodo]} · Contabilidad`}
+              href="/contabilidad"
+            />
+          </>
+        )}
       </div>
+
+      {mostrarUtilidad && utilidadConsolidada && <FranjaUtilidad utilidad={utilidadConsolidada} />}
 
       <div className="grid grid-cols-1 gap-4 overflow-hidden lg:min-h-0 lg:flex-1 xl:grid-cols-5">
-        <div className="min-h-0 xl:col-span-3">
-          <EstadoDeLasObras proyectos={proyectosActivos} />
+        <div className={cn("min-h-0", esCompleto ? "xl:col-span-3" : "xl:col-span-5")}>
+          <EstadoDeLasObras proyectos={proyectosActivos} mostrarFinanciero={esCompleto} />
         </div>
-        <div className="min-h-0 xl:col-span-2">
-          <GraficaAvance proyectos={proyectosActivos} vista={vista} />
-        </div>
+        {esCompleto && (
+          <div className="min-h-0 xl:col-span-2">
+            <GraficaAvance proyectos={proyectosActivos} vista={vista} />
+          </div>
+        )}
       </div>
 
-      <div className="grid shrink-0 grid-cols-1 gap-4 lg:grid-cols-3">
-        <FlujoDinero flujo={flujoDinero} periodo={periodo} />
+      <div className={cn("grid shrink-0 grid-cols-1 gap-4", esCompleto ? "lg:grid-cols-3" : "")}>
+        {esCompleto && flujoDinero && <FlujoOperativo flujo={flujoDinero} periodo={periodo} porCobrar={porCobrar} porPagarObras={porPagarObras} porPagarEmpresa={porPagarEmpresa} />}
         <RequiereAtencion alertas={alertas} />
-        <ActividadReciente actividad={actividadReciente} />
+        {esCompleto && <ProximosCompromisos compromisos={compromisos} />}
       </div>
     </div>
   );
@@ -159,7 +223,7 @@ function Encabezado({
   semanaLabel: string;
   puedeVerPrivado: boolean;
   vista: "general" | "privado";
-  periodo: "semana" | "mes" | "acumulado";
+  periodo: ResumenEjecutivo["periodo"];
 }) {
   function href(nuevaVista: "general" | "privado", nuevoPeriodo: typeof periodo) {
     return `/dashboard?vista=${nuevaVista}&periodo=${nuevoPeriodo}`;
@@ -191,6 +255,7 @@ function Encabezado({
             [
               ["semana", "Esta semana"],
               ["mes", "Este mes"],
+              ["mes_anterior", "Mes anterior"],
               ["acumulado", "Acumulado"],
             ] as const
           ).map(([valor, etiqueta]) => (
@@ -304,11 +369,11 @@ function TarjetaAvanceFisico({
   periodo,
 }: {
   avanceFisicoConsolidado: ResumenEjecutivo["avanceFisicoConsolidado"];
-  periodo: "semana" | "mes" | "acumulado";
+  periodo: ResumenEjecutivo["periodo"];
 }) {
   const { porcentaje, proyectosIncompletos, deltaVsAnterior } = avanceFisicoConsolidado;
   const delta =
-    deltaVsAnterior !== null && periodo !== "acumulado"
+    deltaVsAnterior !== null && (periodo === "semana" || periodo === "mes")
       ? { texto: `${deltaVsAnterior >= 0 ? "+" : ""}${deltaVsAnterior.toFixed(1)}% vs periodo anterior`, positivo: deltaVsAnterior >= 0 }
       : null;
   const detalle =
@@ -328,29 +393,47 @@ function TarjetaAvanceFisico({
   );
 }
 
-function TarjetaPorPagar({ monto }: { monto: number }) {
-  return (
-    <TarjetaKPI
-      icono={CreditCard}
-      tinte="bg-warning-soft text-warning"
-      etiqueta="Por pagar"
-      valor={monto === 0 ? "Al día" : formatMoney(monto)}
-      detalle="Contratistas, proveedores y gastos"
-      href="/reporte-general"
-    />
-  );
-}
+// ---------------------------------------------------------------------------
+// Utilidad/margen (Privado) — franja compacta, presupuestada como principal,
+// real a la fecha como secundaria. Nunca mezcladas en un solo número.
+// ---------------------------------------------------------------------------
 
-function TarjetaPorCobrar({ monto, vista }: { monto: number; vista: "general" | "privado" }) {
+function FranjaUtilidad({ utilidad }: { utilidad: NonNullable<ResumenEjecutivo["utilidadConsolidada"]> }) {
   return (
-    <TarjetaKPI
-      icono={Wallet}
-      tinte="bg-violet-100 text-violet-700"
-      etiqueta={`Por cobrar (${vista === "privado" ? "Privado" : "General"})`}
-      valor={monto === 0 ? "Sin pendiente" : formatMoney(monto)}
-      detalle="Estimaciones emitidas al cliente"
-      href="/control-de-obra"
-    />
+    <Card className="enter flex shrink-0 flex-wrap items-center justify-between gap-4 p-4">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-100 text-violet-700">
+          <Scale size={16} />
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold tracking-wide text-[var(--muted)] uppercase">
+            Utilidad presupuestada (línea base)
+          </p>
+          <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
+            {formatMoney(utilidad.utilidadPresupuestada)}
+            {utilidad.margenPresupuestadoPct !== null && (
+              <span className="ml-1.5 text-xs font-medium text-[var(--muted)]">
+                margen {pct(utilidad.margenPresupuestadoPct, 1)}
+              </span>
+            )}
+          </p>
+        </div>
+      </div>
+      <div className="text-right">
+        <p className="text-[11px] font-semibold tracking-wide text-[var(--muted)] uppercase">Utilidad real a la fecha</p>
+        <p
+          className={cn(
+            "text-sm font-semibold tabular-nums",
+            utilidad.utilidadReal >= 0 ? "text-success" : "text-danger"
+          )}
+        >
+          {formatMoney(utilidad.utilidadReal)}
+          {utilidad.margenRealPct !== null && (
+            <span className="ml-1.5 text-xs font-medium text-[var(--muted)]">margen {pct(utilidad.margenRealPct, 1)}</span>
+          )}
+        </p>
+      </div>
+    </Card>
   );
 }
 
@@ -358,7 +441,13 @@ function TarjetaPorCobrar({ monto, vista }: { monto: number; vista: "general" | 
 // Estado de las obras
 // ---------------------------------------------------------------------------
 
-function EstadoDeLasObras({ proyectos }: { proyectos: FilaProyectoDashboard[] }) {
+function EstadoDeLasObras({
+  proyectos,
+  mostrarFinanciero,
+}: {
+  proyectos: FilaProyectoDashboard[];
+  mostrarFinanciero: boolean;
+}) {
   if (proyectos.length === 0) {
     return (
       <Card className="flex h-full min-h-[220px] flex-col items-center justify-center gap-2 p-6 text-center">
@@ -384,15 +473,19 @@ function EstadoDeLasObras({ proyectos }: { proyectos: FilaProyectoDashboard[] })
         <span className="w-9 shrink-0" />
         <span className="min-w-0 flex-1">Proyecto</span>
         <span className="w-24 shrink-0 text-right">Avance</span>
-        <span className="w-[110px] shrink-0 text-right">Ejecutado</span>
-        <span className="w-20 shrink-0 text-right">Por pagar</span>
+        {mostrarFinanciero && (
+          <>
+            <span className="w-[110px] shrink-0 text-right">Ejecutado</span>
+            <span className="w-20 shrink-0 text-right">Por pagar</span>
+          </>
+        )}
         <span className="w-[104px] shrink-0 text-right">Estado</span>
         <span className="w-4 shrink-0" />
       </div>
 
       <div className="min-h-0 flex-1 divide-y divide-[var(--border)]/70 overflow-hidden">
         {visibles.map((p) => (
-          <FilaProyecto key={p.id} p={p} />
+          <FilaProyecto key={p.id} p={p} mostrarFinanciero={mostrarFinanciero} />
         ))}
       </div>
 
@@ -408,7 +501,7 @@ function EstadoDeLasObras({ proyectos }: { proyectos: FilaProyectoDashboard[] })
   );
 }
 
-function FilaProyecto({ p }: { p: FilaProyectoDashboard }) {
+function FilaProyecto({ p, mostrarFinanciero }: { p: FilaProyectoDashboard; mostrarFinanciero: boolean }) {
   const salud = SALUD_TOKEN[p.salud];
   const IconoSalud = SALUD_ICONO[p.salud];
   const tipoLabel = p.tipo !== "FORMAL" ? (TIPO_LABEL[p.tipo] ?? p.tipo) : null;
@@ -454,22 +547,26 @@ function FilaProyecto({ p }: { p: FilaProyectoDashboard }) {
           )}
         </div>
 
-        <div className="hidden w-[110px] shrink-0 text-right md:block">
-          <p className="truncate text-[12px] font-medium tabular-nums text-[var(--foreground)]">
-            {p.ejecutado === null ? "—" : formatMoney(p.ejecutado)}
-          </p>
-          {p.montoContrato !== null && p.ejecutado !== null && (
-            <p className="truncate text-[10px] tabular-nums text-[var(--muted)] opacity-70">
-              de {formatMoney(p.montoContrato)}
-            </p>
-          )}
-        </div>
+        {mostrarFinanciero && (
+          <>
+            <div className="hidden w-[110px] shrink-0 text-right md:block">
+              <p className="truncate text-[12px] font-medium tabular-nums text-[var(--foreground)]">
+                {p.ejecutado === null ? "—" : formatMoney(p.ejecutado)}
+              </p>
+              {p.montoContrato !== null && p.ejecutado !== null && (
+                <p className="truncate text-[10px] tabular-nums text-[var(--muted)] opacity-70">
+                  de {formatMoney(p.montoContrato)}
+                </p>
+              )}
+            </div>
 
-        <div className="hidden w-20 shrink-0 text-right md:block">
-          <p className={cn("truncate text-[12px] font-medium tabular-nums", p.porPagar > 0 ? "text-danger" : "text-[var(--muted)]")}>
-            {p.porPagar > 0 ? formatMoney(p.porPagar) : "—"}
-          </p>
-        </div>
+            <div className="hidden w-20 shrink-0 text-right md:block">
+              <p className={cn("truncate text-[12px] font-medium tabular-nums", (p.porPagar ?? 0) > 0 ? "text-danger" : "text-[var(--muted)]")}>
+                {(p.porPagar ?? 0) > 0 ? formatMoney(p.porPagar ?? 0) : "—"}
+              </p>
+            </div>
+          </>
+        )}
 
         <div className="hidden w-[104px] shrink-0 justify-end md:flex">
           <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-medium whitespace-nowrap", salud.soft, salud.text)}>
@@ -555,23 +652,31 @@ function BarraComparativa({ valor, color }: { valor: number | null; color: strin
 }
 
 // ---------------------------------------------------------------------------
-// Flujo de dinero
+// Flujo operativo — DISTINTO de "Resultado fiscal" (Nivel 1, Contabilidad):
+// aquí cuenta TODO movimiento real, con o sin factura (Rediseño de Inicio,
+// C. Fiscal vs Operativo — nunca el mismo número con otro nombre).
 // ---------------------------------------------------------------------------
 
-function FlujoDinero({
+function FlujoOperativo({
   flujo,
   periodo,
+  porCobrar,
+  porPagarObras,
+  porPagarEmpresa,
 }: {
-  flujo: ResumenEjecutivo["flujoDinero"];
-  periodo: "semana" | "mes" | "acumulado";
+  flujo: NonNullable<ResumenEjecutivo["flujoDinero"]>;
+  periodo: ResumenEjecutivo["periodo"];
+  porCobrar: number | null;
+  porPagarObras: number | null;
+  porPagarEmpresa: number | null;
 }) {
-  const etiquetaPeriodo = periodo === "semana" ? "la semana" : periodo === "mes" ? "el mes" : "lo acumulado";
   const vacio = flujo.entradas === 0 && flujo.pagosDeObra === 0;
+  const porPagarTotal = (porPagarObras ?? 0) + (porPagarEmpresa ?? 0);
 
   return (
     <Card className={cn("enter flex flex-col overflow-hidden p-4", ALTURA_FILA_INFERIOR)}>
       <p className="mb-1.5 shrink-0 truncate text-sm font-semibold text-[var(--foreground)]">
-        Flujo de dinero de {etiquetaPeriodo}
+        Flujo operativo de {PERIODO_LABEL[periodo]}
       </p>
       {vacio ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-center">
@@ -614,6 +719,14 @@ function FlujoDinero({
               {formatMoney(flujo.neto)}
             </span>
           </div>
+          {(porPagarTotal > 0 || (porCobrar ?? 0) > 0) && (
+            <div className="flex items-center justify-between text-[10px] text-[var(--muted)]">
+              <span>
+                Por pagar: obras {formatMoney(porPagarObras ?? 0)} · empresa {formatMoney(porPagarEmpresa ?? 0)}
+              </span>
+              <span>Por cobrar: {formatMoney(porCobrar ?? 0)}</span>
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -722,52 +835,58 @@ function RequiereAtencion({ alertas }: { alertas: AlertaDashboard[] }) {
 }
 
 // ---------------------------------------------------------------------------
-// Actividad reciente
+// Próximos compromisos — reemplaza Actividad reciente (Rediseño de Inicio,
+// septiembre 2026). Solo compromisos financieros/operativos accionables,
+// nunca un calendario de todo lo que existe.
 // ---------------------------------------------------------------------------
 
-function ActividadReciente({ actividad }: { actividad: ActividadItem[] }) {
-  const visibles = actividad.slice(0, MAX_ACTIVIDAD_VISIBLE);
+function ProximosCompromisos({ compromisos }: { compromisos: CompromisoDashboard[] }) {
+  const visibles = compromisos.slice(0, MAX_COMPROMISOS_VISIBLES);
+  const restantes = compromisos.length - visibles.length;
+
   return (
     <Card className={cn("enter flex flex-col overflow-hidden p-4", ALTURA_FILA_INFERIOR)}>
-      <p className="mb-1.5 shrink-0 text-sm font-semibold text-[var(--foreground)]">Actividad reciente</p>
-      {visibles.length === 0 ? (
+      <p className="mb-1 shrink-0 text-sm font-semibold text-[var(--foreground)]">Próximos compromisos</p>
+      {compromisos.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-center">
-          <Clock size={20} className="text-[var(--border)]" />
-          <p className="text-xs text-[var(--muted)]">Sin actividad reciente.</p>
+          <CalendarClock size={20} className="text-[var(--border)]" />
+          <p className="text-xs text-[var(--muted)]">Sin compromisos pendientes.</p>
         </div>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-hidden">
-          {visibles.map((item, i) => (
-            <li key={item.id} className="flex gap-2.5">
-              <div className="flex shrink-0 flex-col items-center">
-                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--brand)] ring-4 ring-[var(--brand)]/10" />
-                {i < visibles.length - 1 && <div className="w-px flex-1 bg-[var(--border)]" />}
-              </div>
-              <div className={cn("min-w-0 flex-1", i < visibles.length - 1 ? "pb-2.5" : "")}>
-                <p className="truncate text-xs text-[var(--foreground)]">
-                  {item.descripcion}
-                  {item.monto !== null && <span className="ml-1 font-medium tabular-nums">{formatMoney(item.monto)}</span>}
-                </p>
-                <p className="truncate text-[10px] text-[var(--muted)]">
-                  {item.proyectoNombre ?? ""}
-                  {item.proyectoNombre && " · "}
-                  {formatearRelativo(item.fecha)}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <ul className="min-h-0 flex-1 divide-y divide-[var(--border)]/70 overflow-hidden">
+            {visibles.map((c, i) => {
+              const Icono = COMPROMISO_ICONO[c.tipo];
+              return (
+                <li key={i}>
+                  <Link
+                    href={c.href}
+                    className="-mx-1 flex items-center gap-2.5 rounded-lg px-1 py-1.5 transition-colors duration-150 ease-out hover:bg-black/[0.02]"
+                  >
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--brand)]/10 text-[var(--brand)]">
+                      <Icono size={13} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-[var(--foreground)]">{c.titulo}</p>
+                      <p className="truncate text-[10px] text-[var(--muted)]">{c.detalle}</p>
+                    </div>
+                    {c.monto !== null && (
+                      <span className="shrink-0 text-xs font-semibold tabular-nums text-[var(--foreground)]">
+                        {formatMoney(c.monto)}
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+          {restantes > 0 && (
+            <p className="shrink-0 pt-1 text-center text-[11px] text-[var(--muted)]">
+              +{restantes} más
+            </p>
+          )}
+        </div>
       )}
     </Card>
   );
 }
-
-function formatearRelativo(iso: string): string {
-  const fecha = new Date(iso);
-  const dias = Math.floor((Date.now() - fecha.getTime()) / 86400000);
-  if (dias <= 0) return "Hoy";
-  if (dias === 1) return "Ayer";
-  if (dias < 7) return `Hace ${dias} días`;
-  return fecha.toLocaleDateString("es-MX", { day: "numeric", month: "short" });
-}
-

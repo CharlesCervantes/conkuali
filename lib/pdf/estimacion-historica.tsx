@@ -170,8 +170,8 @@ function PaginaControlContractual({ datos }: { datos: DatosDocumentoEstimacion }
         <View style={styles.grid}>
           <ItemGrid etiqueta="Monto del contrato" valor={formatMoney(cc.avanceContractual.montoContrato)} />
           <ItemGrid
-            etiqueta="Total estimado hasta esta estimación"
-            valor={formatMoney(cc.avanceContractual.totalEstimado)}
+            etiqueta="Trabajos contractuales estimados"
+            valor={formatMoney(cc.avanceContractual.trabajosEstimados)}
           />
           <ItemGrid
             etiqueta="Saldo contractual por ejercer"
@@ -305,7 +305,7 @@ function PaginaEstimacionSemanal({ datos }: { datos: DatosDocumentoEstimacion })
           <Text style={styles.valorDato}>{formatMoney(es.subtotalTrabajos + es.gastosCobrables)}</Text>
         </View>
         <View style={styles.filaDatos}>
-          <Text style={styles.etiquetaDato}>Administración/Utilidad</Text>
+          <Text style={styles.etiquetaDato}>Administración</Text>
           <Text style={styles.valorDato}>{formatMoney(es.administracion)}</Text>
         </View>
         {es.aplicaIVA && (
