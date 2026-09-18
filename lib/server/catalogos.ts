@@ -259,13 +259,24 @@ export async function eliminarBeneficiario(usuario: UsuarioSesion, beneficiarioI
 // Proveedores
 // ---------------------------------------------------------------------------
 
+// CLABE = 18 dígitos exactos (estándar bancario mexicano) — dato estructurado
+// a diferencia de cuentaBancaria (texto libre). Se valida solo al capturarse
+// algo; nunca se exige retroactivamente a proveedores históricos que todavía
+// no la tengan (Compras, septiembre 2026).
+const ClabeSchema = z
+  .string()
+  .trim()
+  .refine((v) => /^\d{18}$/.test(v), "La CLABE debe tener exactamente 18 dígitos.");
+
 const DatosProveedorSchema = z.object({
   nombre: z.string().trim().min(1, "El nombre es obligatorio."),
+  razonSocial: z.string().trim().optional().nullable(),
   giro: z.string().trim().optional().nullable(),
   vendedor: z.string().trim().optional().nullable(),
   telefono: z.string().trim().optional().nullable(),
   credito: z.string().trim().optional().nullable(),
   cuentaBancaria: z.string().trim().optional().nullable(),
+  clabe: z.union([ClabeSchema, z.literal("")]).optional().nullable(),
   // Solo dato de identidad — sin validación de formato ni lógica fiscal
   // asociada (se reutilizará cuando exista el Estado de Cuenta Fiscal).
   rfc: z.string().trim().optional().nullable(),
@@ -276,11 +287,13 @@ export type FilaProveedorCatalogo = {
   id: string;
   nombre: string;
   activo: boolean;
+  razonSocial: string | null;
   giro: string | null;
   vendedor: string | null;
   telefono: string | null;
   credito: string | null;
   cuentaBancaria: string | null;
+  clabe: string | null;
   rfc: string | null;
   mismaPersonaQue: { id: string; nombre: string } | null;
   puedeEliminar: boolean;
@@ -294,11 +307,13 @@ function filaProveedor(
     activo: boolean;
     mismaPersonaQue: { id: string; nombre: string } | null;
     proveedor: {
+      razonSocial: string | null;
       giro: string | null;
       vendedor: string | null;
       telefono: string | null;
       credito: string | null;
       cuentaBancaria: string | null;
+      clabe: string | null;
       rfc: string | null;
     } | null;
   },
@@ -309,11 +324,13 @@ function filaProveedor(
     nombre: b.nombre,
     activo: b.activo,
     mismaPersonaQue: b.mismaPersonaQue,
+    razonSocial: b.proveedor?.razonSocial ?? null,
     giro: b.proveedor?.giro ?? null,
     vendedor: b.proveedor?.vendedor ?? null,
     telefono: b.proveedor?.telefono ?? null,
     credito: b.proveedor?.credito ?? null,
     cuentaBancaria: b.proveedor?.cuentaBancaria ?? null,
+    clabe: b.proveedor?.clabe ?? null,
     rfc: b.proveedor?.rfc ?? null,
     puedeEliminar: evaluacion.puedeEliminar,
     motivosBloqueoEliminacion: evaluacion.motivos,
@@ -348,11 +365,13 @@ export async function crearProveedor(usuario: UsuarioSesion, datosCrudos: unknow
       nombre: datos.nombre,
       proveedor: {
         create: {
+          razonSocial: datos.razonSocial || null,
           giro: datos.giro || null,
           vendedor: datos.vendedor || null,
           telefono: datos.telefono || null,
           credito: datos.credito || null,
           cuentaBancaria: datos.cuentaBancaria || null,
+          clabe: datos.clabe || null,
           rfc: datos.rfc || null,
         },
       },
@@ -401,11 +420,13 @@ export async function editarProveedor(
         mismaPersonaQueId,
         proveedor: {
           update: {
+            razonSocial: datos.razonSocial || null,
             giro: datos.giro || null,
             vendedor: datos.vendedor || null,
             telefono: datos.telefono || null,
             credito: datos.credito || null,
             cuentaBancaria: datos.cuentaBancaria || null,
+            clabe: datos.clabe || null,
             rfc: datos.rfc || null,
           },
         },

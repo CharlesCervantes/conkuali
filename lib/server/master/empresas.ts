@@ -133,7 +133,10 @@ export async function listarEmpresas(usuario: UsuarioSesion): Promise<FilaEmpres
 
   const proyectosActivosPorEmpresa = await db.proyecto.groupBy({
     by: ["empresaId"],
-    where: { estatus: "ACTIVO" },
+    // tipo != OFICINA — el vehículo interno de Gastos de Empresa no es una
+    // obra real, no debe distorsionar este conteo (Gastos transversal,
+    // septiembre 2026).
+    where: { estatus: "ACTIVO", tipo: { not: "OFICINA" } },
     _count: { _all: true },
   });
   const conteoProyectos = new Map(proyectosActivosPorEmpresa.map((p) => [p.empresaId, p._count._all]));
@@ -183,6 +186,9 @@ export type DetalleEmpresaMaster = {
   createdAt: Date;
   modulos: FilaModuloEmpresa[];
   usuarios: UsuarioEmpresaMaster[];
+  reciboMostrarLeyenda: boolean;
+  reciboTituloLeyenda: string;
+  reciboLeyenda: string | null;
 };
 
 export async function obtenerEmpresa(usuario: UsuarioSesion, empresaId: string): Promise<DetalleEmpresaMaster> {
@@ -203,6 +209,9 @@ export async function obtenerEmpresa(usuario: UsuarioSesion, empresaId: string):
         privadoHabilitado: true,
         planId: true,
         createdAt: true,
+        reciboMostrarLeyenda: true,
+        reciboTituloLeyenda: true,
+        reciboLeyenda: true,
         plan: { select: { nombre: true, modulos: { select: { modulo: { select: { clave: true } } } } } },
         modulosOverride: { select: { moduloId: true, habilitado: true } },
         usuarios: {
@@ -234,6 +243,9 @@ export async function obtenerEmpresa(usuario: UsuarioSesion, empresaId: string):
       empresa.modulosOverride
     ),
     usuarios: empresa.usuarios,
+    reciboMostrarLeyenda: empresa.reciboMostrarLeyenda,
+    reciboTituloLeyenda: empresa.reciboTituloLeyenda,
+    reciboLeyenda: empresa.reciboLeyenda,
   };
 }
 
@@ -447,6 +459,56 @@ export async function actualizarLogoEmpresa(usuario: UsuarioSesion, empresaId: s
     valorAnterior: { logoRef: anterior.logoRef },
     valorNuevo: { logoRef },
   });
+}
+
+// Config del bloque de declaraciones/conformidad de los recibos de
+// contratista — mismo criterio que el resto de config de Empresa (Master-
+// only, congelada por generarRecibo en configuracionSnapshot; un cambio
+// aquí solo afecta recibos generados DESPUÉS, nunca los ya emitidos).
+const EditarConfiguracionRecibosSchema = z.object({
+  reciboMostrarLeyenda: z.boolean(),
+  reciboTituloLeyenda: z.string().trim().min(1, "El título del bloque es obligatorio."),
+  reciboLeyenda: z.string().trim().optional().nullable(),
+});
+
+export async function actualizarConfiguracionRecibosEmpresa(
+  usuario: UsuarioSesion,
+  empresaId: string,
+  datosCrudos: unknown
+) {
+  requerirMaster(usuario);
+  const datos = EditarConfiguracionRecibosSchema.parse(datosCrudos);
+
+  const anterior = await db.empresa.findUnique({
+    where: { id: empresaId },
+    select: { reciboMostrarLeyenda: true, reciboTituloLeyenda: true, reciboLeyenda: true },
+  });
+  if (!anterior) throw new EmpresaNoEncontradaError();
+
+  const actualizada = await db.empresa.update({
+    where: { id: empresaId },
+    data: {
+      reciboMostrarLeyenda: datos.reciboMostrarLeyenda,
+      reciboTituloLeyenda: datos.reciboTituloLeyenda,
+      reciboLeyenda: datos.reciboLeyenda || null,
+    },
+  });
+
+  await registrarAuditoria({
+    empresaId,
+    usuarioId: usuario.id,
+    entidad: "Empresa",
+    entidadId: empresaId,
+    accion: "EDITAR",
+    valorAnterior: anterior,
+    valorNuevo: {
+      reciboMostrarLeyenda: actualizada.reciboMostrarLeyenda,
+      reciboTituloLeyenda: actualizada.reciboTituloLeyenda,
+      reciboLeyenda: actualizada.reciboLeyenda,
+    },
+  });
+
+  return actualizada;
 }
 
 // ---------------------------------------------------------------------------

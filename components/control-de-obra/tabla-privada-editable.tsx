@@ -80,7 +80,7 @@ export function TablaPrivadaEditable({
                 title="Clic para editar el concepto"
                 className="cursor-pointer transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.05]"
               >
-                <Td className="font-medium">{concepto.descripcion}</Td>
+                <Td className="align-top font-medium whitespace-pre-line">{concepto.descripcion}</Td>
                 {mostrarIndirectosHerramienta && (
                   <Td className="text-right tabular-nums text-[var(--muted)]">
                     {formatMoney(importes.costoIndirectos)}
@@ -165,7 +165,7 @@ function FormEditarConceptoPrivado({
         name="cantidadContratadaPrivado"
         value={concepto.cantidadContratadaPrivado ?? ""}
       />
-      <p className="text-sm font-medium text-[var(--foreground)]">{concepto.descripcion}</p>
+      <p className="text-sm font-medium whitespace-pre-line text-[var(--foreground)]">{concepto.descripcion}</p>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <CampoPrivado
           label="P.U."

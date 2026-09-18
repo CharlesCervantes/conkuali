@@ -8,6 +8,7 @@ import {
   obtenerHistorialEstimacionesCliente,
   obtenerAportacionesFondo,
 } from "@/lib/server/control-de-obra/financiero-cliente";
+import { listarMediosFinancieros } from "@/lib/server/contabilidad/medios-financieros";
 import { ResumenControlContractual } from "@/components/control-de-obra/resumen-control-contractual";
 import { HistorialEstimacionesCliente } from "@/components/control-de-obra/historial-estimaciones-cliente";
 import { AportacionesFondo } from "@/components/control-de-obra/aportaciones-fondo";
@@ -31,15 +32,16 @@ export default async function ClienteGeneralControlContractualPage({
   // cliente/privado/control-contractual que sigue exigiéndola.
   const puedeVerFinanciero = puedeVerFinancieroClienteOperativo(usuario);
 
-  const [datos, historial, aportaciones] = await Promise.all([
-    obtenerControlContractual(usuario, id, "operativo"),
-    obtenerHistorialEstimacionesCliente(usuario, id, "operativo"),
-    puedeVerFinanciero ? obtenerAportacionesFondo(usuario, id) : Promise.resolve([]),
-  ]);
-
   // Capa operativo — deliberadamente sin exigir Vista privada, igual que
   // puedeVerFinanciero arriba (arquitectura por capas, agosto 2026).
   const puedeRegistrar = puedeRegistrarMovimientoFinancieroClienteOperativo(usuario);
+
+  const [datos, historial, aportaciones, mediosFinancieros] = await Promise.all([
+    obtenerControlContractual(usuario, id, "operativo"),
+    obtenerHistorialEstimacionesCliente(usuario, id, "operativo"),
+    puedeVerFinanciero ? obtenerAportacionesFondo(usuario, id) : Promise.resolve([]),
+    puedeRegistrar ? listarMediosFinancieros(usuario, true) : Promise.resolve([]),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -56,10 +58,16 @@ export default async function ClienteGeneralControlContractualPage({
         fondoDisponible={datos.financiero?.fondo?.disponible ?? 0}
         filas={historial}
         puedeRegistrar={puedeRegistrar}
+        mediosFinancieros={mediosFinancieros}
       />
 
       {puedeVerFinanciero && (
-        <AportacionesFondo proyectoId={id} aportaciones={aportaciones} puedeRegistrar={puedeRegistrar} />
+        <AportacionesFondo
+          proyectoId={id}
+          aportaciones={aportaciones}
+          puedeRegistrar={puedeRegistrar}
+          mediosFinancieros={mediosFinancieros}
+        />
       )}
     </div>
   );

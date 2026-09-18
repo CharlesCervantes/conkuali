@@ -56,6 +56,11 @@ const DatosProyectoSchema = z.object({
   // en cualquier guardado normal del formulario).
   imagenRef: z.string().trim().optional(),
   imagenNombre: z.string().trim().optional(),
+  // Supervisor responsable del proyecto (Contratistas: Control Contractual +
+  // Estimaciones, septiembre 2026) — opcional, nunca obligatorio. String
+  // vacía = quitar la asignación actual (se normaliza a null antes del
+  // update, ver editarProyecto).
+  supervisorUsuarioId: z.string().trim().optional().nullable(),
 });
 
 export type DatosProyecto = z.infer<typeof DatosProyectoSchema>;
@@ -97,10 +102,41 @@ function podarPorcentajesPrivados(
   };
 }
 
+// Usuarios activos con rol Supervisor de la empresa — alimenta el selector
+// "Supervisor responsable" de Editar Proyecto. Nunca se confía en que el
+// formulario haya limitado las opciones: editarProyecto vuelve a validar
+// server-side que el id elegido de verdad sea uno de estos.
+export async function listarSupervisoresDisponibles(
+  usuario: UsuarioSesion
+): Promise<{ id: string; nombre: string }[]> {
+  const empresaId = requerirEmpresa(usuario);
+  return db.usuario.findMany({
+    where: { empresaId, activo: true, rol: "SUPERVISOR" },
+    select: { id: true, nombre: true },
+    orderBy: { nombre: "asc" },
+  });
+}
+
+async function validarSupervisorUsuarioId(
+  empresaId: string,
+  supervisorUsuarioId: string | null | undefined
+): Promise<void> {
+  if (!supervisorUsuarioId) return;
+  const usuario = await db.usuario.findFirst({
+    where: { id: supervisorUsuarioId, empresaId, activo: true, rol: "SUPERVISOR" },
+    select: { id: true },
+  });
+  if (!usuario) throw new ValidacionError("El supervisor seleccionado no es válido.");
+}
+
+// Excluye el Proyecto(tipo=OFICINA) — es el vehículo interno de "Gastos de
+// Empresa" (ver lib/server/control-de-obra/proyecto-oficina.ts), nunca una
+// obra real: no debe aparecer en la lista de Proyectos, ni contarse en
+// métricas de obras (Gastos transversal, septiembre 2026).
 export async function listarProyectos(usuario: UsuarioSesion) {
   const empresaId = requerirEmpresa(usuario);
   return db.proyecto.findMany({
-    where: { empresaId },
+    where: { empresaId, tipo: { not: "OFICINA" } },
     orderBy: { nombre: "asc" },
   });
 }
@@ -185,6 +221,7 @@ export async function editarProyecto(
 ) {
   const empresaId = requerirAdmin(usuario);
   const datos = podarPorcentajesPrivados(usuario, DatosProyectoSchema.parse(datosCrudos));
+  await validarSupervisorUsuarioId(empresaId, datos.supervisorUsuarioId);
 
   const anterior = await db.proyecto.findFirst({ where: { id, empresaId } });
   if (!anterior) throw new ProyectoNoEncontradoError();
@@ -377,9 +414,26 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
     });
     const ordenIds = ordenes.map((o) => o.id);
 
+    // Compras (Requisición/Cotización/OC) y decoración fiscal (Egreso/
+    // Ingreso), septiembre 2026 — no existían cuando esta función se
+    // escribió originalmente; RESTRICT hacia Proyecto/GastoObra/
+    // MovimientoFinancieroCliente, deben liberarse antes que esos tres.
+    const requisiciones = await tx.requisicion.findMany({ where: { proyectoId: id }, select: { id: true } });
+    const requisicionIds = requisiciones.map((r) => r.id);
+    const reposicionesPrevias = await tx.reposicionGastos.findMany({ where: { proyectoId: id }, select: { id: true } });
+    const reposicionIdsPrevias = reposicionesPrevias.map((r) => r.id);
+
     // Hijos antes que padres, respetando las llaves foráneas.
     // ComentarioMovimiento tiene onDelete: Cascade desde MovimientoSemanal a
-    // nivel de base de datos — no hace falta borrarlo aparte.
+    // nivel de base de datos — no hace falta borrarlo aparte. Igual
+    // Proveedor/Contratista/PersonalAdministrativo desde Beneficiario, pero
+    // Beneficiario nunca se toca aquí (es del catálogo de la Empresa, no de
+    // este Proyecto).
+    await tx.cotizacion.deleteMany({ where: { requisicionId: { in: requisicionIds } } });
+    await tx.requisicion.deleteMany({ where: { proyectoId: id } });
+    await tx.abonoReposicion.deleteMany({ where: { reposicionGastosId: { in: reposicionIdsPrevias } } });
+    await tx.egreso.deleteMany({ where: { OR: [{ gastoObraId: { in: gastoIds } }, { proyectoId: id }] } });
+    await tx.ingreso.deleteMany({ where: { OR: [{ movimientoFinancieroClienteId: { in: movimientoIds } }, { proyectoId: id }] } });
     await tx.corteSemanalConcepto.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
     await tx.reciboPago.deleteMany({ where: { corteSemanalId: { in: corteIds } } });
 
@@ -412,6 +466,9 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
     // reposicionGastosId sí apuntan aquí y deben liberarse primero).
     await tx.gastoObraDetalle.deleteMany({ where: { gastoObraId: { in: gastoIds } } });
     await tx.gastoObra.deleteMany({ where: { proyectoId: id } });
+    // GastoObra.recurrenteId apunta aquí — debe liberarse después del gasto,
+    // nunca antes (Gastos transversal — recurrentes, septiembre 2026).
+    await tx.gastoRecurrente.deleteMany({ where: { proyectoId: id } });
     await tx.reposicionGastos.deleteMany({ where: { proyectoId: id } });
     await tx.ordenCompra.deleteMany({ where: { proyectoId: id } });
     await tx.corteSemanal.deleteMany({ where: { proyectoId: id } });
@@ -445,6 +502,7 @@ export async function eliminarProyecto(usuario: UsuarioSesion, id: string) {
           { entidad: "GastoObra", entidadId: { in: gastoIds } },
           { entidad: "ReposicionGastos", entidadId: { in: reposicionIds } },
           { entidad: "OrdenCompra", entidadId: { in: ordenIds } },
+          { entidad: "Requisicion", entidadId: { in: requisicionIds } },
         ],
       },
     });

@@ -1,5 +1,5 @@
 import { requireSession } from "@/lib/server/auth/dal";
-import { puedeAdministrarProyectos } from "@/lib/server/permisos";
+import { puedeAdministrarProyectos, puedeEliminarEstructuraContractual } from "@/lib/server/permisos";
 import {
   obtenerPartidasProyecto,
 } from "@/lib/server/control-de-obra/estructura-contractual";
@@ -31,6 +31,7 @@ export default async function ContratoGeneralPage({
             : null
         }
         puedeAdministrar={puedeAdministrarProyectos(usuario)}
+        puedeEliminar={puedeEliminarEstructuraContractual(usuario)}
       />
     </div>
   );

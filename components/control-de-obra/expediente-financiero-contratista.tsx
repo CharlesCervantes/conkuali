@@ -27,7 +27,7 @@ export function ResumenFinancieroIndicadores({
   resumen: ResumenFinancieroContratista;
 }) {
   return (
-    <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+    <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
       <Dato etiqueta="Contrato vigente" valor={formatMoney(resumen.contratoVigente)} />
       <Dato etiqueta="Estimado acumulado" valor={formatMoney(resumen.estimadoAcumulado)} />
       <Dato etiqueta="Pagado acumulado" valor={formatMoney(resumen.pagadoAcumulado)} />
@@ -36,6 +36,7 @@ export function ResumenFinancieroIndicadores({
         valor={formatMoney(resumen.saldoContractual)}
         resaltar={resumen.saldoContractual < 0}
       />
+      <Dato etiqueta="% avance" valor={`${resumen.porcentajeAvance.toLocaleString("es-MX", { maximumFractionDigits: 1 })}%`} />
     </dl>
   );
 }
@@ -64,11 +65,13 @@ export function EstimacionesYPagos({
         <Table>
           <Thead>
             <Tr>
+              <Th>Estimación</Th>
               <Th>Semana</Th>
-              <Th>Corte</Th>
               <Th className="text-right">Importe</Th>
+              <Th className="text-right">Acumulado</Th>
+              <Th className="text-right">Saldo</Th>
               <Th>Estado de pago</Th>
-              <Th>Recibo</Th>
+              <Th>Documento</Th>
             </Tr>
           </Thead>
           <tbody>
@@ -80,11 +83,15 @@ export function EstimacionesYPagos({
                     onClick={() => setCorteDetalleId(corte.id)}
                     className="font-medium text-[var(--brand)] transition-colors duration-150 ease-out hover:underline"
                   >
-                    Semana {corte.semanaNumero}
+                    {corte.numeroEstimacion}
                   </button>
                 </Td>
-                <Td className="text-[var(--muted)]">{String(corte.numero).padStart(3, "0")}</Td>
+                <Td className="text-[var(--muted)]">
+                  Semana {corte.semanaNumero} · {corte.semanaAnio}
+                </Td>
                 <Td className="text-right tabular-nums">{formatMoney(corte.montoNeto)}</Td>
+                <Td className="text-right tabular-nums">{formatMoney(corte.estimadoAcumulado)}</Td>
+                <Td className="text-right tabular-nums">{formatMoney(corte.saldoContractual)}</Td>
                 <Td>
                   <EstadoPagoBadge estatus={corte.estatusPago} />
                 </Td>

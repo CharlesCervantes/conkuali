@@ -1,18 +1,33 @@
 import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
-import { puedeCapturarGastos, puedeAprobarGastos } from "@/lib/server/permisos";
+import {
+  puedeCapturarGastos,
+  puedeAprobarGastos,
+  puedeCapturarCategoriaGasto,
+  puedeVerGastosEmpresaSensibles,
+} from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
-import { CATEGORIAS_GASTO } from "@/lib/control-de-obra/categorias-gasto";
+import { CATEGORIAS_GASTO, CATEGORIA_GASTO_SENSIBLE } from "@/lib/control-de-obra/categorias-gasto";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
 import { asignarGastoAReposicionTx } from "./reposiciones";
 import { intentarReclamarGastoParaCapas } from "./estimacion-cliente";
+import { EMPRESA_PROYECTO_LABEL } from "./proyecto-oficina";
 
 function requerirEmpresa(usuario: UsuarioSesion): string {
   if (!usuario.empresa) throw new SinPermisoError();
   return usuario.empresa.id;
+}
+
+// Segundo gate, por categoría — se valida SIEMPRE server-side, nunca basta
+// con que el <select> del formulario ya filtre las opciones sensibles
+// (Gastos transversal, septiembre 2026).
+function requerirPermisoCategoria(usuario: UsuarioSesion, categoria: string): void {
+  const esSensible = CATEGORIA_GASTO_SENSIBLE[categoria as keyof typeof CATEGORIA_GASTO_SENSIBLE] ?? false;
+  if (!puedeCapturarCategoriaGasto(usuario, esSensible)) throw new SinPermisoError();
 }
 
 // Editable mientras no haya salido de la revisión inicial — igual que el
@@ -128,6 +143,7 @@ export async function crearGasto(
   const empresaId = requerirEmpresa(usuario);
   await obtenerProyecto(usuario, proyectoId);
   const datos = DatosGastoSchema.parse(datosCrudos);
+  requerirPermisoCategoria(usuario, datos.categoria);
 
   const semana = await db.semana.findFirst({ where: { id: semanaId, empresaId } });
   if (!semana) throw new RegistroNoEncontradoError("La semana");
@@ -198,6 +214,11 @@ export async function editarGasto(usuario: UsuarioSesion, gastoId: string, datos
 
   const anterior = await db.gastoObra.findFirst({ where: { id: gastoId, empresaId } });
   if (!anterior) throw new RegistroNoEncontradoError("El gasto");
+  // Se valida la categoría actual del gasto Y la nueva — nunca basta con
+  // revisar solo a dónde se quiere mover si ya estaba en una categoría
+  // sensible que este usuario ni siquiera debería tocar.
+  requerirPermisoCategoria(usuario, anterior.categoria);
+  requerirPermisoCategoria(usuario, datos.categoria);
 
   if (!ESTATUS_EDITABLES.includes(anterior.estatus as (typeof ESTATUS_EDITABLES)[number])) {
     throw new ValidacionError("Este gasto ya no se puede editar — su revisión ya avanzó.");
@@ -455,6 +476,7 @@ export async function registrarFacturaGasto(
 
 export type FilaGasto = {
   id: string;
+  proyectoId: string;
   fecha: string;
   descripcion: string;
   categoria: string;
@@ -482,28 +504,20 @@ export type FilaGasto = {
   detalle: { descripcion: string; unidad: string; cantidad: number; precioUnitario: number }[];
 };
 
-export async function obtenerGastos(
-  usuario: UsuarioSesion,
-  proyectoId: string,
-  semanaId: string
-): Promise<FilaGasto[]> {
-  if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
-  await obtenerProyecto(usuario, proyectoId);
+const SELECT_FILA_GASTO = {
+  pagador: { select: { nombre: true } },
+  proveedor: { select: { nombre: true } },
+  capturadoPor: { select: { nombre: true } },
+  revisadoPor: { select: { nombre: true } },
+  detalle: { orderBy: { orden: "asc" as const } },
+};
 
-  const gastos = await db.gastoObra.findMany({
-    where: { proyectoId, semanaId },
-    include: {
-      pagador: { select: { nombre: true } },
-      proveedor: { select: { nombre: true } },
-      capturadoPor: { select: { nombre: true } },
-      revisadoPor: { select: { nombre: true } },
-      detalle: { orderBy: { orden: "asc" } },
-    },
-    orderBy: { fecha: "desc" },
-  });
+type GastoObraConRelaciones = Prisma.GastoObraGetPayload<{ include: typeof SELECT_FILA_GASTO }>;
 
-  return gastos.map((g) => ({
+function aFilaGasto(g: GastoObraConRelaciones): FilaGasto {
+  return {
     id: g.id,
+    proyectoId: g.proyectoId,
     fecha: g.fecha.toISOString(),
     descripcion: g.descripcion,
     categoria: g.categoria,
@@ -534,6 +548,63 @@ export async function obtenerGastos(
       cantidad: Number(d.cantidad),
       precioUnitario: Number(d.precioUnitario),
     })),
+  };
+}
+
+// Categorías sensibles (solo existen en el ámbito Empresa — ver
+// categorias-gasto.ts) se excluyen enteras de la lectura si el usuario no
+// tiene puedeVerGastosEmpresaSensibles — nunca se manda el dato al cliente
+// para que la UI decida ocultarlo (Gastos transversal, septiembre 2026).
+function categoriasOcultasPara(usuario: UsuarioSesion): string[] {
+  if (puedeVerGastosEmpresaSensibles(usuario)) return [];
+  return (Object.keys(CATEGORIA_GASTO_SENSIBLE) as (keyof typeof CATEGORIA_GASTO_SENSIBLE)[]).filter(
+    (c) => CATEGORIA_GASTO_SENSIBLE[c]
+  );
+}
+
+export async function obtenerGastos(
+  usuario: UsuarioSesion,
+  proyectoId: string,
+  semanaId: string
+): Promise<FilaGasto[]> {
+  if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
+  await obtenerProyecto(usuario, proyectoId);
+
+  const categoriasOcultas = categoriasOcultasPara(usuario);
+  const gastos = await db.gastoObra.findMany({
+    where: { proyectoId, semanaId, ...(categoriasOcultas.length > 0 && { categoria: { notIn: categoriasOcultas } }) },
+    include: SELECT_FILA_GASTO,
+    orderBy: { fecha: "desc" },
+  });
+
+  return gastos.map(aFilaGasto);
+}
+
+export type FilaGastoGlobal = FilaGasto & { proyectoNombre: string; esEmpresa: boolean };
+
+// Vista global "Gastos" (fuera de una obra específica) — todos los gastos de
+// la Empresa (obras reales + Empresa) para una semana, en una sola consulta.
+// Mismo filtrado de categorías sensibles que obtenerGastos (Gastos
+// transversal, septiembre 2026).
+export async function obtenerGastosGlobal(
+  usuario: UsuarioSesion,
+  semanaId: string
+): Promise<FilaGastoGlobal[]> {
+  if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
+  if (!usuario.empresa) throw new SinPermisoError();
+  const empresaId = usuario.empresa.id;
+
+  const categoriasOcultas = categoriasOcultasPara(usuario);
+  const gastos = await db.gastoObra.findMany({
+    where: { empresaId, semanaId, ...(categoriasOcultas.length > 0 && { categoria: { notIn: categoriasOcultas } }) },
+    include: { ...SELECT_FILA_GASTO, proyecto: { select: { nombre: true, tipo: true } } },
+    orderBy: { fecha: "desc" },
+  });
+
+  return gastos.map((g) => ({
+    ...aFilaGasto(g),
+    proyectoNombre: g.proyecto.tipo === "OFICINA" ? EMPRESA_PROYECTO_LABEL : g.proyecto.nombre,
+    esEmpresa: g.proyecto.tipo === "OFICINA",
   }));
 }
 
@@ -593,5 +664,60 @@ export function calcularDashboardGastos(filas: FilaGasto[]): DashboardGastos {
     pendientesRevision: filas.filter((f) => f.estatus === "PENDIENTE_REVISION").length,
     aprobados: aprobados.length,
     totalAprobado: aprobados.reduce((t, f) => t + f.monto, 0),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Resumen de Gastos de Empresa por categoría — para el bloque "Gastos de
+// Empresa" de Reporte General (separado de las obras reales, nunca mezclado
+// como si fuera un contratista más — Gastos transversal, septiembre 2026).
+// Solo cuenta APROBADO, mismo criterio que "totales oficiales" ya usado en
+// obtenerReporteSemana (docs/negocio/03-modulo-reporte-general.md §2.6).
+// ---------------------------------------------------------------------------
+
+export type FilaCategoriaGastoEmpresa = {
+  categoria: string;
+  monto: number;
+};
+
+export type ResumenGastosEmpresa = {
+  total: number;
+  categorias: FilaCategoriaGastoEmpresa[];
+};
+
+export async function obtenerResumenGastosEmpresaPorCategoria(
+  usuario: UsuarioSesion,
+  proyectoOficinaId: string,
+  semanaId: string
+): Promise<ResumenGastosEmpresa> {
+  // Sin permiso alguno de Gastos, esta empresa simplemente no ve nada —
+  // consistente con el resto del módulo (puedeCapturarGastos es el techo
+  // mínimo para siquiera saber que existen).
+  if (!puedeCapturarGastos(usuario)) throw new SinPermisoError();
+
+  const categoriasVisibles = puedeVerGastosEmpresaSensibles(usuario)
+    ? null
+    : (Object.keys(CATEGORIA_GASTO_SENSIBLE) as (keyof typeof CATEGORIA_GASTO_SENSIBLE)[]).filter(
+        (c) => !CATEGORIA_GASTO_SENSIBLE[c]
+      );
+
+  const agrupado = await db.gastoObra.groupBy({
+    by: ["categoria"],
+    where: {
+      proyectoId: proyectoOficinaId,
+      semanaId,
+      estatus: "APROBADO",
+      ...(categoriasVisibles && { categoria: { in: categoriasVisibles } }),
+    },
+    _sum: { monto: true },
+  });
+
+  const categorias = agrupado
+    .map((g) => ({ categoria: g.categoria, monto: Number(g._sum.monto ?? 0) }))
+    .sort((a, b) => b.monto - a.monto);
+
+  return {
+    total: categorias.reduce((t, c) => t + c.monto, 0),
+    categorias,
   };
 }

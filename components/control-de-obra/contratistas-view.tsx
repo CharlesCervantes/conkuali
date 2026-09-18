@@ -4,10 +4,8 @@ import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { FormNuevoContrato } from "./form-nuevo-contrato";
 import { FormAsignarConcepto } from "./form-asignar-concepto";
 import { BarraAvance } from "./barra-avance";
-import {
-  ResumenFinancieroIndicadores,
-  EstimacionesYPagos,
-} from "./expediente-financiero-contratista";
+import { ResumenFinancieroIndicadores } from "./expediente-financiero-contratista";
+import { ContratistaTabs } from "./contratista-tabs";
 import { formatMoney } from "@/lib/dinero";
 import type {
   obtenerContratistasProyecto,
@@ -41,6 +39,18 @@ function agruparPorBeneficiario(contratos: ContratoRow[]) {
     grupos.set(id, grupo);
   }
   return [...grupos.values()];
+}
+
+// Un <option> nativo no es un elemento de bloque: los saltos de línea que
+// ahora admite la Descripción de un concepto (Contrato General, septiembre
+// 2026) no se envuelven ahí, se muestran literales y desbordan el ancho del
+// <select> (se veía como un cuadro negro gigante en Contratistas → Asignar
+// concepto). Se aplana a una sola línea y se acorta solo para esta etiqueta
+// — nunca se toca concepto.descripcion en sí.
+function etiquetaOpcion(descripcion: string, unidad: string): string {
+  const plano = descripcion.replace(/\s+/g, " ").trim();
+  const acortado = plano.length > 100 ? `${plano.slice(0, 100)}…` : plano;
+  return `${acortado} (${unidad})`;
 }
 
 export function ContratistasView({
@@ -84,7 +94,7 @@ export function ContratistasView({
         .filter((concepto) => !conceptoIdsAsignados.has(concepto.id))
         .map((concepto) => ({
           id: concepto.id,
-          etiqueta: `${concepto.descripcion} (${concepto.unidad})`,
+          etiqueta: etiquetaOpcion(concepto.descripcion, concepto.unidad),
         })),
     }))
     .filter((grupo) => grupo.conceptos.length > 0);
@@ -166,105 +176,104 @@ export function ContratistasView({
                 )}
               </summary>
 
-              {puedeVerRecibosFinancieros && resumen && (
-                <div className="border-t border-[var(--border)] px-5 pt-4">
-                  <EstimacionesYPagos proyectoId={proyectoId} historial={historial} />
-                </div>
-              )}
-
-              <div
-                className={`space-y-4 px-5 pt-4 pb-5 ${
-                  puedeVerRecibosFinancieros && resumen ? "" : "border-t border-[var(--border)]"
-                }`}
-              >
-                <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
-                  Conceptos asignados
-                </p>
-                {grupo.contratos.map((contrato) => (
-                  <div key={contrato.id}>
-                    {!unSoloContrato && etiquetaContrato(contrato) && (
-                      <p className="mb-2 text-xs font-medium text-[var(--muted)]">
-                        {etiquetaContrato(contrato)}
+              <div className="border-t border-[var(--border)] px-5 pt-4 pb-5">
+                <ContratistaTabs
+                  proyectoId={proyectoId}
+                  puedeVerRecibosFinancieros={puedeVerRecibosFinancieros}
+                  historial={historial}
+                  contratoBody={
+                    <div className="space-y-4">
+                      <p className="text-xs font-semibold tracking-wide text-[var(--muted)] uppercase">
+                        Conceptos asignados
                       </p>
-                    )}
-                    {contrato.conceptos.length > 0 ? (
-                      <Table>
-                        <Thead>
-                          <Tr>
-                            <Th>Concepto</Th>
-                            <Th>Unidad</Th>
-                            <Th className="text-right">Cantidad asignada</Th>
-                            <Th className="text-right">P.U. contratista</Th>
-                            <Th className="text-right">Importe</Th>
-                            <Th className="text-right">Ejecutado</Th>
-                            <Th className="text-right">Pendiente</Th>
-                            <Th className="text-right">Avance</Th>
-                          </Tr>
-                        </Thead>
-                        <tbody>
-                          {contrato.conceptos.map((asignacion) => {
-                            const avance = avancePorConcepto.get(asignacion.conceptoId);
+                      {grupo.contratos.map((contrato) => (
+                        <div key={contrato.id}>
+                          {!unSoloContrato && etiquetaContrato(contrato) && (
+                            <p className="mb-2 text-xs font-medium text-[var(--muted)]">
+                              {etiquetaContrato(contrato)}
+                            </p>
+                          )}
+                          {contrato.conceptos.length > 0 ? (
+                            <Table>
+                              <Thead>
+                                <Tr>
+                                  <Th>Concepto</Th>
+                                  <Th>Unidad</Th>
+                                  <Th className="text-right">Cantidad asignada</Th>
+                                  <Th className="text-right">P.U. contratista</Th>
+                                  <Th className="text-right">Importe</Th>
+                                  <Th className="text-right">Ejecutado</Th>
+                                  <Th className="text-right">Pendiente</Th>
+                                  <Th className="text-right">Avance</Th>
+                                </Tr>
+                              </Thead>
+                              <tbody>
+                                {contrato.conceptos.map((asignacion) => {
+                                  const avance = avancePorConcepto.get(asignacion.conceptoId);
 
-                            return (
-                              <Tr key={asignacion.id}>
-                                <Td className="font-medium">{asignacion.concepto.descripcion}</Td>
-                                <Td className="text-[var(--muted)]">{asignacion.concepto.unidad}</Td>
-                                <Td className="text-right tabular-nums">
-                                  {Number(asignacion.cantidad).toLocaleString("es-MX")}
-                                </Td>
-                                <Td className="text-right tabular-nums">
-                                  {formatMoney(asignacion.precioUnitarioContratista)}
-                                </Td>
-                                <Td className="text-right tabular-nums">
-                                  {formatMoney(
-                                    Number(asignacion.cantidad) *
-                                      Number(asignacion.precioUnitarioContratista)
-                                  )}
-                                </Td>
-                                {!avance ? (
-                                  <Td colSpan={3} className="text-xs text-[var(--muted)]">
-                                    —
-                                  </Td>
-                                ) : (
-                                  <>
-                                    <Td className="text-right tabular-nums">
-                                      {avance.acumulado.toLocaleString("es-MX")}
-                                    </Td>
-                                    <Td className="text-right tabular-nums">
-                                      {avance.pendiente.toLocaleString("es-MX")}
-                                    </Td>
-                                    <Td>
-                                      <BarraAvance porcentaje={avance.avancePorcentaje} />
-                                    </Td>
-                                  </>
-                                )}
-                              </Tr>
-                            );
-                          })}
-                        </tbody>
-                      </Table>
-                    ) : (
-                      <p className="text-sm text-[var(--muted)]">
-                        Este contrato todavía no tiene conceptos asignados.
-                      </p>
-                    )}
+                                  return (
+                                    <Tr key={asignacion.id}>
+                                      <Td className="align-top font-medium whitespace-pre-line">{asignacion.concepto.descripcion}</Td>
+                                      <Td className="text-[var(--muted)]">{asignacion.concepto.unidad}</Td>
+                                      <Td className="text-right tabular-nums">
+                                        {Number(asignacion.cantidad).toLocaleString("es-MX")}
+                                      </Td>
+                                      <Td className="text-right tabular-nums">
+                                        {formatMoney(asignacion.precioUnitarioContratista)}
+                                      </Td>
+                                      <Td className="text-right tabular-nums">
+                                        {formatMoney(
+                                          Number(asignacion.cantidad) *
+                                            Number(asignacion.precioUnitarioContratista)
+                                        )}
+                                      </Td>
+                                      {!avance ? (
+                                        <Td colSpan={3} className="text-xs text-[var(--muted)]">
+                                          —
+                                        </Td>
+                                      ) : (
+                                        <>
+                                          <Td className="text-right tabular-nums">
+                                            {avance.acumulado.toLocaleString("es-MX")}
+                                          </Td>
+                                          <Td className="text-right tabular-nums">
+                                            {avance.pendiente.toLocaleString("es-MX")}
+                                          </Td>
+                                          <Td>
+                                            <BarraAvance porcentaje={avance.avancePorcentaje} />
+                                          </Td>
+                                        </>
+                                      )}
+                                    </Tr>
+                                  );
+                                })}
+                              </tbody>
+                            </Table>
+                          ) : (
+                            <p className="text-sm text-[var(--muted)]">
+                              Este contrato todavía no tiene conceptos asignados.
+                            </p>
+                          )}
 
-                    {puedeAdministrar && hayConceptosDisponibles && (
-                      <details className="mt-3">
-                        <summary className="inline-flex w-fit cursor-pointer list-none items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition-colors duration-150 ease-out select-none hover:bg-black/[0.03] [&::-webkit-details-marker]:hidden">
-                          + Asignar concepto
-                        </summary>
-                        <div className="mt-3">
-                          <FormAsignarConcepto
-                            contratoId={contrato.id}
-                            proyectoId={proyectoId}
-                            conceptosPorPartida={conceptosPorPartida}
-                          />
+                          {puedeAdministrar && hayConceptosDisponibles && (
+                            <details className="mt-3">
+                              <summary className="inline-flex w-fit cursor-pointer list-none items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2 text-sm font-medium text-[var(--foreground)] transition-colors duration-150 ease-out select-none hover:bg-black/[0.03] [&::-webkit-details-marker]:hidden">
+                                + Asignar concepto
+                              </summary>
+                              <div className="mt-3">
+                                <FormAsignarConcepto
+                                  contratoId={contrato.id}
+                                  proyectoId={proyectoId}
+                                  conceptosPorPartida={conceptosPorPartida}
+                                />
+                              </div>
+                            </details>
+                          )}
                         </div>
-                      </details>
-                    )}
-                  </div>
-                ))}
+                      ))}
+                    </div>
+                  }
+                />
               </div>
             </details>
           </Card>

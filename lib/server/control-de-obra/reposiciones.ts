@@ -1,10 +1,15 @@
 import "server-only";
+import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { registrarAuditoriaTx } from "@/lib/server/auditoria";
-import { puedeCapturarGastos } from "@/lib/server/permisos";
+import { puedeCapturarGastos, puedeRegistrarAbonoReposicion, puedeVerContabilidad } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
-import { SinPermisoError, obtenerProyecto } from "./proyectos";
+import { formatMoney } from "@/lib/dinero";
+import { liquidarMovimientoTx } from "../reporte-general/liquidar";
+import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
+import { RegistroNoEncontradoError } from "./estructura-contractual";
+import { EMPRESA_PROYECTO_LABEL } from "./proyecto-oficina";
 
 type Cliente = Prisma.TransactionClient;
 
@@ -200,6 +205,16 @@ export type FilaGastoReposicion = {
   monto: number;
 };
 
+export type FilaAbonoReposicion = {
+  id: string;
+  monto: number;
+  fecha: string;
+  metodoPago: string;
+  referencia: string | null;
+  notas: string | null;
+  registradoPorNombre: string;
+};
+
 export type FilaReposicion = {
   id: string;
   folio: string;
@@ -211,6 +226,11 @@ export type FilaReposicion = {
   creadoPorNombre: string;
   createdAt: string;
   gastos: FilaGastoReposicion[];
+  abonos: FilaAbonoReposicion[];
+  // Derivados — nunca persistidos (reposiciones parciales, septiembre 2026).
+  abonado: number;
+  saldoPendiente: number;
+  esParcial: boolean;
 };
 
 export async function obtenerReposiciones(
@@ -228,25 +248,183 @@ export async function obtenerReposiciones(
       creadoPor: { select: { nombre: true } },
       gastos: { select: { id: true, descripcion: true, fecha: true, monto: true } },
       movimientoSemanal: { select: { estatusPago: true } },
+      abonos: {
+        include: { registradoPor: { select: { nombre: true } } },
+        orderBy: { fecha: "desc" },
+      },
     },
     orderBy: { createdAt: "desc" },
   });
 
-  return reposiciones.map((r) => ({
-    id: r.id,
-    folio: r.folio,
-    beneficiarioNombre: r.beneficiario.nombre,
-    total: r.gastos.reduce((t, g) => t + Number(g.monto), 0),
-    cantidadGastos: r.gastos.length,
-    estatusPago: r.movimientoSemanal?.estatusPago ?? null,
-    cerrada: r.cerrada,
-    creadoPorNombre: r.creadoPor.nombre,
-    createdAt: r.createdAt.toISOString(),
-    gastos: r.gastos.map((g) => ({
-      id: g.id,
-      descripcion: g.descripcion,
-      fecha: g.fecha.toISOString(),
-      monto: Number(g.monto),
-    })),
-  }));
+  return reposiciones.map((r) => {
+    const total = r.gastos.reduce((t, g) => t + Number(g.monto), 0);
+    const abonado = r.abonos.reduce((t, a) => t + Number(a.monto), 0);
+    const saldoPendiente = total - abonado;
+    return {
+      id: r.id,
+      folio: r.folio,
+      beneficiarioNombre: r.beneficiario.nombre,
+      total,
+      cantidadGastos: r.gastos.length,
+      estatusPago: r.movimientoSemanal?.estatusPago ?? null,
+      cerrada: r.cerrada,
+      creadoPorNombre: r.creadoPor.nombre,
+      createdAt: r.createdAt.toISOString(),
+      gastos: r.gastos.map((g) => ({
+        id: g.id,
+        descripcion: g.descripcion,
+        fecha: g.fecha.toISOString(),
+        monto: Number(g.monto),
+      })),
+      abonos: r.abonos.map((a) => ({
+        id: a.id,
+        monto: Number(a.monto),
+        fecha: a.fecha.toISOString(),
+        metodoPago: a.metodoPago,
+        referencia: a.referencia,
+        notas: a.notas,
+        registradoPorNombre: a.registradoPor.nombre,
+      })),
+      abonado,
+      saldoPendiente,
+      esParcial: abonado > 0 && saldoPendiente > 0,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Abonos parciales — mismo nivel de autorización que liquidar (Administrador/
+// Director). "Reposición parcial" es siempre un dato calculado (total −
+// Σ abonos), nunca un estado nuevo en EstatusPago: cuando el saldo llega a
+// $0 se dispara el liquidarMovimiento normal sobre el MovimientoSemanal de la
+// reposición, con la fecha/método de ESTE abono como evidencia del pago
+// final (reposiciones parciales, septiembre 2026).
+// ---------------------------------------------------------------------------
+
+const DatosAbonoSchema = z.object({
+  monto: z.coerce.number().positive("El monto debe ser mayor a cero."),
+  fecha: z.coerce.date(),
+  metodoPago: z.enum(["EFECTIVO", "TRANSFERENCIA", "TARJETA_DEBITO", "TARJETA_CREDITO"]),
+  referencia: z.string().trim().optional().nullable(),
+  notas: z.string().trim().optional().nullable(),
+});
+
+export async function registrarAbonoReposicion(
+  usuario: UsuarioSesion,
+  reposicionGastosId: string,
+  datosCrudos: unknown
+) {
+  if (!puedeRegistrarAbonoReposicion(usuario)) throw new SinPermisoError();
+  if (!usuario.empresa) throw new SinPermisoError();
+  const empresaId = usuario.empresa.id;
+  const datos = DatosAbonoSchema.parse(datosCrudos);
+
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM reposiciones_gastos WHERE id = ${reposicionGastosId} FOR UPDATE`;
+
+    const reposicion = await tx.reposicionGastos.findFirst({
+      where: { id: reposicionGastosId, empresaId },
+      include: {
+        gastos: { select: { monto: true } },
+        abonos: { select: { monto: true } },
+      },
+    });
+    if (!reposicion) throw new RegistroNoEncontradoError("La reposición");
+    if (reposicion.cerrada) {
+      throw new ValidacionError("Esta reposición ya está liquidada — no admite más abonos.");
+    }
+
+    const total = reposicion.gastos.reduce((t, g) => t + Number(g.monto), 0);
+    const abonadoPrevio = reposicion.abonos.reduce((t, a) => t + Number(a.monto), 0);
+    const saldoPendiente = total - abonadoPrevio;
+    if (datos.monto > saldoPendiente) {
+      throw new ValidacionError(`El abono excede el saldo pendiente (${formatMoney(saldoPendiente)}).`);
+    }
+
+    const abono = await tx.abonoReposicion.create({
+      data: {
+        reposicionGastosId: reposicion.id,
+        monto: datos.monto,
+        fecha: datos.fecha,
+        metodoPago: datos.metodoPago,
+        referencia: datos.referencia || null,
+        notas: datos.notas || null,
+        registradoPorId: usuario.id,
+      },
+    });
+
+    await registrarAuditoriaTx(tx, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "AbonoReposicion",
+      entidadId: abono.id,
+      accion: "CREAR",
+      valorNuevo: { reposicionGastosId: reposicion.id, monto: datos.monto, fecha: datos.fecha.toISOString() },
+    });
+
+    // Saldo en $0 — el abono que cierra la reposición dispara el
+    // liquidarMovimiento normal, con su propia fecha/método como evidencia.
+    const nuevoSaldo = saldoPendiente - datos.monto;
+    if (nuevoSaldo <= 0 && reposicion.movimientoSemanalId) {
+      await liquidarMovimientoTx(tx, { empresaId, usuarioId: usuario.id }, reposicion.movimientoSemanalId, {
+        fechaPago: datos.fecha,
+        metodoPago: datos.metodoPago,
+        referenciaPago: datos.referencia,
+        notasPago: datos.notas,
+      });
+    }
+
+    return abono;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Resumen transversal (todos los proyectos de la Empresa) — para Inicio/
+// Dashboard y sus alertas (Rediseño de Inicio, septiembre 2026). Mismo gate
+// que Contabilidad: es información financiera de compromisos pendientes, no
+// una pantalla operativa de una obra puntual.
+// ---------------------------------------------------------------------------
+
+export type ReposicionPendienteResumen = {
+  id: string;
+  folio: string;
+  proyectoNombre: string;
+  beneficiarioNombre: string;
+  saldoPendiente: number;
+  diasAbierta: number;
+};
+
+export async function obtenerReposicionesPendientes(
+  usuario: UsuarioSesion
+): Promise<ReposicionPendienteResumen[]> {
+  if (!puedeVerContabilidad(usuario)) throw new SinPermisoError();
+  if (!usuario.empresa) throw new SinPermisoError();
+  const empresaId = usuario.empresa.id;
+
+  const abiertas = await db.reposicionGastos.findMany({
+    where: { empresaId, cerrada: false, estatus: { not: "RECHAZADA" } },
+    include: {
+      proyecto: { select: { nombre: true, tipo: true } },
+      beneficiario: { select: { nombre: true } },
+      gastos: { select: { monto: true } },
+      abonos: { select: { monto: true } },
+    },
+  });
+
+  const hoy = Date.now();
+  return abiertas
+    .map((r) => {
+      const total = r.gastos.reduce((t, g) => t + Number(g.monto), 0);
+      const abonado = r.abonos.reduce((t, a) => t + Number(a.monto), 0);
+      return {
+        id: r.id,
+        folio: r.folio,
+        proyectoNombre: r.proyecto.tipo === "OFICINA" ? EMPRESA_PROYECTO_LABEL : r.proyecto.nombre,
+        beneficiarioNombre: r.beneficiario.nombre,
+        saldoPendiente: total - abonado,
+        diasAbierta: Math.floor((hoy - r.createdAt.getTime()) / 86400000),
+      };
+    })
+    .filter((r) => r.saldoPendiente > 0)
+    .sort((a, b) => b.diasAbierta - a.diasAbierta);
 }

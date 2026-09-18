@@ -320,6 +320,11 @@ export type TotalesCapaCalculados = {
   subtotalGastosCobrables: number;
   porcentajeAdministracionGastos: number | null;
   montoAdministracionGastos: number;
+  // Trabajos + gastos combinados — único valor que debe mostrarse en la fila
+  // "Administración"/"Utilidad" de la Estimación semanal (Cliente,
+  // Cliente Priv. y PDF) y en ningún otro lado se vuelve a sumar por su
+  // cuenta (single source of truth, septiembre 2026).
+  montoAdministracionTotal: number;
   montoIVA: number;
   total: number;
 };
@@ -507,6 +512,7 @@ async function valorizarCapaEnVivo(
       subtotalGastosCobrables,
       porcentajeAdministracionGastos,
       montoAdministracionGastos: calc.montoAdministracionGastos,
+      montoAdministracionTotal: calc.montoAdministracionTotal,
       montoIVA: calc.montoIVA,
       total: calc.total,
     },
@@ -633,6 +639,11 @@ export async function obtenerEstimacionCliente(
         subtotalGastosCobrables: Number(capaRow.subtotalGastosCobrables),
         porcentajeAdministracionGastos: numOrNull(capaRow.porcentajeAdministracionGastos),
         montoAdministracionGastos: Number(capaRow.montoAdministracionGastos),
+        // Suma de los dos componentes ya persistidos — nunca se guarda como
+        // columna propia, se deriva igual que en el caso en vivo
+        // (TotalesCapaCalculados.montoAdministracionTotal).
+        montoAdministracionTotal:
+          Number(capaRow.montoAdministracionTrabajos) + Number(capaRow.montoAdministracionGastos),
         montoIVA: Number(capaRow.montoIVA),
         total: Number(capaRow.total),
         generadoPorNombre: capaRow.generadoPor.nombre,
@@ -805,8 +816,27 @@ export async function asegurarFisicoYCapas(
   const { esquemaContractual, porcentajesDefault } = await obtenerContextoProyecto(tx, ctx.proyectoId);
   const { filas } = await construirDetalleValorizado(tx, ctx.proyectoId, semana, esquemaContractual, porcentajesDefault);
 
+  // Sin avance físico Y sin estimación previa normalmente significa "no hay
+  // nada que estimar esta semana" — pero una obra puede tener una semana sin
+  // avance de trabajos y aun así un gasto cobrable real (material comprado,
+  // obra pausada, etc.) que sí hay que poder cobrarle al cliente. Si existe
+  // al menos un gasto cobrable ya aprobado de ESTA semana, sí vale la pena
+  // crear la estimación (con detalle físico vacío) para que ese gasto tenga
+  // dónde reclamarse y la capa se pueda emitir solo con el material
+  // (decisión de sesión, septiembre 2026 — semanas sin avance con gasto).
   if (filas.length === 0 && !existente) {
-    return { tipo: "SIN_AVANCE" };
+    const hayGastoCobrablePendiente = await tx.gastoObra.findFirst({
+      where: {
+        proyectoId: ctx.proyectoId,
+        semanaId: ctx.semanaId,
+        estatus: "APROBADO",
+        tratamientoCliente: "COBRABLE_EN_ESTIMACION",
+      },
+      select: { id: true },
+    });
+    if (!hayGastoCobrablePendiente) {
+      return { tipo: "SIN_AVANCE" };
+    }
   }
 
   const datosDetalleFisico = filas.map((f) => ({

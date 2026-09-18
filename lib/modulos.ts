@@ -6,4 +6,7 @@ export const RUTA_MODULO: Record<string, { href: string | null; label: string }>
   control_de_obra: { href: "/control-de-obra", label: "Proyectos" },
   control_prestamos: { href: null, label: "Control de Préstamos" },
   catalogos: { href: "/catalogos", label: "Catálogos" },
+  gastos: { href: "/gastos", label: "Gastos" },
+  contabilidad: { href: "/contabilidad", label: "Contabilidad" },
+  compras: { href: "/compras", label: "Compras" },
 };

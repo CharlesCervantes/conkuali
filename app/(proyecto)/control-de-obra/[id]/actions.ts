@@ -11,6 +11,8 @@ import {
   editarConceptoEstructural,
   editarConceptoPrivado,
   obtenerConceptoDetalle,
+  eliminarConcepto,
+  eliminarPartida,
   RegistroNoEncontradoError,
 } from "@/lib/server/control-de-obra/estructura-contractual";
 import {
@@ -36,6 +38,13 @@ import {
   registrarAportacionFondo,
   registrarPagoEstimacion,
   aplicarFondoAEstimacion,
+  editarPagoEstimacion,
+  editarMontoPagoEstimacion,
+  editarAportacionFondo,
+  editarMontoAportacionFondo,
+  cancelarMovimientoFinancieroCliente,
+  obtenerMovimientosCapa,
+  type FilaMovimientoCapa,
 } from "@/lib/server/control-de-obra/financiero-cliente";
 import {
   crearGasto,
@@ -45,6 +54,7 @@ import {
   rechazarGasto,
   registrarFacturaGasto,
 } from "@/lib/server/control-de-obra/gastos";
+import { registrarAbonoReposicion } from "@/lib/server/control-de-obra/reposiciones";
 import {
   crearOrdenCompra,
   editarOrdenCompra,
@@ -52,8 +62,18 @@ import {
   rechazarOrdenCompra,
   cancelarOrdenCompra,
   generarGastoDesdeOrdenCompra,
+  marcarRecepcionOrdenCompra,
 } from "@/lib/server/control-de-obra/ordenes-compra";
+import {
+  crearRequisicion,
+  editarRequisicion,
+  rechazarRequisicion,
+  cancelarRequisicion,
+  agregarCotizacion,
+  seleccionarCotizacion,
+} from "@/lib/server/control-de-obra/requisiciones";
 import { subirArchivo } from "@/lib/server/archivos";
+import { datosGastoDesdeFormData } from "@/lib/control-de-obra/gasto-form-data";
 import {
   SinPermisoError,
   ProyectoNoEncontradoError,
@@ -358,6 +378,60 @@ export async function editarConceptoEstructuralAction(
   return { guardado: true };
 }
 
+// ---------------------------------------------------------------------------
+// Eliminar Partidas / Conceptos — Administrador/Director (septiembre 2026).
+// Nunca se llama sin motivo: el permiso real se valida en eliminarConcepto/
+// eliminarPartida (server-side), esto solo traduce FormData.
+// ---------------------------------------------------------------------------
+
+export type EliminarConceptoFormState =
+  | { error?: string; resultado?: "ELIMINADO" | "CANCELADO" }
+  | undefined;
+
+export async function eliminarConceptoAction(
+  conceptoId: string,
+  proyectoId: string,
+  _state: EliminarConceptoFormState,
+  formData: FormData
+): Promise<EliminarConceptoFormState> {
+  const usuario = await requireSession();
+  let resultado: "ELIMINADO" | "CANCELADO";
+  try {
+    ({ resultado } = await eliminarConcepto(usuario, conceptoId, formData.get("motivo")));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
+  return { resultado };
+}
+
+export type EliminarPartidaFormState =
+  | { error?: string; resultado?: "ELIMINADO" | "CANCELADO"; conceptosAfectados?: number }
+  | undefined;
+
+export async function eliminarPartidaAction(
+  partidaId: string,
+  proyectoId: string,
+  _state: EliminarPartidaFormState,
+  formData: FormData
+): Promise<EliminarPartidaFormState> {
+  const usuario = await requireSession();
+  let resultado: { resultado: "ELIMINADO" | "CANCELADO"; conceptosAfectados: number };
+  try {
+    resultado = await eliminarPartida(usuario, partidaId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/general`);
+  revalidatePath(`/control-de-obra/${proyectoId}/contrato/privado`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/avance`);
+  revalidatePath(`/control-de-obra/${proyectoId}/ejecucion/contratistas`);
+  return resultado;
+}
+
 export async function asignarConceptoAction(
   contratoId: string,
   proyectoId: string,
@@ -571,6 +645,36 @@ export async function materializarEstimacionHistoricaAction(
 // Control Contractual — esquema financiero del cliente
 // ---------------------------------------------------------------------------
 
+function revalidarClienteControlContractual(proyectoId: string) {
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general/control-contractual`);
+  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+}
+
+// Decoración fiscal opcional, capturada en el MISMO paso que el cobro real
+// (Cobros de cliente, septiembre 2026) — nunca bloquea el registro si no se
+// tiene todavía (cuenta receptora/comprobante/factura esperada se pueden
+// completar después desde Contabilidad). `comprobanteRef`/`comprobanteNombre`
+// en `undefined` cuando no se adjuntó un archivo nuevo — nunca `null`, que en
+// una edición borraría un comprobante ya guardado (mismo cuidado que
+// guardarDecoracionIngresoAction, Contabilidad); al registrar por primera
+// vez, `undefined` equivale a "sin comprobante todavía", el mismo resultado.
+async function datosFiscalesDesdeFormData(formData: FormData) {
+  let comprobanteRef: string | undefined;
+  let comprobanteNombre: string | undefined;
+  const archivo = formData.get("comprobante");
+  if (archivo instanceof File && archivo.size > 0) {
+    const subido = await subirArchivo("contabilidad/comprobantes", archivo);
+    comprobanteRef = subido.ref;
+    comprobanteNombre = subido.nombre;
+  }
+  return {
+    cuentaReceptoraId: opcional(formData.get("cuentaReceptoraId")),
+    comprobanteRef,
+    comprobanteNombre,
+    facturaEsperada: formData.get("facturaEsperada") === "on",
+  };
+}
+
 export type RegistrarAportacionFormState = { error?: string; registrada?: boolean } | undefined;
 
 export async function registrarAportacionFondoAction(
@@ -585,12 +689,12 @@ export async function registrarAportacionFondoAction(
       fecha: formData.get("fecha"),
       referencia: opcional(formData.get("referencia")),
       notas: opcional(formData.get("notas")),
+      ...(await datosFiscalesDesdeFormData(formData)),
     });
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general/control-contractual`);
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  revalidarClienteControlContractual(proyectoId);
   return { registrada: true };
 }
 
@@ -609,12 +713,12 @@ export async function registrarPagoEstimacionAction(
       fecha: formData.get("fecha"),
       referencia: opcional(formData.get("referencia")),
       notas: opcional(formData.get("notas")),
+      ...(await datosFiscalesDesdeFormData(formData)),
     });
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general/control-contractual`);
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  revalidarClienteControlContractual(proyectoId);
   return { registrado: true };
 }
 
@@ -622,7 +726,8 @@ export type AplicarFondoFormState = { error?: string; aplicado?: number } | unde
 
 // Acción manual "Aplicar fondo" — decisión explícita de Administrador/
 // Director, nunca automática (ver aplicarFondoAEstimacion). `monto` vacío =
-// aplicar el máximo posible.
+// aplicar el máximo posible. Nunca captura datos fiscales — no es dinero
+// nuevo entrando (ver crearDecoracionIngresoSiAplica, financiero-cliente.ts).
 export async function aplicarFondoEstimacionAction(
   proyectoId: string,
   estimacionId: string,
@@ -640,9 +745,119 @@ export async function aplicarFondoEstimacionAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/general/control-contractual`);
-  revalidatePath(`/control-de-obra/${proyectoId}/cliente/privado/control-contractual`);
+  revalidarClienteControlContractual(proyectoId);
   return { aplicado: resultado.aplicado };
+}
+
+// ---------------------------------------------------------------------------
+// Editar / cancelar pagos, aportaciones y aplicaciones de fondo — nunca
+// DELETE (Cobros de cliente, septiembre 2026).
+// ---------------------------------------------------------------------------
+
+export type EditarMovimientoFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function editarPagoEstimacionAction(
+  proyectoId: string,
+  movimientoId: string,
+  _state: EditarMovimientoFormState,
+  formData: FormData
+): Promise<EditarMovimientoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarPagoEstimacion(usuario, movimientoId, {
+      fecha: formData.get("fecha") || undefined,
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+      ...(await datosFiscalesDesdeFormData(formData)),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarClienteControlContractual(proyectoId);
+  return { guardado: true };
+}
+
+export async function editarMontoPagoEstimacionAction(
+  proyectoId: string,
+  movimientoId: string,
+  _state: EditarMovimientoFormState,
+  formData: FormData
+): Promise<EditarMovimientoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarMontoPagoEstimacion(usuario, movimientoId, formData.get("monto"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarClienteControlContractual(proyectoId);
+  return { guardado: true };
+}
+
+export async function editarAportacionFondoAction(
+  proyectoId: string,
+  movimientoId: string,
+  _state: EditarMovimientoFormState,
+  formData: FormData
+): Promise<EditarMovimientoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarAportacionFondo(usuario, movimientoId, {
+      fecha: formData.get("fecha") || undefined,
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+      ...(await datosFiscalesDesdeFormData(formData)),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarClienteControlContractual(proyectoId);
+  return { guardado: true };
+}
+
+export async function editarMontoAportacionFondoAction(
+  proyectoId: string,
+  movimientoId: string,
+  _state: EditarMovimientoFormState,
+  formData: FormData
+): Promise<EditarMovimientoFormState> {
+  const usuario = await requireSession();
+  try {
+    await editarMontoAportacionFondo(usuario, movimientoId, formData.get("monto"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarClienteControlContractual(proyectoId);
+  return { guardado: true };
+}
+
+export async function obtenerMovimientosCapaAction(
+  estimacionClienteCapaId: string
+): Promise<{ filas: FilaMovimientoCapa[] } | { error: string }> {
+  const usuario = await requireSession();
+  try {
+    const filas = await obtenerMovimientosCapa(usuario, estimacionClienteCapaId);
+    return { filas };
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export type CancelarMovimientoFormState = { error?: string; cancelado?: boolean } | undefined;
+
+export async function cancelarMovimientoFinancieroClienteAction(
+  proyectoId: string,
+  movimientoId: string,
+  _state: CancelarMovimientoFormState,
+  formData: FormData
+): Promise<CancelarMovimientoFormState> {
+  const usuario = await requireSession();
+  try {
+    await cancelarMovimientoFinancieroCliente(usuario, movimientoId, { motivo: formData.get("motivo") });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarClienteControlContractual(proyectoId);
+  return { cancelado: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -655,37 +870,10 @@ function rutaReposiciones(proyectoId: string): string {
 function rutaOrdenesCompra(proyectoId: string): string {
   return `/control-de-obra/${proyectoId}/ejecucion/gastos/ordenes-compra`;
 }
-
-// Mismo patrón que detalleOCDesdeFormData (orden de compra) — un input
-// hidden con JSON, porque un <form> nativo no soporta arreglos de objetos
-// (captura multilínea de gastos, agosto 2026).
-function detalleGastoDesdeFormData(formData: FormData): {
-  descripcion: string;
-  unidad: string;
-  cantidad: string;
-  precioUnitario: string;
-}[] {
-  const raw = formData.get("detalle");
-  if (typeof raw !== "string" || raw.length === 0) return [];
-  return JSON.parse(raw);
+function rutaRequisiciones(proyectoId: string): string {
+  return `/control-de-obra/${proyectoId}/ejecucion/gastos/requisiciones`;
 }
 
-function datosGastoDesdeFormData(formData: FormData) {
-  return {
-    fecha: formData.get("fecha"),
-    descripcion: opcional(formData.get("descripcion")),
-    categoria: formData.get("categoria"),
-    monto: formData.get("monto"),
-    metodoPago: formData.get("metodoPago"),
-    quienPagoModo: formData.get("quienPagoModo") || "EMPRESA",
-    pagadorBeneficiarioId: opcional(formData.get("pagadorBeneficiarioId")),
-    proveedorBeneficiarioId: opcional(formData.get("proveedorBeneficiarioId")),
-    comentario: opcional(formData.get("comentario")),
-    requiereFactura: formData.get("requiereFactura") === "on",
-    tratamientoCliente: formData.get("tratamientoCliente") || "NO_COBRABLE",
-    detalle: detalleGastoDesdeFormData(formData),
-  };
-}
 
 export type GastoFormState = { error?: string; guardado?: boolean } | undefined;
 
@@ -816,6 +1004,31 @@ export async function subirFacturaGastoAction(
   return { guardado: true };
 }
 
+export type AbonoReposicionFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function registrarAbonoReposicionAction(
+  proyectoId: string,
+  reposicionGastosId: string,
+  _state: AbonoReposicionFormState,
+  formData: FormData
+): Promise<AbonoReposicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await registrarAbonoReposicion(usuario, reposicionGastosId, {
+      monto: formData.get("monto"),
+      fecha: formData.get("fecha"),
+      metodoPago: formData.get("metodoPago"),
+      referencia: opcional(formData.get("referencia")),
+      notas: opcional(formData.get("notas")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaReposiciones(proyectoId));
+  revalidatePath("/reporte-general");
+  return { guardado: true };
+}
+
 // ---------------------------------------------------------------------------
 // Gastos de Obra — Órdenes de Compra
 // ---------------------------------------------------------------------------
@@ -934,7 +1147,6 @@ export async function generarGastoDesdeOrdenCompraAction(
       comprobantePagoNombre = subido.nombre;
     }
     await generarGastoDesdeOrdenCompra(usuario, ocId, {
-      monto: formData.get("monto"),
       fecha: formData.get("fecha"),
       categoria: formData.get("categoria") || "MATERIAL",
       metodoPago: formData.get("metodoPago"),
@@ -947,5 +1159,194 @@ export async function generarGastoDesdeOrdenCompraAction(
   }
   revalidatePath(rutaOrdenesCompra(proyectoId));
   revalidatePath(rutaReposiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function marcarRecepcionOrdenCompraAction(
+  proyectoId: string,
+  ocId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    let evidenciaRecepcionRef: string | null = null;
+    let evidenciaRecepcionNombre: string | null = null;
+    const archivo = formData.get("evidenciaRecepcion");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`ordenes-compra/${proyectoId}/recepcion`, archivo);
+      evidenciaRecepcionRef = subido.ref;
+      evidenciaRecepcionNombre = subido.nombre;
+    }
+    await marcarRecepcionOrdenCompra(usuario, ocId, {
+      estatusRecepcion: formData.get("estatusRecepcion"),
+      evidenciaRecepcionRef,
+      evidenciaRecepcionNombre,
+      comentarioRecepcion: opcional(formData.get("comentarioRecepcion")),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaOrdenesCompra(proyectoId));
+  return { guardada: true };
+}
+
+// ---------------------------------------------------------------------------
+// Compras — Requisiciones y Cotizaciones
+// ---------------------------------------------------------------------------
+
+function datosRequisicionDesdeFormData(formData: FormData, evidenciaRef: string | null, evidenciaNombre: string | null) {
+  return {
+    concepto: formData.get("concepto"),
+    descripcion: opcional(formData.get("descripcion")),
+    cantidad: formData.get("cantidad"),
+    unidad: formData.get("unidad"),
+    prioridad: formData.get("prioridad") || "NORMAL",
+    fechaRequerida: opcional(formData.get("fechaRequerida")),
+    comentarios: opcional(formData.get("comentarios")),
+    conceptoContractualId: opcional(formData.get("conceptoContractualId")),
+    evidenciaRef,
+    evidenciaNombre,
+  };
+}
+
+export type RequisicionFormState = { error?: string; guardada?: boolean } | undefined;
+
+export async function crearRequisicionAction(
+  proyectoId: string,
+  _state: RequisicionFormState,
+  formData: FormData
+): Promise<RequisicionFormState> {
+  const usuario = await requireSession();
+  try {
+    let evidenciaRef: string | null = null;
+    let evidenciaNombre: string | null = null;
+    const archivo = formData.get("evidencia");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`requisiciones/${proyectoId}`, archivo);
+      evidenciaRef = subido.ref;
+      evidenciaNombre = subido.nombre;
+    }
+    await crearRequisicion(usuario, proyectoId, datosRequisicionDesdeFormData(formData, evidenciaRef, evidenciaNombre));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function editarRequisicionAction(
+  proyectoId: string,
+  requisicionId: string,
+  _state: RequisicionFormState,
+  formData: FormData
+): Promise<RequisicionFormState> {
+  const usuario = await requireSession();
+  try {
+    let evidenciaRef: string | null = null;
+    let evidenciaNombre: string | null = null;
+    const archivo = formData.get("evidencia");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`requisiciones/${proyectoId}`, archivo);
+      evidenciaRef = subido.ref;
+      evidenciaNombre = subido.nombre;
+    }
+    await editarRequisicion(usuario, requisicionId, datosRequisicionDesdeFormData(formData, evidenciaRef, evidenciaNombre));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function rechazarRequisicionAction(
+  proyectoId: string,
+  requisicionId: string,
+  _state: RequisicionFormState,
+  formData: FormData
+): Promise<RequisicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await rechazarRequisicion(usuario, requisicionId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function cancelarRequisicionAction(
+  proyectoId: string,
+  requisicionId: string,
+  _state: RequisicionFormState,
+  formData: FormData
+): Promise<RequisicionFormState> {
+  const usuario = await requireSession();
+  try {
+    await cancelarRequisicion(usuario, requisicionId, formData.get("motivo"));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function agregarCotizacionAction(
+  proyectoId: string,
+  requisicionId: string,
+  _state: RequisicionFormState,
+  formData: FormData
+): Promise<RequisicionFormState> {
+  const usuario = await requireSession();
+  try {
+    let archivoRef: string | null = null;
+    let archivoNombre: string | null = null;
+    const archivo = formData.get("archivo");
+    if (archivo instanceof File && archivo.size > 0) {
+      const subido = await subirArchivo(`requisiciones/${proyectoId}/cotizaciones`, archivo);
+      archivoRef = subido.ref;
+      archivoNombre = subido.nombre;
+    }
+    await agregarCotizacion(usuario, requisicionId, {
+      proveedorBeneficiarioId: formData.get("proveedorBeneficiarioId"),
+      importe: formData.get("importe"),
+      vigenciaHasta: opcional(formData.get("vigenciaHasta")),
+      tiempoEntregaDias: opcional(formData.get("tiempoEntregaDias")),
+      observaciones: opcional(formData.get("observaciones")),
+      archivoRef,
+      archivoNombre,
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  return { guardada: true };
+}
+
+export async function seleccionarCotizacionAction(proyectoId: string, cotizacionId: string) {
+  const usuario = await requireSession();
+  await seleccionarCotizacion(usuario, cotizacionId);
+  revalidatePath(rutaRequisiciones(proyectoId));
+}
+
+// Genera la Orden de Compra desde una Requisición con cotización
+// seleccionada — proveedor y referencia de cotización se resuelven SIEMPRE
+// en el servidor a partir de esa cotización (nunca del formulario), ver
+// crearOrdenCompra. El formulario solo captura el detalle formal.
+export async function generarOrdenCompraDesdeRequisicionAction(
+  proyectoId: string,
+  semanaId: string,
+  requisicionId: string,
+  _state: OrdenCompraFormState,
+  formData: FormData
+): Promise<OrdenCompraFormState> {
+  const usuario = await requireSession();
+  try {
+    await crearOrdenCompra(usuario, proyectoId, semanaId, datosOCDesdeFormData(formData), requisicionId);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(rutaRequisiciones(proyectoId));
+  revalidatePath(rutaOrdenesCompra(proyectoId));
   return { guardada: true };
 }

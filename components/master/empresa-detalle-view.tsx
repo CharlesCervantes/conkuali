@@ -13,6 +13,7 @@ import {
   actualizarModuloEmpresaAction,
   subirLogoEmpresaAction,
   quitarLogoEmpresaAction,
+  actualizarConfiguracionRecibosAction,
   crearUsuarioEmpresaAction,
   cambiarEstatusUsuarioEmpresaAction,
   regenerarPasswordUsuarioEmpresaAction,
@@ -22,12 +23,13 @@ import type { DetalleEmpresaMaster, EstadoModulo, UsuarioEmpresaMaster } from "@
 import { PasswordTemporalPanel } from "@/components/master/password-temporal-panel";
 import { NOMBRE_ROL } from "@/lib/roles";
 
-const TABS = ["general", "modulos", "branding", "usuarios"] as const;
+const TABS = ["general", "modulos", "branding", "documentos", "usuarios"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
   general: "General",
   modulos: "Módulos",
   branding: "Branding",
+  documentos: "Documentos",
   usuarios: "Usuarios",
 };
 
@@ -82,6 +84,7 @@ export function EmpresaDetalleView({
       {tab === "general" && <TabGeneral empresa={empresa} planes={planes} />}
       {tab === "modulos" && <TabModulos empresa={empresa} />}
       {tab === "branding" && <TabBranding empresa={empresa} />}
+      {tab === "documentos" && <TabDocumentos empresa={empresa} />}
       {tab === "usuarios" && <TabUsuarios empresa={empresa} />}
     </div>
   );
@@ -265,6 +268,57 @@ function TabBranding({ empresa }: { empresa: DetalleEmpresaMaster }) {
         PNG, JPG o WEBP — máximo 2MB. Documentos ya emitidos (recibos, estimaciones) conservan el
         logo con el que fueron generados, sin importar cambios posteriores aquí.
       </p>
+    </Card>
+  );
+}
+
+function TabDocumentos({ empresa }: { empresa: DetalleEmpresaMaster }) {
+  const [state, formAction, pending] = useActionState<MasterFormState, FormData>(
+    actualizarConfiguracionRecibosAction.bind(null, empresa.id),
+    undefined
+  );
+
+  return (
+    <Card className="p-5">
+      <p className="text-sm font-semibold text-[var(--foreground)]">
+        Declaraciones y aceptación — recibos de contratista
+      </p>
+      <p className="mt-1 text-xs text-[var(--muted)]">
+        Este bloque se agrega al final del recibo/estimación de cada contratista. Un cambio aquí
+        solo afecta a los recibos que se generen después — los ya emitidos conservan exactamente
+        el texto y título con el que fueron generados.
+      </p>
+      <form action={formAction} className="mt-4 space-y-3">
+        <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
+          <input
+            type="checkbox"
+            name="reciboMostrarLeyenda"
+            defaultChecked={empresa.reciboMostrarLeyenda}
+            className="h-4 w-4 rounded border-[var(--border)]"
+          />
+          Mostrar este bloque en los recibos
+        </label>
+        <Input
+          name="reciboTituloLeyenda"
+          placeholder="Título del bloque"
+          defaultValue={empresa.reciboTituloLeyenda}
+          required
+        />
+        <textarea
+          name="reciboLeyenda"
+          placeholder="Texto legal — se muestra tal cual, respetando párrafos y saltos de línea."
+          defaultValue={empresa.reciboLeyenda ?? ""}
+          rows={14}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+        />
+        <div className="flex items-center gap-3">
+          <Button type="submit" disabled={pending}>
+            {pending ? "Guardando…" : "Guardar cambios"}
+          </Button>
+          {state?.error && <p className="text-sm text-red-700">{state.error}</p>}
+          {state?.guardado && <p className="text-sm text-emerald-700">Guardado.</p>}
+        </div>
+      </form>
     </Card>
   );
 }

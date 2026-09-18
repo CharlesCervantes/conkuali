@@ -117,7 +117,13 @@ export async function obtenerReporteSemana(
       where: { beneficiarioProyecto: { proyecto: { empresaId } } },
       select: {
         beneficiarioProyectoId: true,
-        conceptos: { select: { cantidad: true, precioUnitarioContratista: true } },
+        // Un concepto eliminado/cancelado (Eliminar Partidas/Conceptos,
+        // septiembre 2026) deja de contar en "Contrato vigente" — mismo
+        // criterio que estructura-contractual.ts:contratosConConceptos.
+        conceptos: {
+          where: { concepto: { estatus: "ACTIVO" } },
+          select: { cantidad: true, precioUnitarioContratista: true },
+        },
       },
     }),
   ]);

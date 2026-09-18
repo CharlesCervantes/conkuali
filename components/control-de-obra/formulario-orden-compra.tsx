@@ -9,6 +9,7 @@ import { formatMoney } from "@/lib/dinero";
 import {
   crearOrdenCompraAction,
   editarOrdenCompraAction,
+  generarOrdenCompraDesdeRequisicionAction,
   type OrdenCompraFormState,
 } from "@/app/(proyecto)/control-de-obra/[id]/actions";
 import type { FilaOrdenCompra } from "@/lib/server/control-de-obra/ordenes-compra";
@@ -23,22 +24,39 @@ type Linea = {
 
 const LINEA_VACIA: Linea = { concepto: "", descripcion: "", unidad: "", cantidad: "1", precioUnitario: "0" };
 
+// Origen opcional: generar la OC desde una Requisición con cotización ya
+// seleccionada (Compras, septiembre 2026) — el proveedor viene FIJO de esa
+// cotización (el servidor lo re-valida y sobreescribe, esto es solo para que
+// se vea correcto de inmediato); el usuario solo revisa/ajusta el detalle
+// formal, nunca vuelve a elegir proveedor.
+type OrigenRequisicion = {
+  id: string;
+  concepto: string;
+  cantidad: number;
+  unidad: string;
+  cotizacionSeleccionada: { proveedorBeneficiarioId: string; proveedorNombre: string; importe: number };
+};
+
 export function FormularioOrdenCompra({
   proyectoId,
   semanaId,
   proveedores,
   orden,
+  requisicion,
   onClose,
 }: {
   proyectoId: string;
   semanaId: string;
   proveedores: { id: string; nombre: string }[];
   orden: FilaOrdenCompra | null;
+  requisicion?: OrigenRequisicion;
   onClose: () => void;
 }) {
   const action = orden
     ? editarOrdenCompraAction.bind(null, proyectoId, orden.id)
-    : crearOrdenCompraAction.bind(null, proyectoId, semanaId);
+    : requisicion
+      ? generarOrdenCompraDesdeRequisicionAction.bind(null, proyectoId, semanaId, requisicion.id)
+      : crearOrdenCompraAction.bind(null, proyectoId, semanaId);
   const [state, formAction, pending] = useActionState<OrdenCompraFormState, FormData>(
     action,
     undefined
@@ -58,7 +76,20 @@ export function FormularioOrdenCompra({
           cantidad: String(l.cantidad),
           precioUnitario: String(l.precioUnitario),
         }))
-      : [{ ...LINEA_VACIA }]
+      : requisicion
+        ? [
+            {
+              concepto: requisicion.concepto,
+              descripcion: "",
+              unidad: requisicion.unidad,
+              cantidad: String(requisicion.cantidad),
+              precioUnitario:
+                requisicion.cantidad > 0
+                  ? String(requisicion.cotizacionSeleccionada.importe / requisicion.cantidad)
+                  : String(requisicion.cotizacionSeleccionada.importe),
+            },
+          ]
+        : [{ ...LINEA_VACIA }]
   );
 
   useEffect(() => {
@@ -89,8 +120,14 @@ export function FormularioOrdenCompra({
     >
       <Card className="enter max-h-[90vh] w-full max-w-2xl overflow-y-auto p-6">
         <h2 className="text-lg font-semibold text-[var(--foreground)]">
-          {orden ? "Editar orden de compra" : "Nueva orden de compra"}
+          {orden ? "Editar orden de compra" : requisicion ? "Generar Orden de Compra" : "Nueva orden de compra"}
         </h2>
+        {requisicion && (
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Desde la requisición &ldquo;{requisicion.concepto}&rdquo; — proveedor tomado de la cotización
+            seleccionada. Revisa/ajusta el detalle formal antes de guardar.
+          </p>
+        )}
 
         <form action={formAction} className="mt-4 space-y-3">
           <input type="hidden" name="detalle" value={JSON.stringify(lineas)} />
@@ -100,21 +137,30 @@ export function FormularioOrdenCompra({
               <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">
                 Proveedor
               </label>
-              <select
-                name="proveedorBeneficiarioId"
-                required
-                defaultValue={orden?.proveedorBeneficiarioId ?? ""}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
-              >
-                <option value="" disabled>
-                  Selecciona…
-                </option>
-                {proveedores.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.nombre}
+              {requisicion ? (
+                <>
+                  <p className="rounded-lg border border-[var(--border)] bg-black/[0.02] px-3.5 py-2.5 text-sm font-medium text-[var(--foreground)]">
+                    {requisicion.cotizacionSeleccionada.proveedorNombre}
+                  </p>
+                  <input type="hidden" name="proveedorBeneficiarioId" value={requisicion.cotizacionSeleccionada.proveedorBeneficiarioId} />
+                </>
+              ) : (
+                <select
+                  name="proveedorBeneficiarioId"
+                  required
+                  defaultValue={orden?.proveedorBeneficiarioId ?? ""}
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+                >
+                  <option value="" disabled>
+                    Selecciona…
                   </option>
-                ))}
-              </select>
+                  {proveedores.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">

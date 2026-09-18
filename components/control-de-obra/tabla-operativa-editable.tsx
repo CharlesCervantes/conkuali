@@ -44,6 +44,7 @@ export function TablaOperativaEditable({
   subtotal,
   montoAdm,
   puedeAdministrar,
+  puedeEliminar,
 }: {
   proyectoId: string;
   conceptos: ConceptoOperativoPlano[];
@@ -53,6 +54,7 @@ export function TablaOperativaEditable({
   subtotal: number;
   montoAdm: number;
   puedeAdministrar: boolean;
+  puedeEliminar: boolean;
 }) {
   const [conceptoEditandoId, setConceptoEditandoId] = useState<string | null>(null);
 
@@ -89,7 +91,7 @@ export function TablaOperativaEditable({
                   "cursor-pointer transition-colors duration-150 ease-out hover:bg-[var(--brand)]/[0.05]"
               )}
             >
-              <Td className="font-medium">{concepto.descripcion}</Td>
+              <Td className="align-top font-medium whitespace-pre-line">{concepto.descripcion}</Td>
               <Td className="text-[var(--muted)]">{concepto.unidad}</Td>
               <Td className="text-right tabular-nums">{cant(concepto.cantidadContratada)}</Td>
               <Td className="text-right tabular-nums text-[var(--muted)]">
@@ -148,6 +150,7 @@ export function TablaOperativaEditable({
           proyectoId={proyectoId}
           conceptoId={conceptoEditandoId}
           modo="operativo"
+          puedeEliminar={puedeEliminar}
           onClose={() => setConceptoEditandoId(null)}
         />
       )}
