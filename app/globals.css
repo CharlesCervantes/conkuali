@@ -52,10 +52,19 @@ body {
   color: var(--foreground);
 }
 
-/* Entrada sutil para tarjetas/paneles al montar — sin JS, sin useEffect. */
+/* Entrada sutil para tarjetas/paneles al montar — sin JS, sin useEffect.
+   El estado de reposo usa `transform: none` (no `translateY(0)`) a propósito:
+   un transform distinto de `none`, aunque sea "0px", se queda aplicado para
+   siempre y convierte la tarjeta en su propio containing block/capa
+   compuesta — con contenido que cambia mucho de alto (un <details> con
+   muchos conceptos o descripciones largas, ver Avance de obra) algunos
+   navegadores dejan de repintar bien esa capa al hacer scroll (contenido
+   superpuesto, filas "congeladas", scroll trabado). `none` sigue
+   interpolando correctamente desde `translateY(10px)` en la transición, así
+   que la animación se ve igual, pero no deja rastro después de montar. */
 .enter {
   opacity: 1;
-  transform: translateY(0);
+  transform: none;
   transition:
     opacity 400ms var(--ease-out),
     transform 400ms var(--ease-out);
