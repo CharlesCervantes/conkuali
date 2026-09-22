@@ -139,6 +139,10 @@ async function main() {
         // MASTER es un rol de plataforma, sin Empresa (ver enum RolUsuario,
         // prisma/schema.prisma) — todos los demás roles sí pertenecen a Conkuali.
         empresaId: persona.rol === "MASTER" ? null : empresa.id,
+        // Mismo criterio que Portal Master al dar de alta un usuario nuevo
+        // con contraseña temporal (lib/server/master/empresas.ts) — nadie se
+        // queda usándola indefinidamente (Preflight Seed Production, septiembre 2026).
+        debeCambiarPassword: true,
       },
     });
 
