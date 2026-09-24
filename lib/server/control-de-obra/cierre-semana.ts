@@ -87,11 +87,23 @@ type LineaAvanceParaCierre = {
   unidad: string;
   avanceConceptoId: string;
   cantidadEjecutada: number;
+  // Monto exacto capturado (AvanceConcepto.montoEjecutado) — cuando existe,
+  // es el importe real de esta línea; nunca se recalcula desde
+  // cantidadEjecutada, que solo guarda 3 decimales (ver importeLinea).
+  montoEjecutado: number | null;
   contratoConceptoId: string | null;
   contratoContratistaId: string | null;
   beneficiarioProyectoId: string | null;
   precioUnitarioContratista: number | null;
 };
+
+// Importe real de una línea de avance — el monto exacto capturado si existe,
+// o cantidad × P.U. como fallback (captura hecha por Cantidad directamente,
+// o conceptos sin P.U. contratado). Única fórmula, reutilizada por el resumen
+// y por la generación real del corte para que nunca puedan disentir entre sí.
+function importeLinea(linea: LineaAvanceParaCierre): number {
+  return linea.montoEjecutado ?? linea.cantidadEjecutada * (linea.precioUnitarioContratista ?? 0);
+}
 
 async function obtenerLineasAvanceAprobado(
   cliente: Cliente,
@@ -109,6 +121,7 @@ async function obtenerLineasAvanceAprobado(
       id: true,
       conceptoId: true,
       cantidadEjecutada: true,
+      montoEjecutado: true,
       concepto: {
         select: {
           descripcion: true,
@@ -136,6 +149,7 @@ async function obtenerLineasAvanceAprobado(
       unidad: a.concepto.unidad,
       avanceConceptoId: a.id,
       cantidadEjecutada: Number(a.cantidadEjecutada),
+      montoEjecutado: a.montoEjecutado !== null ? Number(a.montoEjecutado) : null,
       contratoConceptoId: asignacion?.id ?? null,
       contratoContratistaId: asignacion?.contratoContratista.id ?? null,
       beneficiarioProyectoId: asignacion?.contratoContratista.beneficiarioProyectoId ?? null,
@@ -215,7 +229,7 @@ export async function obtenerResumenCierreSemana(
       continue;
     }
     beneficiariosInvolucrados.add(linea.beneficiarioProyectoId);
-    montoManoDeObraAprobado += linea.cantidadEjecutada * linea.precioUnitarioContratista;
+    montoManoDeObraAprobado += importeLinea(linea);
   }
 
   return {
@@ -308,10 +322,7 @@ async function generarOReconciliarCorte(
     return { tipo: "OMITIDO_LIQUIDADO", auditorias: [] };
   }
 
-  const montoBruto = lineas.reduce(
-    (t, l) => t + l.cantidadEjecutada * (l.precioUnitarioContratista ?? 0),
-    0
-  );
+  const montoBruto = lineas.reduce((t, l) => t + importeLinea(l), 0);
   const ajustes = existente ? Number(existente.ajustes) : 0;
   const montoNeto = montoBruto + ajustes;
   // > 0 vigente; = 0 (sin avance aprobado tras una reapertura) se anula, no
@@ -334,7 +345,7 @@ async function generarOReconciliarCorte(
     unidad: l.unidad,
     cantidadEjecutada: l.cantidadEjecutada,
     precioUnitarioContratista: l.precioUnitarioContratista ?? 0,
-    importe: l.cantidadEjecutada * (l.precioUnitarioContratista ?? 0),
+    importe: importeLinea(l),
   }));
 
   if (existente) {
@@ -352,7 +363,8 @@ async function generarOReconciliarCorte(
         (d, i) =>
           d.conceptoId === nuevoOrdenado[i].conceptoId &&
           Number(d.cantidadEjecutada) === nuevoOrdenado[i].cantidadEjecutada &&
-          Number(d.precioUnitarioContratista) === nuevoOrdenado[i].precioUnitarioContratista
+          Number(d.precioUnitarioContratista) === nuevoOrdenado[i].precioUnitarioContratista &&
+          Number(d.importe) === nuevoOrdenado[i].importe
       );
 
     if (sinCambios) return { tipo: "SIN_CAMBIOS", montoNeto, auditorias: [] };

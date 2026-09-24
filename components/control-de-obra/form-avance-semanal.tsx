@@ -6,6 +6,7 @@ import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { BarraAvance } from "./barra-avance";
 import { EstatusAprobacionAvanceBadge } from "./estatus-aprobacion-avance-badge";
+import { IconoPartida } from "./icono-partida";
 import { useDirtyAvance } from "./dirty-avance-context";
 import { cn } from "@/lib/cn";
 import { formatMoney } from "@/lib/dinero";
@@ -27,6 +28,22 @@ function formatCantidad(valor: InstanceType<typeof Prisma.Decimal> | number): st
 
 function valorInicial(concepto: ConceptoConAvance): string {
   return concepto.estaSemana > 0 ? formatCantidad(concepto.estaSemana) : "";
+}
+
+function calcularTextoMonto(textoCantidad: string, precio: number | null): string {
+  if (!precio || textoCantidad === "") return "";
+  return new Prisma.Decimal(textoCantidad || 0).times(precio).toDecimalPlaces(2).toString();
+}
+
+// Monto inicial a mostrar/comparar: el exacto ya guardado esta semana
+// (AvanceConcepto.montoEjecutado) si existe — nunca recalculado desde la
+// cantidad, que solo guarda 3 decimales y volvería a mostrar un monto
+// impreciso al reabrir/recargar la página. Si todavía no hay monto guardado
+// (fila nueva, o se capturó por Cantidad directamente), se deriva de
+// cantidad × P.U. como siempre.
+function montoInicial(concepto: ConceptoConAvance): string {
+  if (concepto.montoEstaSemana !== null) return String(concepto.montoEstaSemana);
+  return calcularTextoMonto(valorInicial(concepto), concepto.precioUnitarioContratistaContratado);
 }
 
 export function FormAvanceSemanal({
@@ -95,8 +112,22 @@ function PartidaAvance({
   );
   const [valores, setValores] = useState<Record<string, string>>(baseline);
 
+  // Mismo patrón que baseline/valores, para el Monto — necesario para que
+  // "hay cambios sin guardar" también detecte cuando SOLO se corrigió el
+  // Monto (la cantidad redondeada puede quedar idéntica a la de antes, ver
+  // bug reportado: corregir 120000.96 → 120000 no cambiaba la cantidad
+  // guardada, así que el botón de guardar nunca aparecía). Sin esto, editar
+  // el Monto no se detectaba como cambio y la fila nunca se reenviaba al
+  // servidor.
+  const [baselineMonto, setBaselineMonto] = useState<Record<string, string>>(() =>
+    Object.fromEntries(partida.conceptos.map((c) => [c.id, montoInicial(c)]))
+  );
+  const [valoresMonto, setValoresMonto] = useState<Record<string, string>>(baselineMonto);
+
   const conceptosModificados = partida.conceptos.filter(
-    (c) => (valores[c.id] ?? "") !== (baseline[c.id] ?? "")
+    (c) =>
+      (valores[c.id] ?? "") !== (baseline[c.id] ?? "") ||
+      (valoresMonto[c.id] ?? "") !== (baselineMonto[c.id] ?? "")
   );
   const dirty = conceptosModificados.length > 0;
 
@@ -119,11 +150,16 @@ function PartidaAvance({
     setStateAnterior(state);
     if (state?.guardados !== undefined && !state.error) {
       setBaseline(valores);
+      setBaselineMonto(valoresMonto);
     }
   }
 
   function actualizarValor(conceptoId: string, nuevaCantidad: string) {
     setValores((prev) => ({ ...prev, [conceptoId]: nuevaCantidad }));
+  }
+
+  function actualizarMonto(conceptoId: string, nuevoMonto: string) {
+    setValoresMonto((prev) => ({ ...prev, [conceptoId]: nuevoMonto }));
   }
 
   const conMovimiento = partida.conceptos.filter((c) => c.estaSemana > 0).length;
@@ -135,8 +171,11 @@ function PartidaAvance({
     >
       <details>
         <summary className="group flex cursor-pointer list-none items-center justify-between px-5 py-4 select-none [&::-webkit-details-marker]:hidden">
-          <span className="text-sm font-semibold text-[var(--foreground)]">
-            {partida.nombre}
+          <span className="flex items-center gap-3">
+            <IconoPartida icono={partida.icono} color={partida.color} />
+            <span className="text-sm font-semibold text-[var(--foreground)]">
+              {partida.nombre}
+            </span>
           </span>
           <span className="text-xs text-[var(--muted)]">
             {partida.conceptos.length} concepto
@@ -183,7 +222,9 @@ function PartidaAvance({
                       semanaId={semanaId}
                       concepto={concepto}
                       valor={valores[concepto.id] ?? ""}
+                      valorMonto={valoresMonto[concepto.id] ?? ""}
                       onCambiar={(v) => actualizarValor(concepto.id, v)}
+                      onCambiarMonto={(v) => actualizarMonto(concepto.id, v)}
                       puedeAprobar={puedeAprobar}
                       soloLectura={soloLectura}
                     />
@@ -220,23 +261,14 @@ function PartidaAvance({
   );
 }
 
-function calcularTextoMonto(
-  textoCantidad: string,
-  precio: number | null
-): string {
-  if (!precio || textoCantidad === "") return "";
-  return new Prisma.Decimal(textoCantidad || 0)
-    .times(precio)
-    .toDecimalPlaces(2)
-    .toString();
-}
-
 function FilaConcepto({
   proyectoId,
   semanaId,
   concepto,
   valor,
+  valorMonto,
   onCambiar,
+  onCambiarMonto,
   puedeAprobar,
   soloLectura,
 }: {
@@ -244,7 +276,9 @@ function FilaConcepto({
   semanaId: string;
   concepto: ConceptoConAvance;
   valor: string;
+  valorMonto: string;
   onCambiar: (nuevaCantidad: string) => void;
+  onCambiarMonto: (nuevoMonto: string) => void;
   puedeAprobar: boolean;
   soloLectura: boolean;
 }) {
@@ -261,33 +295,24 @@ function FilaConcepto({
   const precio = concepto.precioUnitarioContratistaContratado;
   const tienePrecio = precio !== null;
 
-  // El input de Monto tiene su propio texto — si se derivara de `valor` en
-  // cada render (cantidad × precio), el redondeo a 3 decimales de la
-  // cantidad reescribiría el monto en cada tecleo y el usuario nunca podría
-  // terminar de escribir. Solo se resincroniza cuando la cantidad cambió por
-  // OTRA vía (el input de Cantidad, o un cambio de semana) — nunca cuando el
-  // cambio vino de este mismo campo.
-  const [cantidadSincronizada, setCantidadSincronizada] = useState(valor);
-  const [textoMonto, setTextoMonto] = useState(() => calcularTextoMonto(valor, precio));
+  // Cantidad y Monto ahora viven en el padre (PartidaAvance) — cada input
+  // maneja el otro explícitamente al cambiar, sin estado local propio que
+  // pudiera perder de vista si el Monto realmente cambió (ver comentario en
+  // PartidaAvance sobre la detección de "cambios sin guardar").
   const [montoEnfocado, setMontoEnfocado] = useState(false);
-
-  if (valor !== cantidadSincronizada) {
-    setCantidadSincronizada(valor);
-    setTextoMonto(calcularTextoMonto(valor, precio));
-  }
 
   function alCambiarCantidad(texto: string) {
     onCambiar(texto);
+    onCambiarMonto(calcularTextoMonto(texto, precio));
   }
 
   function alCambiarMonto(textoCrudo: string) {
     if (!tienePrecio || precio === null) return;
     // Deja escribir libremente — incluso números a medio terminar (ej. "12.").
     const texto = textoCrudo.replace(/[^0-9.]/g, "");
-    setTextoMonto(texto);
+    onCambiarMonto(texto);
 
     if (texto === "") {
-      setCantidadSincronizada("");
       onCambiar("");
       return;
     }
@@ -298,12 +323,13 @@ function FilaConcepto({
     // Aritmética con Decimal exacta (no float de JS) — la cantidad
     // resultante se redondea al mismo límite de precisión que el resto del
     // sistema (Concepto.cantidadContratada / ContratoConcepto.cantidad = 3
-    // decimales).
+    // decimales). El monto EXACTO tecleado se conserva tal cual en
+    // valorMonto — nunca se vuelve a derivar de esta cantidad ya redondeada
+    // (ver AvanceConcepto.montoEjecutado).
     const nuevaCantidad = new Prisma.Decimal(texto)
       .div(precio)
       .toDecimalPlaces(3)
       .toString();
-    setCantidadSincronizada(nuevaCantidad);
     onCambiar(nuevaCantidad);
   }
 
@@ -339,29 +365,37 @@ function FilaConcepto({
       </Td>
       <Td className="bg-[var(--brand)]/[0.02]">
         {tienePrecio ? (
-          <input
-            type="text"
-            inputMode="decimal"
-            value={
-              montoEnfocado
-                ? textoMonto
-                : textoMonto === ""
-                  ? ""
-                  : formatMoney(textoMonto)
-            }
-            onFocus={() => setMontoEnfocado(true)}
-            onBlur={() => setMontoEnfocado(false)}
-            onChange={(e) => alCambiarMonto(e.target.value)}
-            disabled={soloLectura}
-            placeholder="$0.00"
-            className={cn(
-              soloLectura && "opacity-60",
-              "w-28 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
-              excede
-                ? "border-red-300 focus:border-red-400"
-                : "border-[var(--border)] focus:border-[var(--brand)]"
-            )}
-          />
+          <>
+            {/* Monto exacto tecleado, sin el formato de despliegue — el
+                servidor lo guarda tal cual (AvanceConcepto.montoEjecutado) y
+                lo usa como importe real del corte, en vez de recalcularlo
+                desde la cantidad ya redondeada a 3 decimales (evita perder
+                centavos frente a lo que el contratista realmente pidió). */}
+            <input type="hidden" name={`monto_${concepto.id}`} value={valorMonto} />
+            <input
+              type="text"
+              inputMode="decimal"
+              value={
+                montoEnfocado
+                  ? valorMonto
+                  : valorMonto === ""
+                    ? ""
+                    : formatMoney(valorMonto)
+              }
+              onFocus={() => setMontoEnfocado(true)}
+              onBlur={() => setMontoEnfocado(false)}
+              onChange={(e) => alCambiarMonto(e.target.value)}
+              disabled={soloLectura}
+              placeholder="$0.00"
+              className={cn(
+                soloLectura && "opacity-60",
+                "w-28 rounded-md border bg-[var(--surface)] px-2.5 py-1.5 text-right text-sm tabular-nums text-[var(--foreground)] transition-colors duration-150 ease-out focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15",
+                excede
+                  ? "border-red-300 focus:border-red-400"
+                  : "border-[var(--border)] focus:border-[var(--brand)]"
+              )}
+            />
+          </>
         ) : (
           <span className="block text-right text-sm text-[var(--muted)]">—</span>
         )}
