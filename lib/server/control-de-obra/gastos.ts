@@ -657,6 +657,31 @@ export async function listarBeneficiariosParaGasto(
   });
 }
 
+// Aviso en el sidebar (global "Proyectos" y, dentro de un proyecto,
+// "Gastos") — mismo criterio y forma que contarPendientesPorProyecto en
+// avance.ts, para la otra mitad de "algo necesita aprobación" (Gastos
+// transversal → sidebar, septiembre 2026).
+export async function contarGastosPendientesRevisionPorProyecto(
+  empresaId: string
+): Promise<Map<string, number>> {
+  const filas = await db.gastoObra.groupBy({
+    by: ["proyectoId"],
+    where: { empresaId, estatus: "PENDIENTE_REVISION" },
+    _count: { _all: true },
+  });
+  return new Map(filas.map((f) => [f.proyectoId, f._count._all]));
+}
+
+// Mismo motivo que hayAvancePendiente (avance.ts) pero para "Gastos" dentro
+// del sidebar de un proyecto — escopado a un solo proyecto, sin agrupar
+// primero toda la empresa.
+export async function hayGastosPendientesRevision(proyectoId: string): Promise<boolean> {
+  const total = await db.gastoObra.count({
+    where: { proyectoId, estatus: "PENDIENTE_REVISION" },
+  });
+  return total > 0;
+}
+
 export function calcularDashboardGastos(filas: FilaGasto[]): DashboardGastos {
   const aprobados = filas.filter((f) => f.estatus === "APROBADO");
   return {

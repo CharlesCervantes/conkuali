@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FileInput } from "@/components/ui/file-input";
 import type { FormState } from "@/app/(app)/control-de-obra/actions";
 
 const TIPOS = [
@@ -132,11 +133,11 @@ export function ProyectoForm({
                   <div className="flex h-full w-full items-center justify-center text-[var(--muted)]">🏗️</div>
                 )}
               </div>
-              <input
+              <FileInput
                 name="imagen"
-                type="file"
                 accept="image/*"
-                className="block flex-1 text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"
+                containerClassName="flex-1"
+                className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"
               />
             </div>
           </div>

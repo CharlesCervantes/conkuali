@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { formatMoney } from "@/lib/dinero";
 import { formatearFecha } from "@/lib/fecha";
 import {
@@ -446,9 +447,8 @@ function FormularioRequisicion({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">Foto/evidencia (opcional)</label>
-            <input
+            <FileInput
               name="evidencia"
-              type="file"
               accept="image/*,application/pdf"
               className="w-full text-sm text-[var(--foreground)]"
             />
@@ -577,9 +577,8 @@ function FormularioCotizacion({
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">
               Archivo de cotización (opcional)
             </label>
-            <input
+            <FileInput
               name="archivo"
-              type="file"
               accept="image/*,application/pdf"
               className="w-full text-sm text-[var(--foreground)]"
             />
