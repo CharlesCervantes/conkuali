@@ -4,6 +4,7 @@ import { useActionState, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { Table, Thead, Tr, Th, Td } from "@/components/ui/table";
 import { formatMoney } from "@/lib/dinero";
 import { EstadoPagoBadge } from "@/components/reporte-general/estado-pago-badge";
@@ -328,8 +329,7 @@ function SubirEvidencia({ proyectoId, reciboId }: { proyectoId: string; reciboId
       <label className="mb-1.5 block text-sm font-medium text-[var(--foreground)]">
         Subir evidencia firmada (PDF o foto)
       </label>
-      <input
-        type="file"
+      <FileInput
         name="archivo"
         accept="application/pdf,image/*"
         required

@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { formatMoney } from "@/lib/dinero";
 import { formatearFecha } from "@/lib/fecha";
 import {
@@ -259,9 +260,8 @@ function ModalIngreso({
           </label>
 
           <Campo label={ingreso ? "Reemplazar comprobante (opcional)" : "Comprobante (opcional)"}>
-            <input
+            <FileInput
               name="comprobante"
-              type="file"
               accept="image/*,application/pdf"
               className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
             />

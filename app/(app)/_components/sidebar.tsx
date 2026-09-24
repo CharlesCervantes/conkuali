@@ -13,12 +13,17 @@ type ModuloNav = {
   clave: string;
   nombre: string;
   href: string | null;
+  // true = hay algo pendiente de aprobar/revisar en este módulo (ej.
+  // Proyectos con avance o gastos pendientes) — un puntito discreto junto al
+  // nombre, solo para quien ya puede ver esta alerta (calculado por el
+  // caller, nunca aquí: el sidebar solo pinta lo que le llega).
+  pendiente?: boolean;
 };
 
 type GrupoProyecto = {
   label: string;
   hrefActivo: string;
-  hijos: { href: string; label: string; coincideSubrutas?: boolean }[];
+  hijos: { href: string; label: string; coincideSubrutas?: boolean; pendiente?: boolean }[];
 };
 
 type SidebarProps =
@@ -134,6 +139,7 @@ export function Sidebar(props: SidebarProps) {
                   key={modulo.clave}
                   href={modulo.href}
                   active={pathname.startsWith(modulo.href)}
+                  pendiente={modulo.pendiente}
                 >
                   {modulo.nombre}
                 </NavLink>
@@ -193,13 +199,14 @@ export function Sidebar(props: SidebarProps) {
                         key={hijo.href}
                         href={hijo.href}
                         className={cn(
-                          "block rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ease-out",
+                          "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ease-out",
                           activo
                             ? "bg-[var(--brand)]/10 text-[var(--brand)]"
                             : "text-[var(--foreground)] hover:bg-black/[0.04]"
                         )}
                       >
-                        {hijo.label}
+                        <span>{hijo.label}</span>
+                        {hijo.pendiente && <PuntoPendiente />}
                       </EnlaceProtegido>
                     );
                   })}
@@ -241,23 +248,39 @@ export function Sidebar(props: SidebarProps) {
 function NavLink({
   href,
   active,
+  pendiente,
   children,
 }: {
   href: string;
   active: boolean;
+  pendiente?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <Link
       href={href}
       className={cn(
-        "block rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ease-out",
+        "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150 ease-out",
         active
           ? "bg-[var(--brand)]/10 text-[var(--brand)]"
           : "text-[var(--foreground)] hover:bg-black/[0.04]"
       )}
     >
-      {children}
+      <span>{children}</span>
+      {pendiente && <PuntoPendiente />}
     </Link>
+  );
+}
+
+// Indicador discreto de "algo pendiente" en un renglón del sidebar (ej.
+// Proyectos con avance/gastos sin aprobar) — solo un punto, sin número (el
+// detalle exacto ya se ve al entrar a la pantalla). Ámbar porque es un
+// aviso, no la identidad de marca (--brand) ni un error (--danger).
+function PuntoPendiente() {
+  return (
+    <span
+      className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warning)]"
+      title="Hay algo pendiente"
+    />
   );
 }

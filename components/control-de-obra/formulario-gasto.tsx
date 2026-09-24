@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { formatMoney } from "@/lib/dinero";
 import {
   categoriasParaAmbito,
@@ -440,9 +441,8 @@ export function FormularioGasto({
             </label>
 
             <Campo label={gasto?.ticketRef ? "Reemplazar ticket (opcional)" : "Ticket / foto"}>
-              <input
+              <FileInput
                 name="ticket"
-                type="file"
                 accept="image/*,application/pdf"
                 capture="environment"
                 className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--foreground)] file:transition-colors file:duration-150 file:ease-out hover:file:bg-black/[0.03]"

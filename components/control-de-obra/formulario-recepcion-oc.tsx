@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import {
   marcarRecepcionOrdenCompraAction,
   type OrdenCompraFormState,
@@ -71,9 +72,8 @@ export function FormularioRecepcionOC({
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">
               Evidencia (opcional)
             </label>
-            <input
+            <FileInput
               name="evidenciaRecepcion"
-              type="file"
               accept="image/*,application/pdf"
               className="w-full text-sm text-[var(--foreground)]"
             />

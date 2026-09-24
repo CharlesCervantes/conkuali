@@ -1,3 +1,4 @@
+import { FileInput } from "@/components/ui/file-input";
 import type { FilaMedioFinanciero } from "@/lib/server/contabilidad/medios-financieros";
 
 // Bloque opcional compartido por "Registrar pago"/"Registrar aportación"
@@ -39,9 +40,8 @@ export function CamposFiscalesCobro({
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">Comprobante</label>
-          <input
+          <FileInput
             name="comprobante"
-            type="file"
             accept="image/*,application/pdf"
             className="w-full text-sm text-[var(--foreground)] file:mr-3 file:rounded-lg file:border-0 file:bg-[var(--brand)]/10 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-[var(--brand)]"
           />

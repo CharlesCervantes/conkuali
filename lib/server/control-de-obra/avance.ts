@@ -512,3 +512,15 @@ export async function contarPendientesPorProyecto(
   }
   return conteo;
 }
+
+// Aviso en el sidebar dentro de un proyecto ("Avance de obra") — a
+// diferencia de contarPendientesPorProyecto (empresa completa, para la lista
+// de Proyectos), este ya viene escopado a un solo proyecto: evita traer y
+// agrupar el avance pendiente de toda la empresa solo para leer una entrada
+// (sidebar con indicador de pendientes, septiembre 2026).
+export async function hayAvancePendiente(proyectoId: string): Promise<boolean> {
+  const total = await db.avanceConcepto.count({
+    where: { estatusAprobacion: "PENDIENTE", concepto: { partida: { proyectoId } } },
+  });
+  return total > 0;
+}

@@ -1,11 +1,17 @@
 import { notFound, redirect } from "next/navigation";
 import { requireSession } from "@/lib/server/auth/dal";
-import { esMaster, puedeVerContratoGeneralPrivado } from "@/lib/server/permisos";
+import {
+  esMaster,
+  puedeVerContratoGeneralPrivado,
+  puedeAdministrarProyectos,
+} from "@/lib/server/permisos";
 import { NOMBRE_ROL } from "@/lib/roles";
 import {
   obtenerProyecto,
   ProyectoNoEncontradoError,
 } from "@/lib/server/control-de-obra/proyectos";
+import { hayAvancePendiente } from "@/lib/server/control-de-obra/avance";
+import { hayGastosPendientesRevision } from "@/lib/server/control-de-obra/gastos";
 import { DirtyAvanceProvider } from "@/components/control-de-obra/dirty-avance-context";
 import { AppShell } from "@/app/(app)/_components/app-shell";
 import { Sidebar } from "@/app/(app)/_components/sidebar";
@@ -35,6 +41,13 @@ export default async function ProyectoLayout({
   // de navegación, agosto 2026).
   const puedeVerPrivado = puedeVerContratoGeneralPrivado(usuario);
 
+  // Puntito de "algo pendiente" junto a Avance de obra/Gastos — mismo
+  // criterio que en el sidebar global (solo quien puede aprobar).
+  const puedeVerAlertas = puedeAdministrarProyectos(usuario);
+  const [avancePendiente, gastosPendientes] = puedeVerAlertas
+    ? await Promise.all([hayAvancePendiente(id), hayGastosPendientesRevision(id)])
+    : [false, false];
+
   const grupos = [
     {
       label: "Contrato",
@@ -52,12 +65,17 @@ export default async function ProyectoLayout({
       // Sin gating por permiso — igual que hoy, Supervisor ve las tres; el
       // filtrado real ocurre dentro de cada página.
       hijos: [
-        { href: `/control-de-obra/${id}/ejecucion/avance`, label: "Avance de obra" },
+        {
+          href: `/control-de-obra/${id}/ejecucion/avance`,
+          label: "Avance de obra",
+          pendiente: avancePendiente,
+        },
         { href: `/control-de-obra/${id}/ejecucion/contratistas`, label: "Contratistas" },
         {
           href: `/control-de-obra/${id}/ejecucion/gastos`,
           label: "Gastos",
           coincideSubrutas: true,
+          pendiente: gastosPendientes,
         },
       ],
     },

@@ -5,6 +5,7 @@ import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { formatMoney } from "@/lib/dinero";
 import { CATEGORIAS_GASTO, CATEGORIA_GASTO_LABEL } from "@/lib/control-de-obra/categorias-gasto";
 import {
@@ -133,9 +134,8 @@ export function FormularioGastoDesdeOC({
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">
               Comprobante de pago (opcional)
             </label>
-            <input
+            <FileInput
               name="comprobantePago"
-              type="file"
               accept="image/*,application/pdf"
               className="w-full text-sm text-[var(--foreground)]"
             />

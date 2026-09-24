@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { FileInput } from "@/components/ui/file-input";
 import { formatMoney } from "@/lib/dinero";
 import { formatearFecha } from "@/lib/fecha";
 import {
@@ -229,9 +230,8 @@ function ModalCargarFactura({
           )}
           <div>
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">Archivo XML</label>
-            <input
+            <FileInput
               name="xml"
-              type="file"
               accept=".xml,text/xml,application/xml"
               required
               className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
@@ -239,9 +239,8 @@ function ModalCargarFactura({
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-[var(--foreground)]">PDF (opcional)</label>
-            <input
+            <FileInput
               name="pdf"
-              type="file"
               accept="application/pdf"
               className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
             />

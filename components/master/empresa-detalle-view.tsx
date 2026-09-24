@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { FileInput } from "@/components/ui/file-input";
 import {
   editarEmpresaGeneralAction,
   cambiarEstatusEmpresaAction,
@@ -242,8 +243,7 @@ function TabBranding({ empresa }: { empresa: DetalleEmpresaMaster }) {
           )}
         </div>
         <form action={formAction} className="flex items-center gap-3">
-          <input
-            type="file"
+          <FileInput
             name="logo"
             accept="image/png,image/jpeg,image/webp"
             required
