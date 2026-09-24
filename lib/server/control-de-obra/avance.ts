@@ -84,6 +84,11 @@ export type ConceptoConAvance = Omit<ConceptoBase, CamposDecimalConcepto> &
     porcentajeAdministracion: number | null;
     anterior: number;
     estaSemana: number;
+    // Monto exacto ya guardado esta semana (AvanceConcepto.montoEjecutado) —
+    // null = todavía no se capturó monto (fila nueva, o se capturó por
+    // Cantidad directamente). La pantalla lo usa para mostrar el Monto tal
+    // cual quedó guardado, nunca recalculado desde estaSemana × P.U.
+    montoEstaSemana: number | null;
     // null = nada capturado todavía esta semana (no hay fila que aprobar).
     estatusAprobacion: EstatusAprobacionAvance | null;
     // P.U. CONTRATADO (resuelto vía ContratoConcepto) — distinto del
@@ -124,6 +129,13 @@ export async function obtenerAvanceSemanal(
   const estaSemanaPorConcepto = new Map(
     filasEstaSemana.map((f) => [f.conceptoId, Number(f.cantidadEjecutada)])
   );
+  // Monto exacto ya guardado esta semana (AvanceConcepto.montoEjecutado) — la
+  // pantalla lo usa para mostrar el mismo monto tal cual quedó guardado, en
+  // vez de recalcularlo desde la cantidad (que solo guarda 3 decimales y
+  // volvería a mostrar el monto impreciso al reabrir/recargar).
+  const montoEstaSemanaPorConcepto = new Map(
+    filasEstaSemana.map((f) => [f.conceptoId, f.montoEjecutado !== null ? Number(f.montoEjecutado) : null])
+  );
   const estatusPorConcepto = new Map(
     filasEstaSemana.map((f) => [f.conceptoId, f.estatusAprobacion])
   );
@@ -133,6 +145,7 @@ export async function obtenerAvanceSemanal(
     conceptos: partida.conceptos.map((concepto): ConceptoConAvance => {
       const anterior = anteriorPorConcepto.get(concepto.id) ?? 0;
       const estaSemana = estaSemanaPorConcepto.get(concepto.id) ?? 0;
+      const montoEstaSemana = montoEstaSemanaPorConcepto.get(concepto.id) ?? null;
       // El acumulado "oficial" solo suma lo APROBADO. Mientras esta semana
       // esté pendiente/rechazada, Acumulado/Pendiente/% no se mueven todavía
       // — la vista de captura sigue mostrando lo tecleado, pero lo que cuenta
@@ -147,6 +160,7 @@ export async function obtenerAvanceSemanal(
         porcentajeAdministracion: numOrNull(concepto.porcentajeAdministracion),
         anterior,
         estaSemana,
+        montoEstaSemana,
         estatusAprobacion: estatusSemana,
         precioUnitarioContratistaContratado:
           resolucionContratista.get(concepto.id)?.precioUnitarioContratista ?? null,
@@ -207,6 +221,9 @@ export async function obtenerAvanceAcumuladoPorConcepto(
 const FilaCapturaSchema = z.object({
   conceptoId: z.string().min(1),
   cantidadEjecutada: z.coerce.number().min(0, "La cantidad no puede ser negativa."),
+  // Monto exacto tecleado (cuando la captura fue por el campo Monto) — ver
+  // comentario de AvanceConcepto.montoEjecutado en el schema.
+  montoEjecutado: z.coerce.number().nonnegative().optional().nullable(),
 });
 
 const CapturaAvanceSchema = z.object({
@@ -256,8 +273,10 @@ export async function guardarAvanceSemanal(
   const porGuardar: {
     conceptoId: string;
     cantidadEjecutada: number;
+    montoEjecutado: number | null;
     existenteId?: string;
     valorPrevio: number;
+    montoPrevio: number | null;
   }[] = [];
 
   for (const fila of datos.filas) {
@@ -266,7 +285,9 @@ export async function guardarAvanceSemanal(
 
     const existente = existentePorConcepto.get(fila.conceptoId);
     const valorPrevio = existente ? Number(existente.cantidadEjecutada) : 0;
-    if (fila.cantidadEjecutada === valorPrevio) continue; // sin cambios
+    const montoPrevio = existente?.montoEjecutado != null ? Number(existente.montoEjecutado) : null;
+    const montoNuevo = fila.montoEjecutado ?? null;
+    if (fila.cantidadEjecutada === valorPrevio && montoNuevo === montoPrevio) continue; // sin cambios
 
     const anterior = anteriorPorConcepto.get(fila.conceptoId) ?? 0;
     const acumuladoProspectivo = anterior + fila.cantidadEjecutada;
@@ -282,8 +303,10 @@ export async function guardarAvanceSemanal(
     porGuardar.push({
       conceptoId: fila.conceptoId,
       cantidadEjecutada: fila.cantidadEjecutada,
+      montoEjecutado: montoNuevo,
       existenteId: existente?.id,
       valorPrevio,
+      montoPrevio,
     });
   }
 
@@ -333,6 +356,7 @@ export async function guardarAvanceSemanal(
             conceptoId: f.conceptoId,
             semanaId: semana.id,
             cantidadEjecutada: f.cantidadEjecutada,
+            montoEjecutado: f.montoEjecutado,
             registradoPorId: usuario.id,
             estatusAprobacion: "PENDIENTE",
           })),
@@ -346,7 +370,7 @@ export async function guardarAvanceSemanal(
             entidadId: id,
             accion: "CREAR",
             valorAnterior: null,
-            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada },
+            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada, montoEjecutado: f.montoEjecutado },
           });
         }
       }
@@ -362,7 +386,8 @@ export async function guardarAvanceSemanal(
       if (paraActualizar.length > 0) {
         const valores = Prisma.join(
           paraActualizar.map(
-            (f) => Prisma.sql`(${f.existenteId}::text, ${f.cantidadEjecutada}::numeric)`
+            (f) =>
+              Prisma.sql`(${f.existenteId}::text, ${f.cantidadEjecutada}::numeric, ${f.montoEjecutado}::numeric)`
           ),
           ", "
         );
@@ -370,20 +395,21 @@ export async function guardarAvanceSemanal(
           UPDATE avance_conceptos AS a
           SET
             "cantidadEjecutada" = v.cantidad,
+            "montoEjecutado" = v.monto,
             "registradoPorId" = ${usuario.id},
             "estatusAprobacion" = 'PENDIENTE'::"EstatusAprobacionAvance",
             "aprobadoPorId" = NULL,
             "fechaAprobacion" = NULL,
             "updatedAt" = now()
-          FROM (VALUES ${valores}) AS v(id, cantidad)
+          FROM (VALUES ${valores}) AS v(id, cantidad, monto)
           WHERE a.id = v.id
         `;
         for (const f of paraActualizar) {
           auditorias.push({
             entidadId: f.existenteId,
             accion: "EDITAR",
-            valorAnterior: { cantidadEjecutada: f.valorPrevio },
-            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada },
+            valorAnterior: { cantidadEjecutada: f.valorPrevio, montoEjecutado: f.montoPrevio },
+            valorNuevo: { cantidadEjecutada: f.cantidadEjecutada, montoEjecutado: f.montoEjecutado },
           });
         }
       }

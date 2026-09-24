@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useActionState } from "react";
 import { createPortal } from "react-dom";
 import { Card } from "@/components/ui/card";
@@ -149,6 +149,7 @@ export function FormularioGasto({
   }, [onClose]);
 
   const hoy = new Date().toISOString().slice(0, 10);
+  const formRef = useRef<HTMLFormElement>(null);
 
   return createPortal(
     <div
@@ -169,7 +170,7 @@ export function FormularioGasto({
           )}
         </div>
 
-        <form action={formAction} className="mt-3 space-y-3">
+        <form ref={formRef} action={formAction} className="mt-3 space-y-3">
           <input type="hidden" name="detalle" value={JSON.stringify(lineas)} />
           {esGlobal && !gasto && (
             <>
@@ -469,19 +470,35 @@ export function FormularioGasto({
                 ← Atrás
               </button>
             )}
-            {!esUltimoPaso ? (
-              <Button
-                type="button"
-                disabled={!puedeAvanzar()}
-                onClick={() => setPasoIndex((i) => i + 1)}
-              >
-                Siguiente
-              </Button>
-            ) : (
-              <Button type="submit" disabled={pending}>
-                {pending ? "Guardando…" : gasto ? "Guardar cambios" : "Guardar gasto"}
-              </Button>
-            )}
+            {/* Un solo botón, SIEMPRE type="button" — nunca cambia a
+                type="submit" en el mismo elemento. Pasar de Paso 2 a Paso 3
+                (el último) cambiaba `esUltimoPaso` a true en el mismo click
+                que ya estaba procesando el navegador: React re-renderizaba
+                este mismo <button> como type="submit" antes de que el click
+                terminara de resolverse, y el navegador enviaba el formulario
+                de inmediato — el usuario nunca alcanzaba a capturar el Paso 3
+                (bug reportado, septiembre 2026). Al enviar explícitamente con
+                requestSubmit() solo cuando en verdad es el último paso, el
+                <button> nunca cambia de tipo y no hay carrera posible. */}
+            <Button
+              type="button"
+              disabled={esUltimoPaso ? pending : !puedeAvanzar()}
+              onClick={() => {
+                if (esUltimoPaso) {
+                  formRef.current?.requestSubmit();
+                } else {
+                  setPasoIndex((i) => i + 1);
+                }
+              }}
+            >
+              {esUltimoPaso
+                ? pending
+                  ? "Guardando…"
+                  : gasto
+                    ? "Guardar cambios"
+                    : "Guardar gasto"
+                : "Siguiente"}
+            </Button>
             <button
               type="button"
               onClick={onClose}

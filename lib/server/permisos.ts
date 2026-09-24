@@ -40,11 +40,22 @@ export function esMaster(usuario: UsuarioSesion): boolean {
 // (bug encontrado en sesión, Gastos transversal, septiembre 2026). Centraliza
 // la resolución aquí para que ninguna otra pantalla necesite reimplementar
 // este mismo recorrido.
+// Orden fijo del sidebar — Reporte General y Proyectos siempre primero, en
+// ese orden (decisión de sesión, septiembre 2026). El resto conserva el
+// orden que ya traía el catálogo (sort estable: una clave sin prioridad
+// explícita nunca se reordena entre sí misma y las demás sin prioridad).
+const PRIORIDAD_NAV: Record<string, number> = {
+  reporte_general: 0,
+  control_de_obra: 1,
+};
+
 export async function obtenerModulosVisibles(
   usuario: UsuarioSesion
 ): Promise<{ clave: string; nombre: string }[]> {
   const catalogo = await db.modulo.findMany({ select: { clave: true, nombre: true } });
-  return catalogo.filter((m) => empresaTieneModulo(usuario, m.clave));
+  return catalogo
+    .filter((m) => empresaTieneModulo(usuario, m.clave))
+    .sort((a, b) => (PRIORIDAD_NAV[a.clave] ?? Infinity) - (PRIORIDAD_NAV[b.clave] ?? Infinity));
 }
 
 /**

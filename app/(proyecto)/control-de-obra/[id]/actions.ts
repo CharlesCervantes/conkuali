@@ -170,6 +170,7 @@ export async function crearContratoAction(
 export type AvanceFormState = { error?: string; guardados?: number } | undefined;
 
 const PREFIJO_CANTIDAD = "cantidad_";
+const PREFIJO_MONTO = "monto_";
 
 export async function guardarAvanceAction(
   proyectoId: string,
@@ -179,12 +180,26 @@ export async function guardarAvanceAction(
 ): Promise<AvanceFormState> {
   const usuario = await requireSession();
 
+  // Monto exacto tecleado por concepto (cuando aplica) — ver
+  // AvanceConcepto.montoEjecutado. Vacío/ausente = sin monto capturado, el
+  // servidor deriva el importe de cantidad × P.U. como siempre.
+  const montoPorConcepto = new Map(
+    [...formData.entries()]
+      .filter(([nombre]) => nombre.startsWith(PREFIJO_MONTO))
+      .map(([nombre, valor]) => [nombre.slice(PREFIJO_MONTO.length), valor])
+  );
+
   const filas = [...formData.entries()]
     .filter(([nombre]) => nombre.startsWith(PREFIJO_CANTIDAD))
-    .map(([nombre, valor]) => ({
-      conceptoId: nombre.slice(PREFIJO_CANTIDAD.length),
-      cantidadEjecutada: valor,
-    }));
+    .map(([nombre, valor]) => {
+      const conceptoId = nombre.slice(PREFIJO_CANTIDAD.length);
+      const monto = montoPorConcepto.get(conceptoId);
+      return {
+        conceptoId,
+        cantidadEjecutada: valor,
+        montoEjecutado: monto && monto !== "" ? monto : undefined,
+      };
+    });
 
   let resultado;
   try {

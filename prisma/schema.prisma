@@ -941,6 +941,17 @@ model AvanceConcepto {
   // derivan sumando estas filas en lectura, nunca se guardan calculados.
   cantidadEjecutada Decimal @db.Decimal(14, 3)
 
+  // Monto EXACTO que el usuario capturó esa semana (ej. lo que pidió el
+  // contratista), cuando la captura se hizo desde el campo "Monto" — nunca
+  // recalculado. null = se capturó por Cantidad directamente, o no aplica
+  // (sin P.U. contratado); en ese caso el importe sigue derivándose de
+  // cantidadEjecutada × P.U. como siempre. Existe porque cantidadEjecutada
+  // solo guarda 3 decimales: recalcular el monto desde esa cantidad ya
+  // redondeada perdía centavos frente a lo que el usuario realmente tecleó
+  // (bug reportado en Avance de obra, septiembre 2026) — el cierre de semana
+  // usa este campo tal cual cuando existe (ver cierre-semana.ts).
+  montoEjecutado Decimal? @db.Decimal(14, 2)
+
   // Solo lo APROBADO cuenta en Acumulado/Pendiente/%/indicadores en otras
   // pantallas (Contratistas, resumen). Cualquier guardado (de cualquier rol,
   // incluido quien aprueba) regresa el registro a PENDIENTE — aprobar es
