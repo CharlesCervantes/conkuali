@@ -30,6 +30,28 @@ export function esMaster(usuario: UsuarioSesion): boolean {
   return usuario.rol === "MASTER";
 }
 
+// Orden fijo del sidebar — Reporte General y Proyectos siempre primero, en
+// ese orden (decisión de sesión, septiembre 2026). El resto conserva el
+// orden que ya traía el catálogo (sort estable: una clave sin prioridad
+// explícita nunca se reordena entre sí misma y las demás sin prioridad).
+const PRIORIDAD_NAV: Record<string, number> = {
+  reporte_general: 0,
+  control_de_obra: 1,
+};
+
+// Techo de ROL por módulo, además de si la Empresa lo tiene contratado — un
+// módulo cuya pantalla ya bloquea a Supervisor (ej. Contabilidad, Compras,
+// Catálogos) tampoco debe aparecer en el sidebar para ese rol: antes se veía
+// el enlace y solo al entrar aparecía "No tienes permiso" (bug reportado,
+// septiembre 2026). Una clave sin entrada aquí no tiene techo de rol propio
+// (Reporte General, Proyectos, Gastos — visibles a los 4 roles, cada uno
+// filtra por su cuenta lo que cada quien puede hacer adentro).
+const PERMISO_MODULO: Record<string, (usuario: UsuarioSesion) => boolean> = {
+  catalogos: puedeAdministrarCatalogos,
+  contabilidad: puedeVerContabilidad,
+  compras: puedeAutorizarOrdenesCompra,
+};
+
 // Único punto de construcción de "qué módulos ve este usuario en la nav" —
 // recorre TODO el catálogo de Modulo (no solo lo que trae el Plan) y filtra
 // con empresaTieneModulo, así un override de Portal Master que CONCEDE un
@@ -40,21 +62,13 @@ export function esMaster(usuario: UsuarioSesion): boolean {
 // (bug encontrado en sesión, Gastos transversal, septiembre 2026). Centraliza
 // la resolución aquí para que ninguna otra pantalla necesite reimplementar
 // este mismo recorrido.
-// Orden fijo del sidebar — Reporte General y Proyectos siempre primero, en
-// ese orden (decisión de sesión, septiembre 2026). El resto conserva el
-// orden que ya traía el catálogo (sort estable: una clave sin prioridad
-// explícita nunca se reordena entre sí misma y las demás sin prioridad).
-const PRIORIDAD_NAV: Record<string, number> = {
-  reporte_general: 0,
-  control_de_obra: 1,
-};
-
 export async function obtenerModulosVisibles(
   usuario: UsuarioSesion
 ): Promise<{ clave: string; nombre: string }[]> {
   const catalogo = await db.modulo.findMany({ select: { clave: true, nombre: true } });
   return catalogo
     .filter((m) => empresaTieneModulo(usuario, m.clave))
+    .filter((m) => (PERMISO_MODULO[m.clave] ?? (() => true))(usuario))
     .sort((a, b) => (PRIORIDAD_NAV[a.clave] ?? Infinity) - (PRIORIDAD_NAV[b.clave] ?? Infinity));
 }
 
