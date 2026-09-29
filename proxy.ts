@@ -24,5 +24,15 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // /images agregado (Rediseño de login, septiembre 2026): es la primera
+  // pantalla pública que necesita servir un archivo estático de public/ a
+  // alguien sin sesión (foto + logotipos de /login) — antes nunca hacía
+  // falta, todo lo demás bajo public/ pasa por endpoints de R2 con URL
+  // firmada. icon.png/apple-icon.png agregados (Favicon Arqento, septiembre
+  // 2026): son rutas que Next.js genera solo a partir de app/icon.png y
+  // app/apple-icon.png (mismo mecanismo que favicon.ico, ya excluido) — un
+  // navegador las pide sin sesión para pintar la pestaña/ícono de inicio,
+  // igual que favicon.ico. Nunca toca ninguna regla de sesión/redirección/
+  // permisos, solo amplía qué se considera ruta estática pública.
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|images/).*)"],
 };
