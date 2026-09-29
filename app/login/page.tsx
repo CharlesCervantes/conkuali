@@ -40,6 +40,7 @@ export default function LoginPage() {
           alt=""
           fill
           priority
+          quality={95}
           sizes="(min-width: 768px) 62vw, 0px"
           className="object-cover object-[62%_55%]"
         />
@@ -105,26 +106,45 @@ export default function LoginPage() {
 
       {/* Panel derecho — formulario */}
       <div className="relative flex min-h-screen flex-col items-center justify-center overflow-hidden bg-[#faf8f4] px-6 py-12 sm:px-10">
+        {/* En celular este panel es la pantalla completa — en vez del fondo
+            plano, se usa la misma fotografía difuminada y oscurecida (mismo
+            recurso que el panel izquierdo) para que el logotipo, la tarjeta
+            y el pie de página resalten igual que en escritorio. Desde md+ el
+            panel izquierdo ya muestra la foto nítida, así que aquí se oculta. */}
+        <div className="absolute inset-0 md:hidden" aria-hidden>
+          <Image
+            src="/images/login/casa-arqento.png"
+            alt=""
+            fill
+            sizes="100vw"
+            className="scale-110 object-cover object-[62%_55%] blur-sm"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/50 to-black/65" />
+        </div>
+
         <DetallesGeometricos />
 
         <div className="relative z-10 w-full max-w-md">
-          {/* Directo sobre el fondo claro, sin tarjeta — los dos archivos ya
-              tienen canal alfa real, no hace falta ninguna superficie blanca
-              detrás en este panel (a diferencia de la fotografía oscura). */}
+          {/* Directo sobre el fondo, sin tarjeta — los dos archivos ya tienen
+              canal alfa real. En md+ el fondo es claro y no hace falta nada
+              detrás. En celular el fondo es la fotografía oscurecida: como el
+              logotipo es en tonos oscuros (verde/dorado), una sombra oscura
+              no aporta contraste ahí (oscuro sobre oscuro) — se usa en cambio
+              un halo claro que sí lo separa del fondo. */}
           <div className="enter mb-10 flex flex-col items-center gap-3">
             <Image
               src="/images/branding/LogoSF.png"
               alt=""
               width={1536}
               height={1024}
-              className="h-20 w-auto"
+              className="h-20 w-auto drop-shadow-[0_0_20px_rgba(255,255,255,0.55)] md:drop-shadow-none"
             />
             <Image
               src="/images/branding/LetrasSF.png"
               alt="Arqento"
               width={2172}
               height={724}
-              className="h-11 w-auto"
+              className="h-11 w-auto drop-shadow-[0_0_16px_rgba(255,255,255,0.65)] md:drop-shadow-none"
             />
           </div>
 
@@ -205,7 +225,7 @@ export default function LoginPage() {
             </form>
           </Card>
 
-          <p className="enter mt-8 text-center text-xs text-gray-400" style={{ transitionDelay: "140ms" }}>
+          <p className="enter mt-8 text-center text-xs text-white/70 md:text-gray-400" style={{ transitionDelay: "140ms" }}>
             ARQENTO © 2026 · Gestión inteligente de proyectos.
           </p>
         </div>
@@ -234,11 +254,12 @@ function Caracteristica({
 }
 
 // Detalles geométricos extremadamente sutiles del panel derecho — puras
-// formas CSS (nunca un logotipo ni una imagen), ocultas en celulares para
-// mantener esa pantalla limpia (ver instrucciones de responsive).
+// formas CSS (nunca un logotipo ni una imagen). Pensadas para el fondo claro
+// de escritorio; por debajo de md ese fondo es la fotografía difuminada, así
+// que se ocultan ahí para no encimarse con ella.
 function DetallesGeometricos() {
   return (
-    <div className="pointer-events-none absolute inset-0 hidden overflow-hidden sm:block" aria-hidden>
+    <div className="pointer-events-none absolute inset-0 hidden overflow-hidden md:block" aria-hidden>
       <div
         className="absolute -top-24 -right-24 h-80 w-80 rotate-12 rounded-[3rem] border"
         style={{ borderColor: "rgba(21,36,32,0.05)" }}
