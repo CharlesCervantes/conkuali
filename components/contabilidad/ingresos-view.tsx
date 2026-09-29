@@ -51,8 +51,8 @@ export function IngresosView({
 
       {ingresos.length === 0 ? (
         <Card className="p-6 text-sm text-[var(--muted)]">
-          Todavía no hay ingresos fiscales este mes. Los pagos de cliente ya registrados en Control de
-          Obra aparecen aquí automáticamente.
+          Todavía no hay ingresos incluidos en Contabilidad este mes. Los pagos de cliente marcados como
+          incluidos en Contabilidad aparecen aquí automáticamente.
         </Card>
       ) : (
         <div className="space-y-2">
@@ -72,6 +72,13 @@ export function IngresosView({
                         Manual
                       </span>
                     )}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        i.cobroPago === "COBRADO" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                      }`}
+                    >
+                      {i.cobroPago === "COBRADO" ? "Cobrado" : "Por cobrar"}
+                    </span>
                   </div>
                   <p className="mt-0.5 text-xs text-[var(--muted)]">
                     {i.proyectoNombre ?? "—"} · {formatearFecha(new Date(i.fecha))}
@@ -198,6 +205,29 @@ function ModalIngreso({
                   </option>
                 ))}
               </select>
+
+              <select
+                name="clasificacionManual"
+                required
+                defaultValue=""
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+              >
+                <option value="" disabled>
+                  ¿A qué línea del Estado de Resultados pertenece?
+                </option>
+                <option value="INGRESO_OPERATIVO">Otros ingresos (operativo)</option>
+                <option value="OTRO_NO_OPERATIVO">Otro (no operativo)</option>
+              </select>
+
+              <div>
+                <label className="text-xs text-[var(--muted)]">Fecha de cobro (vacío = por cobrar)</label>
+                <input
+                  name="fechaCobro"
+                  type="date"
+                  defaultValue={ingreso?.fecha && ingreso.cobroPago === "COBRADO" ? ingreso.fecha.slice(0, 10) : ""}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+                />
+              </div>
             </>
           )}
 

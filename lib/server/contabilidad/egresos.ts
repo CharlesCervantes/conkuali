@@ -7,6 +7,7 @@ import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError } from "@/lib/server/control-de-obra/proyectos";
 import { RegistroNoEncontradoError } from "@/lib/server/control-de-obra/estructura-contractual";
 import { EMPRESA_PROYECTO_LABEL } from "@/lib/server/control-de-obra/proyecto-oficina";
+import { CLASIFICACIONES_EGRESO_MANUAL } from "./estado-resultados";
 
 // Egreso decora un GastoObra existente (SIN duplicar monto/fecha/concepto/
 // proyecto/pagador) o representa un egreso fiscal manual (gastoObraId null).
@@ -62,6 +63,11 @@ export type FilaEgreso = {
   facturaUuid: string | null;
   notasContables: string | null;
   estatus: "VIGENTE" | "CANCELADO";
+  // Los tres ejes, siempre expuestos por separado — nunca se infiere uno de
+  // otro (Contabilidad — reconocimiento, septiembre 2026).
+  cobroPago: "PAGADO" | "POR_PAGAR";
+  fechaPago: string | null;
+  cfdi: "NO_REQUERIDO" | "PENDIENTE" | "VINCULADO";
 };
 
 export async function obtenerEgresos(
@@ -72,12 +78,15 @@ export async function obtenerEgresos(
   const empresaId = requerirContabilidad(usuario);
   const { desde, hasta } = rangoMes(anio, mes);
 
-  const [gastosFiscales, egresosManuales] = await Promise.all([
+  // Eje 1 (inclusión) — ya NO se lee requiereFactura (eje CFDI, no decide
+  // inclusión contable) ni se infiere de nada: solo incluidoEnContabilidad,
+  // marcado explícitamente por quien tenga puedeMarcarInclusionContable.
+  const [gastosIncluidos, egresosManuales] = await Promise.all([
     db.gastoObra.findMany({
       where: {
         empresaId,
         estatus: "APROBADO",
-        requiereFactura: true,
+        incluidoEnContabilidad: true,
         fecha: { gte: desde, lt: hasta },
       },
       include: {
@@ -102,7 +111,10 @@ export async function obtenerEgresos(
     }),
   ]);
 
-  const filasDeGasto: FilaEgreso[] = gastosFiscales.map((g) => ({
+  const cfdiDeGasto = (g: { requiereFactura: boolean; facturaRef: string | null }): FilaEgreso["cfdi"] =>
+    !g.requiereFactura ? "NO_REQUERIDO" : g.facturaRef ? "VINCULADO" : "PENDIENTE";
+
+  const filasDeGasto: FilaEgreso[] = gastosIncluidos.map((g) => ({
     egresoId: g.egreso?.id ?? null,
     gastoObraId: g.id,
     fecha: g.fecha.toISOString(),
@@ -114,6 +126,9 @@ export async function obtenerEgresos(
     facturaUuid: g.egreso?.factura?.uuid ?? null,
     notasContables: g.egreso?.notasContables ?? null,
     estatus: g.egreso?.estatus ?? "VIGENTE",
+    cobroPago: g.egreso?.fechaPago ? "PAGADO" : "POR_PAGAR",
+    fechaPago: g.egreso?.fechaPago ? g.egreso.fechaPago.toISOString() : null,
+    cfdi: cfdiDeGasto(g),
   }));
 
   const filasManuales: FilaEgreso[] = egresosManuales.map((e) => ({
@@ -128,6 +143,9 @@ export async function obtenerEgresos(
     facturaUuid: e.factura?.uuid ?? null,
     notasContables: e.notasContables,
     estatus: e.estatus,
+    cobroPago: e.fechaPago ? "PAGADO" : "POR_PAGAR",
+    fechaPago: e.fechaPago ? e.fechaPago.toISOString() : null,
+    cfdi: e.facturaId ? "VINCULADO" : "NO_REQUERIDO",
   }));
 
   return [...filasDeGasto, ...filasManuales].sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
@@ -137,6 +155,13 @@ const DatosDecoracionSchema = z.object({
   medioFinancieroId: z.string().trim().optional().nullable(),
   facturaId: z.string().trim().optional().nullable(),
   notasContables: z.string().trim().optional().nullable(),
+  // Eje 4 — pago real (Contabilidad — reconocimiento, septiembre 2026):
+  // aplica cuando GastoObra.pagadorBeneficiarioId es null (la Empresa pagó
+  // directo) — null/ausente = todavía por pagar, nunca resta del saldo de
+  // banco. Independiente de estatus (reconocimiento) y de requiereFactura
+  // (CFDI).
+  fechaPago: z.coerce.date().optional().nullable(),
+  referenciaPago: z.string().trim().optional().nullable(),
 });
 
 // Crea o actualiza la decoración fiscal de un GastoObra existente — nunca
@@ -158,6 +183,8 @@ export async function guardarDecoracionEgreso(
     medioFinancieroId: datos.medioFinancieroId || null,
     facturaId: datos.facturaId || null,
     notasContables: datos.notasContables || null,
+    fechaPago: datos.fechaPago || null,
+    referenciaPago: datos.referenciaPago || null,
   };
 
   const egreso = await db.egreso.upsert({
@@ -186,6 +213,17 @@ const DatosEgresoManualSchema = z.object({
   medioFinancieroId: z.string().trim().optional().nullable(),
   facturaId: z.string().trim().optional().nullable(),
   notasContables: z.string().trim().optional().nullable(),
+  // Eje 4 — null/ausente = reconocido, todavía por pagar (Contabilidad —
+  // reconocimiento, septiembre 2026). No se asume que un registro manual ya
+  // significa dinero movido.
+  fechaPago: z.coerce.date().optional().nullable(),
+  referenciaPago: z.string().trim().optional().nullable(),
+  // Clasificación exclusiva — obligatoria, nunca inferida de `concepto`.
+  // Garantiza que un egreso manual participe en exactamente una línea del
+  // Estado de Resultados.
+  clasificacionManual: z.enum(CLASIFICACIONES_EGRESO_MANUAL, {
+    error: "Selecciona a qué línea del Estado de Resultados pertenece este egreso.",
+  }),
 });
 
 export async function crearEgresoManual(usuario: UsuarioSesion, datosCrudos: unknown) {
@@ -204,6 +242,9 @@ export async function crearEgresoManual(usuario: UsuarioSesion, datosCrudos: unk
       medioFinancieroId: datos.medioFinancieroId || null,
       facturaId: datos.facturaId || null,
       notasContables: datos.notasContables || null,
+      fechaPago: datos.fechaPago || null,
+      referenciaPago: datos.referenciaPago || null,
+      clasificacionManual: datos.clasificacionManual,
       registradoPorId: usuario.id,
     },
   });
@@ -242,6 +283,9 @@ export async function editarEgresoManual(usuario: UsuarioSesion, id: string, dat
       medioFinancieroId: datos.medioFinancieroId || null,
       facturaId: datos.facturaId || null,
       notasContables: datos.notasContables || null,
+      fechaPago: datos.fechaPago || null,
+      referenciaPago: datos.referenciaPago || null,
+      clasificacionManual: datos.clasificacionManual,
     },
   });
 

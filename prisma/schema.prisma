@@ -37,23 +37,31 @@ enum AccionAuditoria {
 }
 
 model Empresa {
-  id              String   @id @default(cuid())
-  nombre          String
-  razonSocial     String?
-  rfc             String?
-  colorPrimario   String   @default("#0f172a")
-  colorSecundario String   @default("#64748b")
-  logoRef         String?
-  activa          Boolean  @default(true)
+  id                           String   @id @default(cuid())
+  nombre                       String
+  razonSocial                  String?
+  rfc                          String?
+  colorPrimario                String   @default("#0f172a")
+  colorSecundario              String   @default("#64748b")
+  logoRef                      String?
+  activa                       Boolean  @default(true)
   // Capacidad transversal (no es un Modulo/pantalla) — si la Empresa contrató
   // o no las capas privadas del sistema. Seguro por defecto: una Empresa
   // nueva nunca la recibe automáticamente, Master debe habilitarla
   // explícitamente (decisión de sesión, Portal Master). Se combina con el
   // permiso de rol existente en puedeVerInformacionPrivada — nunca sustituye
   // esa verificación, la complementa (ver lib/server/permisos.ts).
-  privadoHabilitado Boolean @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  privadoHabilitado            Boolean  @default(false)
+  // Default de inclusión contable (Contabilidad — reconocimiento, septiembre
+  // 2026) — cada GastoObra/EstimacionClienteCapa/MovimientoFinancieroCliente
+  // (fondo) copia este valor UNA SOLA VEZ al crearse, como snapshot editable
+  // después (nunca se relee en vivo) — cambiar este default no debe alterar
+  // retroactivamente periodos ya reportados. Conkuali lo deja en `false`
+  // (hoy solo ciertas operaciones son de su ámbito contable); otra Empresa
+  // puede preferir `true`. Ver docs/negocio/05-modulo-contabilidad.md.
+  defaultInclusionContabilidad Boolean  @default(false)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
 
   plan   Plan?   @relation(fields: [planId], references: [id])
   planId String?
@@ -148,8 +156,8 @@ model Modulo {
   clave  String @unique
   nombre String
 
-  planes    PlanModulo[]
-  empresas  EmpresaModulo[]
+  planes   PlanModulo[]
+  empresas EmpresaModulo[]
 
   @@map("modulos")
 }
@@ -235,8 +243,8 @@ model Usuario {
   requisicionesRevisadas   Requisicion[] @relation("RequisicionRevisada")
   cotizacionesRegistradas  Cotizacion[]  @relation("CotizacionRegistrada")
 
-  gastosRecurrentesCreados     GastoRecurrente[] @relation("GastoRecurrenteCreado")
-  abonosReposicionRegistrados  AbonoReposicion[] @relation("AbonoReposicionRegistrado")
+  gastosRecurrentesCreados    GastoRecurrente[] @relation("GastoRecurrenteCreado")
+  abonosReposicionRegistrados AbonoReposicion[] @relation("AbonoReposicionRegistrado")
 
   egresosRegistrados  Egreso[]  @relation("EgresoRegistrado")
   ingresosRegistrados Ingreso[] @relation("IngresoRegistrado")
@@ -1374,6 +1382,13 @@ model EstimacionClienteCapa {
   // Shape: BrandingEmpresa (lib/server/branding.ts). Null mientras BORRADOR.
   brandingSnapshot Json?
 
+  // Eje 1 — inclusión en Contabilidad (Contabilidad — reconocimiento,
+  // septiembre 2026): independiente de OPERATIVO/PRIVADO (esto describe
+  // confidencialidad, no naturaleza contable) — nunca se infiere de `capa`.
+  // Solo tiene efecto una vez EMITIDA (mientras BORRADOR no hay nada que
+  // reconocer todavía). Ver docs/negocio/05-modulo-contabilidad.md.
+  incluidoEnContabilidad Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1385,6 +1400,7 @@ model EstimacionClienteCapa {
 
   @@unique([estimacionClienteId, capa])
   @@index([estatus])
+  @@index([estatus, incluidoEnContabilidad])
   @@map("estimacion_cliente_capas")
 }
 
@@ -1547,6 +1563,16 @@ model MovimientoFinancieroCliente {
   // fiscales a este pago de cliente.
   ingreso Ingreso?
 
+  // Eje 1 — inclusión en Contabilidad. Solo tiene efecto real cuando
+  // estimacionClienteCapaId es null (tipo APORTACION_FONDO, el único caso
+  // sin capa) — PAGO_ESTIMACION/APLICACION_ESTIMACION heredan la inclusión
+  // de su capa (EstimacionClienteCapa.incluidoEnContabilidad) y este campo se
+  // ignora para ellos, para no tener dos fuentes de verdad sobre la misma
+  // decisión. Nunca se lee para reconocer ingreso en el Estado de
+  // Resultados: una aportación de fondo es Tesorería, no ingreso (ver
+  // docs/negocio/05-modulo-contabilidad.md, sección 3.3).
+  incluidoEnContabilidad Boolean @default(false)
+
   @@index([proyectoId])
   @@index([estimacionClienteId])
   @@index([estimacionClienteCapaId])
@@ -1691,15 +1717,17 @@ model GastoObra {
   // gasto. Nunca se crea automáticamente al aprobar el gasto.
   egreso Egreso?
 
+  // Eje 1 — inclusión en Contabilidad (Contabilidad — reconocimiento,
+  // septiembre 2026): ¿este gasto es del ámbito contable/fiscal de la
+  // Empresa? Independiente de requiereFactura (eje CFDI) y de estatus (eje
+  // reconocimiento) — nunca se infiere de ninguno de los dos. Snapshot del
+  // default de la Empresa al crearse, editable después vía
+  // marcarInclusionGasto. Ver docs/negocio/05-modulo-contabilidad.md.
+  incluidoEnContabilidad Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([proyectoId, semanaId])
-  @@index([pagadorBeneficiarioId])
-  @@index([reposicionGastosId])
-  @@index([incluidoEnEstimacionClienteId])
-  @@index([incluidoEnCapaOperativoId])
-  @@index([incluidoEnCapaPrivadoId])
   // A lo más UNA ocurrencia generada por GastoRecurrente+Semana — la garantía
   // real de idempotencia de asegurarGastosRecurrentesGenerados, no solo un
   // chequeo en el servicio. Filas con recurrenteId = NULL (la inmensa
@@ -1707,6 +1735,13 @@ model GastoObra {
   // trata NULL como distinto de NULL en un índice único (Gastos transversal
   // — recurrentes, septiembre 2026).
   @@unique([recurrenteId, semanaId])
+  @@index([proyectoId, semanaId])
+  @@index([pagadorBeneficiarioId])
+  @@index([reposicionGastosId])
+  @@index([incluidoEnEstimacionClienteId])
+  @@index([incluidoEnCapaOperativoId])
+  @@index([incluidoEnCapaPrivadoId])
+  @@index([empresaId, incluidoEnContabilidad, fecha])
   @@map("gastos_obra")
 }
 
@@ -1838,17 +1873,17 @@ model Requisicion {
   proyecto   Proyecto @relation(fields: [proyectoId], references: [id])
   proyectoId String
 
-  solicitante     Usuario  @relation("RequisicionSolicitada", fields: [solicitantePorId], references: [id])
+  solicitante      Usuario  @relation("RequisicionSolicitada", fields: [solicitantePorId], references: [id])
   solicitantePorId String
-  fecha           DateTime @default(now())
+  fecha            DateTime @default(now())
 
-  concepto      String
-  descripcion   String?
-  cantidad      Decimal  @db.Decimal(14, 3)
-  unidad        String
-  prioridad     PrioridadRequisicion @default(NORMAL)
+  concepto       String
+  descripcion    String?
+  cantidad       Decimal              @db.Decimal(14, 3)
+  unidad         String
+  prioridad      PrioridadRequisicion @default(NORMAL)
   fechaRequerida DateTime?
-  comentarios   String?
+  comentarios    String?
 
   // Referencia opcional a un Concepto del contrato — nunca obligatoria,
   // muchas necesidades de obra no mapean 1:1 a un concepto contractual.
@@ -1862,7 +1897,7 @@ model Requisicion {
 
   estatus       EstatusRequisicion @default(PENDIENTE)
   motivoRechazo String?
-  revisadoPor   Usuario?  @relation("RequisicionRevisada", fields: [revisadoPorId], references: [id])
+  revisadoPor   Usuario?           @relation("RequisicionRevisada", fields: [revisadoPorId], references: [id])
   revisadoPorId String?
   revisadoEn    DateTime?
 
@@ -1888,22 +1923,22 @@ model Requisicion {
 // ReposicionGastos/APLICACION_ESTIMACION, no representable en este DSL de
 // Prisma.
 model Cotizacion {
-  id             String      @id @default(cuid())
-  requisicion    Requisicion @relation(fields: [requisicionId], references: [id])
-  requisicionId  String
+  id            String      @id @default(cuid())
+  requisicion   Requisicion @relation(fields: [requisicionId], references: [id])
+  requisicionId String
 
   // Proveedor existente, Beneficiario tipo PROVEEDOR — nunca un catálogo
   // nuevo (mismo criterio que OrdenCompra.proveedorBeneficiarioId).
   proveedor               Beneficiario @relation(fields: [proveedorBeneficiarioId], references: [id])
   proveedorBeneficiarioId String
 
-  importe           Decimal  @db.Decimal(14, 2)
-  vigenciaHasta      DateTime?
-  tiempoEntregaDias  Int?
-  observaciones      String?
-  archivoRef         String?
-  archivoNombre      String?
-  seleccionada       Boolean  @default(false)
+  importe           Decimal   @db.Decimal(14, 2)
+  vigenciaHasta     DateTime?
+  tiempoEntregaDias Int?
+  observaciones     String?
+  archivoRef        String?
+  archivoNombre     String?
+  seleccionada      Boolean   @default(false)
 
   registradoPor   Usuario @relation("CotizacionRegistrada", fields: [registradoPorId], references: [id])
   registradoPorId String
@@ -1973,13 +2008,13 @@ model OrdenCompra {
   // y del Gasto documental (gastosGenerados). Puede completarse antes,
   // después o al mismo tiempo que cualquiera de esos dos (Compras, septiembre
   // 2026).
-  estatusRecepcion        EstatusRecepcionOrdenCompra @default(PENDIENTE)
-  recibidoEn              DateTime?
-  recibidoPor             Usuario?                    @relation("OCRecibida", fields: [recibidoPorId], references: [id])
-  recibidoPorId           String?
-  evidenciaRecepcionRef   String?
+  estatusRecepcion         EstatusRecepcionOrdenCompra @default(PENDIENTE)
+  recibidoEn               DateTime?
+  recibidoPor              Usuario?                    @relation("OCRecibida", fields: [recibidoPorId], references: [id])
+  recibidoPorId            String?
+  evidenciaRecepcionRef    String?
   evidenciaRecepcionNombre String?
-  comentarioRecepcion     String?
+  comentarioRecepcion      String?
 
   // Snapshot al autorizar — una OC ya autorizada es una obligación formal, su
   // total no debe moverse solo porque alguien edite precios del detalle
@@ -2146,8 +2181,22 @@ model MedioFinanciero {
   nombre    String
   tipo      TipoMedioFinanciero
   activo    Boolean             @default(true)
-  createdAt DateTime            @default(now())
-  updatedAt DateTime            @updatedAt
+
+  // Preparación de Bancos/Tesorería (Contabilidad — reconocimiento,
+  // septiembre 2026) — saldo real = saldoInicial + Σ Ingreso/Egreso con
+  // dinero ya movido desde fechaSaldoInicial (nunca operaciones solo
+  // reconocidas, ver lib/server/contabilidad/saldos.ts). fechaSaldoInicial
+  // null = cuenta sin configurar todavía, el saldo se calcula sin límite
+  // inferior de fecha. numeroCuentaEnmascarado nunca guarda el número
+  // completo. moneda deja preparada arquitectura multi-moneda sin
+  // implementar conversión de tipo de cambio todavía.
+  saldoInicial            Decimal   @default(0) @db.Decimal(14, 2)
+  fechaSaldoInicial       DateTime?
+  numeroCuentaEnmascarado String?
+  moneda                  String    @default("MXN")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   egresos           Egreso[]
   ingresosReceptora Ingreso[]
@@ -2208,10 +2257,10 @@ model Factura {
   // MetodoPago = PUE/PPD (forma de exigibilidad); FormaPago = catálogo SAT
   // (01 efectivo, 03 transferencia, etc.) — dos atributos CFDI distintos, se
   // guardan tal cual vienen, sin traducir a nuestro propio enum.
-  metodoPago String?
-  formaPago  String?
-  serie      String?
-  folio      String?
+  metodoPago          String?
+  formaPago           String?
+  serie               String?
+  folio               String?
 
   estatus EstatusRegistroContable @default(VIGENTE)
 
@@ -2262,9 +2311,34 @@ model Egreso {
 
   notasContables String?
 
+  // Eje 4 — movimiento real de dinero (Contabilidad — reconocimiento,
+  // septiembre 2026). Reconocido (GastoObra.estatus = APROBADO, o la propia
+  // fila si es manual) ≠ pagado: null = todavía por pagar, nunca resta del
+  // saldo de medioFinanciero (lib/server/contabilidad/saldos.ts). Aplica
+  // igual a un Egreso que decora un GastoObra pagado directo por la Empresa
+  // (gastoObraId no nulo, pagadorBeneficiarioId null en el gasto) y a un
+  // Egreso manual — mismo campo, mismo significado en los dos casos.
+  fechaPago      DateTime?
+  referenciaPago String?
+
+  // Preparación de conciliación bancaria futura (sin funcionalidad todavía,
+  // ver docs/negocio/05-modulo-contabilidad.md sección 14) — null = no
+  // conciliado.
+  conciliadoEn DateTime?
+
+  // Clasificación exclusiva dentro del Estado de Resultados — SOLO aplica
+  // (y es obligatoria en el servicio) cuando gastoObraId es null (egreso
+  // manual): un Egreso que decora un GastoObra hereda su línea de la
+  // categoría del gasto, nunca de este campo. Garantiza el invariante "una
+  // operación reconocida → una sola clasificación → una sola línea" sin
+  // inferir nada del texto libre de `concepto` (Contabilidad — reconocimiento,
+  // septiembre 2026). Valores válidos en
+  // lib/server/contabilidad/estado-resultados.ts (ClasificacionEgresoManual).
+  clasificacionManual String?
+
   estatus EstatusRegistroContable @default(VIGENTE)
 
-  registradoPor   Usuario  @relation("EgresoRegistrado", fields: [registradoPorId], references: [id])
+  registradoPor   Usuario @relation("EgresoRegistrado", fields: [registradoPorId], references: [id])
   registradoPorId String
 
   createdAt DateTime @default(now())
@@ -2273,6 +2347,7 @@ model Egreso {
   @@index([empresaId])
   @@index([facturaId])
   @@index([medioFinancieroId])
+  @@index([medioFinancieroId, fechaPago])
   @@map("egresos")
 }
 
@@ -2289,11 +2364,11 @@ model Ingreso {
   movimientoFinancieroClienteId String?                      @unique
 
   // Solo se usan/requieren cuando movimientoFinancieroClienteId es null.
-  fecha      DateTime?
-  proyecto   Proyecto? @relation(fields: [proyectoId], references: [id])
-  proyectoId String?
-  monto      Decimal?  @db.Decimal(14, 2)
-  concepto   String?
+  fecha         DateTime?
+  proyecto      Proyecto? @relation(fields: [proyectoId], references: [id])
+  proyectoId    String?
+  monto         Decimal?  @db.Decimal(14, 2)
+  concepto      String?
   // Texto libre — no existe catálogo de Clientes con RFC en el sistema
   // (mismo criterio que Proyecto.cliente), fuera de alcance de esta etapa.
   clienteNombre String?
@@ -2317,9 +2392,27 @@ model Ingreso {
 
   comentarios String?
 
+  // Eje 4 — movimiento real de dinero, solo relevante cuando
+  // movimientoFinancieroClienteId es null (ingreso manual): ese modelo ya
+  // representa por definición dinero que realmente entró, así que un
+  // Ingreso que lo decora siempre se trata como cobrado, con la fecha del
+  // movimiento — este campo se ignora en ese caso. Null = reconocido,
+  // todavía por cobrar (mismo significado que Egreso.fechaPago).
+  fechaCobro DateTime?
+
+  // Preparación de conciliación bancaria futura — ver Egreso.conciliadoEn.
+  conciliadoEn DateTime?
+
+  // Clasificación exclusiva dentro del Estado de Resultados — SOLO aplica
+  // (y es obligatoria en el servicio) cuando movimientoFinancieroClienteId
+  // es null (ingreso manual) — mismo criterio e invariante que
+  // Egreso.clasificacionManual. Valores válidos en
+  // lib/server/contabilidad/estado-resultados.ts (ClasificacionIngresoManual).
+  clasificacionManual String?
+
   estatus EstatusRegistroContable @default(VIGENTE)
 
-  registradoPor   Usuario  @relation("IngresoRegistrado", fields: [registradoPorId], references: [id])
+  registradoPor   Usuario @relation("IngresoRegistrado", fields: [registradoPorId], references: [id])
   registradoPorId String
 
   createdAt DateTime @default(now())
@@ -2327,5 +2420,6 @@ model Ingreso {
 
   @@index([empresaId])
   @@index([facturaId])
+  @@index([cuentaReceptoraId, fechaCobro])
   @@map("ingresos")
 }

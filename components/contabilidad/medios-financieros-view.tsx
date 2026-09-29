@@ -10,7 +10,8 @@ import {
   cambiarEstatusMedioFinancieroAction,
   type ContabilidadFormState,
 } from "@/app/(app)/contabilidad/actions";
-import type { FilaMedioFinanciero } from "@/lib/server/contabilidad/medios-financieros";
+import { formatMoney } from "@/lib/dinero";
+import type { MedioFinancieroConSaldo } from "@/lib/server/contabilidad/saldos";
 
 const TIPO_LABEL: Record<string, string> = {
   BANCO: "Banco",
@@ -18,9 +19,9 @@ const TIPO_LABEL: Record<string, string> = {
   EFECTIVO: "Efectivo",
 };
 
-export function MediosFinancierosView({ medios }: { medios: FilaMedioFinanciero[] }) {
+export function MediosFinancierosView({ medios }: { medios: MedioFinancieroConSaldo[] }) {
   const [creando, setCreando] = useState(false);
-  const [editando, setEditando] = useState<FilaMedioFinanciero | null>(null);
+  const [editando, setEditando] = useState<MedioFinancieroConSaldo | null>(null);
 
   return (
     <div className="space-y-4">
@@ -39,9 +40,15 @@ export function MediosFinancierosView({ medios }: { medios: FilaMedioFinanciero[
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-[var(--muted)]">{TIPO_LABEL[m.tipo] ?? m.tipo}</p>
+                <p className="text-xs text-[var(--muted)]">
+                  {TIPO_LABEL[m.tipo] ?? m.tipo}
+                  {m.numeroCuentaEnmascarado && ` · ${m.numeroCuentaEnmascarado}`}
+                </p>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-4">
+                <p className="text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                  {formatMoney(m.saldoActual)}
+                </p>
                 <button
                   type="button"
                   onClick={() => setEditando(m)}
@@ -89,7 +96,7 @@ function FormularioMedioFinanciero({
   medio,
   onCancelar,
 }: {
-  medio: FilaMedioFinanciero | null;
+  medio: MedioFinancieroConSaldo | null;
   onCancelar: () => void;
 }) {
   const action = medio ? editarMedioFinancieroAction.bind(null, medio.id) : crearMedioFinancieroAction;
@@ -122,6 +129,34 @@ function FormularioMedioFinanciero({
         <option value="TARJETA">Tarjeta</option>
         <option value="EFECTIVO">Efectivo</option>
       </select>
+      <input
+        name="numeroCuentaEnmascarado"
+        placeholder="Últimos 4 dígitos (opcional)"
+        maxLength={4}
+        defaultValue={medio?.numeroCuentaEnmascarado ?? ""}
+        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)] focus:outline-none focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/15"
+      />
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs text-[var(--muted)]">Saldo inicial</label>
+          <input
+            name="saldoInicial"
+            type="number"
+            step="0.01"
+            defaultValue={medio?.saldoInicial ?? 0}
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+          />
+        </div>
+        <div>
+          <label className="text-xs text-[var(--muted)]">Fecha de saldo inicial</label>
+          <input
+            name="fechaSaldoInicial"
+            type="date"
+            defaultValue={medio?.fechaSaldoInicial ? medio.fechaSaldoInicial.slice(0, 10) : ""}
+            className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+          />
+        </div>
+      </div>
       <div className="flex items-center gap-3">
         <Button type="submit" disabled={pending}>
           {pending ? "Guardando…" : medio ? "Guardar cambios" : "Crear"}
