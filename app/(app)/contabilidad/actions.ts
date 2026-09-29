@@ -10,6 +10,11 @@ import {
   cambiarEstatusMedioFinanciero,
 } from "@/lib/server/contabilidad/medios-financieros";
 import {
+  marcarInclusionGasto,
+  marcarInclusionCapa,
+  marcarInclusionMovimientoFondo,
+} from "@/lib/server/contabilidad/inclusion";
+import {
   crearEgresoManual,
   editarEgresoManual,
   guardarDecoracionEgreso,
@@ -65,13 +70,24 @@ export type ContabilidadFormState = { error?: string; guardado?: boolean } | und
 // Medios financieros
 // ---------------------------------------------------------------------------
 
+function datosMedioFinancieroDesdeFormData(formData: FormData) {
+  return {
+    nombre: formData.get("nombre"),
+    tipo: formData.get("tipo"),
+    moneda: opcional(formData.get("moneda")) ?? "MXN",
+    numeroCuentaEnmascarado: opcional(formData.get("numeroCuentaEnmascarado")),
+    saldoInicial: formData.get("saldoInicial") || 0,
+    fechaSaldoInicial: opcional(formData.get("fechaSaldoInicial")),
+  };
+}
+
 export async function crearMedioFinancieroAction(
   _state: ContabilidadFormState,
   formData: FormData
 ): Promise<ContabilidadFormState> {
   const usuario = await requireSession();
   try {
-    await crearMedioFinanciero(usuario, { nombre: formData.get("nombre"), tipo: formData.get("tipo") });
+    await crearMedioFinanciero(usuario, datosMedioFinancieroDesdeFormData(formData));
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -86,7 +102,7 @@ export async function editarMedioFinancieroAction(
 ): Promise<ContabilidadFormState> {
   const usuario = await requireSession();
   try {
-    await editarMedioFinanciero(usuario, id, { nombre: formData.get("nombre"), tipo: formData.get("tipo") });
+    await editarMedioFinanciero(usuario, id, datosMedioFinancieroDesdeFormData(formData));
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -109,6 +125,9 @@ function datosDecoracionEgresoDesdeFormData(formData: FormData) {
     medioFinancieroId: opcional(formData.get("medioFinancieroId")),
     facturaId: opcional(formData.get("facturaId")),
     notasContables: opcional(formData.get("notasContables")),
+    // Eje 4 — null/ausente = todavía por pagar, nunca se asume pagado.
+    fechaPago: opcional(formData.get("fechaPago")),
+    referenciaPago: opcional(formData.get("referenciaPago")),
   };
 }
 
@@ -135,6 +154,9 @@ function datosEgresoManualDesdeFormData(formData: FormData) {
     monto: formData.get("monto"),
     proyectoId: opcional(formData.get("proyectoId")),
     ...datosDecoracionEgresoDesdeFormData(formData),
+    // Clasificación exclusiva — obligatoria en el servicio, nunca inferida
+    // del concepto (invariante: una operación reconocida → una sola línea).
+    clasificacionManual: formData.get("clasificacionManual"),
   };
 }
 
@@ -189,9 +211,17 @@ function datosDecoracionIngresoDesdeFormData(formData: FormData) {
 }
 
 // Ingreso manual sin origen — aquí sí tiene sentido su propia referencia
-// (no hay ningún MovimientoFinancieroCliente del que leerla).
+// (no hay ningún MovimientoFinancieroCliente del que leerla), y también su
+// propia fecha de cobro y clasificación exclusiva (eje 4 y clasificación de
+// Estado de Resultados no aplican a un Ingreso que decora un movimiento ya
+// real, ver ingresos.ts).
 function datosIngresoManualDesdeFormData(formData: FormData) {
-  return { ...datosDecoracionIngresoDesdeFormData(formData), referencia: opcional(formData.get("referencia")) };
+  return {
+    ...datosDecoracionIngresoDesdeFormData(formData),
+    referencia: opcional(formData.get("referencia")),
+    fechaCobro: opcional(formData.get("fechaCobro")),
+    clasificacionManual: formData.get("clasificacionManual"),
+  };
 }
 
 export async function guardarDecoracionIngresoAction(
@@ -356,4 +386,48 @@ export async function vincularFacturaAIngresoAction(
   } catch (error) {
     return { error: mensajeError(error) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Inclusión en Contabilidad (eje 1) — cambia qué línea del Estado de
+// Resultados ve una operación, siempre auditado (ver
+// lib/server/contabilidad/inclusion.ts).
+// ---------------------------------------------------------------------------
+
+export type InclusionFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function marcarInclusionGastoAction(gastoObraId: string, incluido: boolean): Promise<InclusionFormState> {
+  const usuario = await requireSession();
+  try {
+    await marcarInclusionGasto(usuario, gastoObraId, incluido);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
+}
+
+export async function marcarInclusionCapaAction(capaId: string, incluido: boolean): Promise<InclusionFormState> {
+  const usuario = await requireSession();
+  try {
+    await marcarInclusionCapa(usuario, capaId, incluido);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
+}
+
+export async function marcarInclusionMovimientoFondoAction(
+  movimientoId: string,
+  incluido: boolean
+): Promise<InclusionFormState> {
+  const usuario = await requireSession();
+  try {
+    await marcarInclusionMovimientoFondo(usuario, movimientoId, incluido);
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
 }

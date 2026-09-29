@@ -411,6 +411,31 @@ export function puedeCancelarRegistroContable(usuario: UsuarioSesion): boolean {
 }
 
 /**
+ * Configurar Contabilidad: crear/editar MedioFinanciero (incluido saldo
+ * inicial) y el default de inclusión contable de la Empresa
+ * (Empresa.defaultInclusionContabilidad) — mismo techo que el resto del
+ * módulo hoy (Contabilidad — reconocimiento, septiembre 2026). Función
+ * independiente desde el inicio para poder restringirse después sin tocar
+ * el resto del módulo.
+ */
+export function puedeConfigurarContabilidad(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
+}
+
+/**
+ * Cambiar el flag de inclusión en Contabilidad (eje 1 — ¿esta operación es
+ * del ámbito contable/fiscal de la Empresa?) de un GastoObra/
+ * EstimacionClienteCapa/MovimientoFinancieroCliente puntual — decisión
+ * confirmada explícitamente: hoy mismo techo que puedeVerContabilidad
+ * (Administrador/Director), pero se conserva como función independiente
+ * para poder restringirlo después (ej. solo Director) sin modificar la
+ * lógica del módulo (Contabilidad — reconocimiento, septiembre 2026).
+ */
+export function puedeMarcarInclusionContable(usuario: UsuarioSesion): boolean {
+  return puedeVerContabilidad(usuario);
+}
+
+/**
  * Administrar el catálogo global (Proveedores/Contratistas/Personal y el
  * vínculo Usuario↔Beneficiario) — mismo rol-set que administrar proyectos;
  * Supervisor sigue accediendo a catálogos solo a través de los selects ya

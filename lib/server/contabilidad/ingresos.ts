@@ -2,11 +2,17 @@ import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeVerContabilidad, puedeRegistrarMovimientoContable, puedeCancelarRegistroContable } from "@/lib/server/permisos";
+import {
+  puedeVerContabilidad,
+  puedeRegistrarMovimientoContable,
+  puedeCancelarRegistroContable,
+  puedeVerInformacionPrivada,
+} from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError } from "@/lib/server/control-de-obra/proyectos";
 import { RegistroNoEncontradoError } from "@/lib/server/control-de-obra/estructura-contractual";
 import { EMPRESA_PROYECTO_LABEL } from "@/lib/server/control-de-obra/proyecto-oficina";
+import { CLASIFICACIONES_INGRESO_MANUAL } from "./estado-resultados";
 
 // Ingreso decora un MovimientoFinancieroCliente existente (pago de cliente ya
 // trackeado — SIN duplicar monto/fecha/proyecto) o representa un ingreso
@@ -66,21 +72,30 @@ export type FilaIngreso = {
   facturaUuid: string | null;
   estatus: "VIGENTE" | "CANCELADO";
   motivoCancelacion: string | null;
+  cobroPago: "COBRADO" | "POR_COBRAR";
+  cfdi: "NO_REQUERIDO" | "PENDIENTE" | "VINCULADO";
 };
 
 export async function obtenerIngresos(usuario: UsuarioSesion, anio: number, mes: number): Promise<FilaIngreso[]> {
   const empresaId = requerirContabilidad(usuario);
   const { desde, hasta } = rangoMes(anio, mes);
+  const incluyePrivado = puedeVerInformacionPrivada(usuario);
 
   // Se listan también los pagos CANCELADOS (nunca se borran) para
-  // trazabilidad — el resumen fiscal (obtenerResumenFiscalPeriodo) es el que
-  // los excluye de los totales, no esta lista.
+  // trazabilidad — el resumen fiscal es el que los excluye de los totales,
+  // no esta lista. Privado (decisión 4, docs/negocio/05-modulo-contabilidad.md
+  // sección 17): un usuario sin puedeVerInformacionPrivada NUNCA ve una fila
+  // ligada a la capa PRIVADO aquí, filtrado server-side antes de devolver
+  // nada — no solo agregados.
   const [pagosCliente, ingresosManuales] = await Promise.all([
     db.movimientoFinancieroCliente.findMany({
       where: {
         empresaId,
         tipo: { in: ["PAGO_ESTIMACION", "APORTACION_FONDO"] },
         fecha: { gte: desde, lt: hasta },
+        ...(incluyePrivado
+          ? {}
+          : { OR: [{ estimacionClienteCapaId: null }, { estimacionClienteCapa: { capa: "OPERATIVO" } }] }),
       },
       include: {
         proyecto: { select: { nombre: true, tipo: true } },
@@ -124,6 +139,10 @@ export async function obtenerIngresos(usuario: UsuarioSesion, anio: number, mes:
     facturaUuid: m.ingreso?.factura?.uuid ?? null,
     estatus: m.estatus,
     motivoCancelacion: m.motivoCancelacion,
+    // MovimientoFinancieroCliente solo existe cuando el dinero ya entró —
+    // siempre cobrado, por definición del modelo.
+    cobroPago: "COBRADO",
+    cfdi: m.ingreso?.facturaId ? "VINCULADO" : m.ingreso?.facturaEsperada ? "PENDIENTE" : "NO_REQUERIDO",
   }));
 
   const filasManuales: FilaIngreso[] = ingresosManuales.map((i) => ({
@@ -141,6 +160,8 @@ export async function obtenerIngresos(usuario: UsuarioSesion, anio: number, mes:
     facturaUuid: i.factura?.uuid ?? null,
     estatus: i.estatus,
     motivoCancelacion: null,
+    cobroPago: i.fechaCobro ? "COBRADO" : "POR_COBRAR",
+    cfdi: i.facturaId ? "VINCULADO" : i.facturaEsperada ? "PENDIENTE" : "NO_REQUERIDO",
   }));
 
   return [...filasDePago, ...filasManuales].sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
@@ -234,6 +255,15 @@ const DatosIngresoManualSchema = z.object({
   facturaId: z.string().trim().optional().nullable(),
   facturaEsperada: z.coerce.boolean().default(false),
   comentarios: z.string().trim().optional().nullable(),
+  // Eje 4 — null/ausente = reconocido, todavía por cobrar (Contabilidad —
+  // reconocimiento, septiembre 2026). No se asume que un ingreso manual ya
+  // significa dinero movido.
+  fechaCobro: z.coerce.date().optional().nullable(),
+  // Clasificación exclusiva — obligatoria, mismo invariante que
+  // Egreso.clasificacionManual (una operación reconocida → una sola línea).
+  clasificacionManual: z.enum(CLASIFICACIONES_INGRESO_MANUAL, {
+    error: "Selecciona a qué línea del Estado de Resultados pertenece este ingreso.",
+  }),
 });
 
 export async function crearIngresoManual(usuario: UsuarioSesion, datosCrudos: unknown) {
@@ -258,6 +288,8 @@ export async function crearIngresoManual(usuario: UsuarioSesion, datosCrudos: un
       facturaId: datos.facturaId || null,
       facturaEsperada: datos.facturaEsperada,
       comentarios: datos.comentarios || null,
+      fechaCobro: datos.fechaCobro || null,
+      clasificacionManual: datos.clasificacionManual,
       registradoPorId: usuario.id,
     },
   });
@@ -307,6 +339,8 @@ export async function editarIngresoManual(usuario: UsuarioSesion, id: string, da
       facturaId: datos.facturaId || null,
       facturaEsperada: datos.facturaEsperada,
       comentarios: datos.comentarios || null,
+      fechaCobro: datos.fechaCobro || null,
+      clasificacionManual: datos.clasificacionManual,
     },
   });
 

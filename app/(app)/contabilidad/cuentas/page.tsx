@@ -1,6 +1,6 @@
 import { requireSession } from "@/lib/server/auth/dal";
 import { empresaTieneModulo, puedeVerContabilidad } from "@/lib/server/permisos";
-import { listarMediosFinancieros } from "@/lib/server/contabilidad/medios-financieros";
+import { obtenerSaldosMediosFinancieros } from "@/lib/server/contabilidad/saldos";
 import { NavContabilidad } from "@/components/contabilidad/nav-contabilidad";
 import { MediosFinancierosView } from "@/components/contabilidad/medios-financieros-view";
 import { Card } from "@/components/ui/card";
@@ -18,7 +18,7 @@ export default async function CuentasContabilidadPage() {
     return <Card className="p-6 text-sm text-[var(--muted)]">No tienes permiso para ver Contabilidad.</Card>;
   }
 
-  const medios = await listarMediosFinancieros(usuario);
+  const medios = await obtenerSaldosMediosFinancieros(usuario);
 
   return (
     <div className="space-y-6">

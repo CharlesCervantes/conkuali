@@ -43,8 +43,8 @@ export function EgresosView({
 
       {egresos.length === 0 ? (
         <Card className="p-6 text-sm text-[var(--muted)]">
-          Todavía no hay egresos fiscales este mes. Los gastos con &ldquo;Requiere factura&rdquo; activado
-          aparecen aquí automáticamente al aprobarse.
+          Todavía no hay egresos incluidos en Contabilidad este mes. Un gasto aparece aquí una vez
+          aprobado y marcado como incluido en Contabilidad.
         </Card>
       ) : (
         <div className="space-y-2">
@@ -64,6 +64,13 @@ export function EgresosView({
                         Manual
                       </span>
                     )}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                        e.cobroPago === "PAGADO" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"
+                      }`}
+                    >
+                      {e.cobroPago === "PAGADO" ? "Pagado" : "Por pagar"}
+                    </span>
                   </div>
                   <p className="mt-0.5 text-xs text-[var(--muted)]">
                     {e.proyectoNombre ?? "—"} · {formatearFecha(new Date(e.fecha))}
@@ -192,8 +199,40 @@ function ModalEgreso({
                   </option>
                 ))}
               </select>
+
+              <select
+                name="clasificacionManual"
+                required
+                defaultValue=""
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+              >
+                <option value="" disabled>
+                  ¿A qué línea del Estado de Resultados pertenece?
+                </option>
+                <option value="COSTO_DIRECTO_OBRA">Costo directo de obra</option>
+                <option value="GASTO_OPERACION">Gasto de operación</option>
+                <option value="IMPUESTOS_CONTRIBUCIONES">Impuestos y contribuciones</option>
+                <option value="OTRO_NO_OPERATIVO">Otro (no operativo)</option>
+              </select>
             </>
           )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-[var(--muted)]">Fecha de pago (vacío = por pagar)</label>
+              <input
+                name="fechaPago"
+                type="date"
+                defaultValue={egreso?.fechaPago ? egreso.fechaPago.slice(0, 10) : ""}
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+              />
+            </div>
+            <input
+              name="referenciaPago"
+              placeholder="Referencia de pago (opcional)"
+              className="mt-5 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+            />
+          </div>
 
           <select
             name="medioFinancieroId"

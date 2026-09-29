@@ -17,6 +17,7 @@ módulo relacionado.
 | `01-administracion-pagos-semanales.md` | Ciclo semanal de pagos, capas de información, permisos, aditivas, bitácora |
 | `02-control-de-obra.md` | Control de obra (versión supervisor vs. privada), Reporte General, Recibo de Pago, Préstamos, Gastos Semanales, Requisición de Materiales |
 | `03-modulo-reporte-general.md` | Especificación detallada del módulo Reporte General (entidades, flujos, reglas) — primer módulo a construir |
+| `05-modulo-contabilidad.md` | Rediseño del módulo Contabilidad: los cuatro ejes (inclusión/reconocimiento/CFDI/movimiento de dinero), Estado de Resultados, Cuentas por Cobrar/Pagar, Bancos/Tesorería |
 
 ## Principios no negociables (aplican a todo el sistema)
 1. **No eliminar información histórica.** Todo cambio de estado o monto se preserva; los rechazos se conservan con motivo.
