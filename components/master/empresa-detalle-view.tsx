@@ -21,10 +21,17 @@ import {
   type MasterFormState,
 } from "@/app/master/actions";
 import type { DetalleEmpresaMaster, EstadoModulo, UsuarioEmpresaMaster } from "@/lib/server/master/empresas";
+import type {
+  ConfiguracionInteligenciaEmpresa,
+  TipoRangoInteligencia,
+  RangoInteligencia,
+} from "@/lib/server/master/inteligencia";
+import type { ResumenConsumoInteligencia, DesgloseCapacidad, ConsumoDiario } from "@/lib/server/inteligencia/consumo";
 import { PasswordTemporalPanel } from "@/components/master/password-temporal-panel";
+import { TabArqentoIA } from "@/components/master/tab-arqento-ia";
 import { NOMBRE_ROL } from "@/lib/roles";
 
-const TABS = ["general", "modulos", "branding", "documentos", "usuarios"] as const;
+const TABS = ["general", "modulos", "branding", "documentos", "usuarios", "arqento-ia"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABEL: Record<Tab, string> = {
   general: "General",
@@ -32,6 +39,7 @@ const TAB_LABEL: Record<Tab, string> = {
   branding: "Branding",
   documentos: "Documentos",
   usuarios: "Usuarios",
+  "arqento-ia": "ARQENTO IA",
 };
 
 function iniciales(nombre: string): string {
@@ -41,9 +49,16 @@ function iniciales(nombre: string): string {
 export function EmpresaDetalleView({
   empresa,
   planes,
+  inteligencia,
 }: {
   empresa: DetalleEmpresaMaster;
   planes: { id: string; nombre: string }[];
+  inteligencia: {
+    configuracion: ConfiguracionInteligenciaEmpresa;
+    dashboard: { resumen: ResumenConsumoInteligencia; desglose: DesgloseCapacidad[]; diario: ConsumoDiario[] };
+    rango: RangoInteligencia;
+    tipoRango: TipoRangoInteligencia;
+  };
 }) {
   const [tab, setTab] = useState<Tab>("general");
 
@@ -87,6 +102,15 @@ export function EmpresaDetalleView({
       {tab === "branding" && <TabBranding empresa={empresa} />}
       {tab === "documentos" && <TabDocumentos empresa={empresa} />}
       {tab === "usuarios" && <TabUsuarios empresa={empresa} />}
+      {tab === "arqento-ia" && (
+        <TabArqentoIA
+          empresaId={empresa.id}
+          configuracion={inteligencia.configuracion}
+          dashboard={inteligencia.dashboard}
+          rango={inteligencia.rango}
+          tipoRango={inteligencia.tipoRango}
+        />
+      )}
     </div>
   );
 }

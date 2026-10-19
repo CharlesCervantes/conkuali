@@ -19,12 +19,27 @@ const TIPO_LABEL: Record<string, string> = {
   EFECTIVO: "Efectivo",
 };
 
-export function MediosFinancierosView({ medios }: { medios: MedioFinancieroConSaldo[] }) {
+// Aviso neutral cuando el servidor no envía saldos actuales (C3) — nunca
+// explica el motivo.
+const AVISO_SALDO_RESTRINGIDO = "Saldo no disponible para tu usuario. Consulta con el administrador de la Empresa.";
+
+export function MediosFinancierosView({
+  medios,
+  saldosRestringidos,
+}: {
+  medios: MedioFinancieroConSaldo[];
+  saldosRestringidos: boolean;
+}) {
   const [creando, setCreando] = useState(false);
   const [editando, setEditando] = useState<MedioFinancieroConSaldo | null>(null);
 
   return (
     <div className="space-y-4">
+      {saldosRestringidos && medios.length > 0 && (
+        <p className="rounded-lg border border-[var(--border)] bg-black/[0.03] px-4 py-3 text-sm text-[var(--muted)]">
+          {AVISO_SALDO_RESTRINGIDO}
+        </p>
+      )}
       <Card className="divide-y divide-[var(--border)] p-0">
         {medios.length === 0 ? (
           <p className="p-5 text-sm text-[var(--muted)]">Todavía no hay cuentas/medios configurados.</p>
@@ -46,9 +61,15 @@ export function MediosFinancierosView({ medios }: { medios: MedioFinancieroConSa
                 </p>
               </div>
               <div className="flex items-center gap-4">
-                <p className="text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                  {formatMoney(m.saldoActual)}
-                </p>
+                {m.saldoActual === null ? (
+                  <p className="text-right text-sm text-[var(--muted)]" title={AVISO_SALDO_RESTRINGIDO}>
+                    —
+                  </p>
+                ) : (
+                  <p className="text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                    {formatMoney(m.saldoActual)}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => setEditando(m)}

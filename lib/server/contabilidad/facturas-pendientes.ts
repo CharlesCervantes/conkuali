@@ -1,6 +1,7 @@
 import "server-only";
 import { db } from "@/lib/server/db";
-import { puedeVerContabilidad } from "@/lib/server/permisos";
+import { puedeVerContabilidad, puedeVerInformacionPrivada } from "@/lib/server/permisos";
+import { filtroMovimientoClienteVisible } from "./capa-privada";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError } from "@/lib/server/control-de-obra/proyectos";
 import { EMPRESA_PROYECTO_LABEL } from "@/lib/server/control-de-obra/proyecto-oficina";
@@ -26,8 +27,15 @@ export type FilaFacturaPendiente = {
   montoEsperado: number;
 };
 
-export async function obtenerFacturasPendientes(usuario: UsuarioSesion): Promise<FilaFacturaPendiente[]> {
+// `incluirPrivado` — por omisión el acceso Privado del usuario (sección 17:
+// sin él, ningún ingreso ligado a la capa PRIVADO, ni como fila ni como
+// conteo); Inicio lo pasa según la vista.
+export async function obtenerFacturasPendientes(
+  usuario: UsuarioSesion,
+  opciones: { incluirPrivado?: boolean } = {}
+): Promise<FilaFacturaPendiente[]> {
   const empresaId = requerirContabilidad(usuario);
+  const incluirPrivado = opciones.incluirPrivado ?? puedeVerInformacionPrivada(usuario);
 
   const [gastos, ingresos] = await Promise.all([
     db.gastoObra.findMany({
@@ -41,7 +49,10 @@ export async function obtenerFacturasPendientes(usuario: UsuarioSesion): Promise
         facturaEsperada: true,
         facturaId: null,
         estatus: "VIGENTE",
-        OR: [{ movimientoFinancieroClienteId: null }, { movimientoFinancieroCliente: { estatus: "VIGENTE" } }],
+        OR: [
+          { movimientoFinancieroClienteId: null },
+          { movimientoFinancieroCliente: { estatus: "VIGENTE", ...filtroMovimientoClienteVisible(incluirPrivado) } },
+        ],
       },
       include: {
         proyecto: { select: { nombre: true, tipo: true } },

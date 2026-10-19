@@ -1,7 +1,8 @@
 import "server-only";
 import * as z from "zod";
 import { db } from "@/lib/server/db";
-import { registrarAuditoria } from "@/lib/server/auditoria";
+import { registrarAuditoria, registrarAuditoriaTx } from "@/lib/server/auditoria";
+import type { Prisma } from "@/lib/generated/prisma/client";
 import { puedeVerContabilidad, puedeRegistrarMovimientoContable, puedeCancelarRegistroContable } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError } from "@/lib/server/control-de-obra/proyectos";
@@ -34,14 +35,15 @@ function rangoMes(anio: number, mes: number): { desde: Date; hasta: Date } {
 // reutiliza para los mismos tres campos donde antes faltaba.
 async function validarReferenciasEgreso(
   empresaId: string,
-  datos: { proyectoId?: string | null; medioFinancieroId?: string | null; facturaId?: string | null }
+  datos: { proyectoId?: string | null; medioFinancieroId?: string | null; facturaId?: string | null },
+  cliente: Prisma.TransactionClient = db
 ): Promise<void> {
   const [proyecto, medioFinanciero, factura] = await Promise.all([
-    datos.proyectoId ? db.proyecto.findFirst({ where: { id: datos.proyectoId, empresaId }, select: { id: true } }) : null,
+    datos.proyectoId ? cliente.proyecto.findFirst({ where: { id: datos.proyectoId, empresaId }, select: { id: true } }) : null,
     datos.medioFinancieroId
-      ? db.medioFinanciero.findFirst({ where: { id: datos.medioFinancieroId, empresaId }, select: { id: true } })
+      ? cliente.medioFinanciero.findFirst({ where: { id: datos.medioFinancieroId, empresaId }, select: { id: true } })
       : null,
-    datos.facturaId ? db.factura.findFirst({ where: { id: datos.facturaId, empresaId }, select: { id: true } }) : null,
+    datos.facturaId ? cliente.factura.findFirst({ where: { id: datos.facturaId, empresaId }, select: { id: true } }) : null,
   ]);
   if (datos.proyectoId && !proyecto) throw new RegistroNoEncontradoError("El proyecto");
   if (datos.medioFinancieroId && !medioFinanciero) throw new RegistroNoEncontradoError("El medio financiero");
@@ -59,6 +61,10 @@ export type FilaEgreso = {
   proyectoNombre: string | null;
   monto: number;
   medioFinancieroNombre: string | null;
+  // Identificadores actuales — para precargar el formulario sin perder datos
+  // (siempre de la propia Empresa, ver validarReferenciasEgreso).
+  medioFinancieroId: string | null;
+  referenciaPago: string | null;
   facturaId: string | null;
   facturaUuid: string | null;
   notasContables: string | null;
@@ -68,6 +74,12 @@ export type FilaEgreso = {
   cobroPago: "PAGADO" | "POR_PAGAR";
   fechaPago: string | null;
   cfdi: "NO_REQUERIDO" | "PENDIENTE" | "VINCULADO";
+  // R1 — el gasto se paga por otra vía (persona u orden de compra); null en
+  // gastos pagados por la Empresa y en egresos manuales.
+  pagoPorOtraVia: ViaDePagoExterna | null;
+  // Registro histórico a revisar: se paga por otra vía y aun así tiene datos
+  // de pago bancario. Solo se señala — nunca se corrige automáticamente.
+  pagoRegistradoIndebido: boolean;
 };
 
 export async function obtenerEgresos(
@@ -114,22 +126,30 @@ export async function obtenerEgresos(
   const cfdiDeGasto = (g: { requiereFactura: boolean; facturaRef: string | null }): FilaEgreso["cfdi"] =>
     !g.requiereFactura ? "NO_REQUERIDO" : g.facturaRef ? "VINCULADO" : "PENDIENTE";
 
-  const filasDeGasto: FilaEgreso[] = gastosIncluidos.map((g) => ({
-    egresoId: g.egreso?.id ?? null,
-    gastoObraId: g.id,
-    fecha: g.fecha.toISOString(),
-    concepto: g.descripcion,
-    proyectoNombre: g.proyecto.tipo === "OFICINA" ? EMPRESA_PROYECTO_LABEL : g.proyecto.nombre,
-    monto: Number(g.monto),
-    medioFinancieroNombre: g.egreso?.medioFinanciero?.nombre ?? null,
-    facturaId: g.egreso?.factura?.id ?? null,
-    facturaUuid: g.egreso?.factura?.uuid ?? null,
-    notasContables: g.egreso?.notasContables ?? null,
-    estatus: g.egreso?.estatus ?? "VIGENTE",
-    cobroPago: g.egreso?.fechaPago ? "PAGADO" : "POR_PAGAR",
-    fechaPago: g.egreso?.fechaPago ? g.egreso.fechaPago.toISOString() : null,
-    cfdi: cfdiDeGasto(g),
-  }));
+  const filasDeGasto: FilaEgreso[] = gastosIncluidos.map((g) => {
+    const pagoPorOtraVia = viaDePagoExterna(g);
+    const tieneDatosDePago = Boolean(g.egreso?.fechaPago || g.egreso?.medioFinancieroId || g.egreso?.referenciaPago);
+    return {
+      egresoId: g.egreso?.id ?? null,
+      gastoObraId: g.id,
+      fecha: g.fecha.toISOString(),
+      concepto: g.descripcion,
+      proyectoNombre: g.proyecto.tipo === "OFICINA" ? EMPRESA_PROYECTO_LABEL : g.proyecto.nombre,
+      monto: Number(g.monto),
+      medioFinancieroNombre: g.egreso?.medioFinanciero?.nombre ?? null,
+      medioFinancieroId: g.egreso?.medioFinancieroId ?? null,
+      referenciaPago: g.egreso?.referenciaPago ?? null,
+      facturaId: g.egreso?.factura?.id ?? null,
+      facturaUuid: g.egreso?.factura?.uuid ?? null,
+      notasContables: g.egreso?.notasContables ?? null,
+      estatus: g.egreso?.estatus ?? "VIGENTE",
+      cobroPago: g.egreso?.fechaPago ? "PAGADO" : "POR_PAGAR",
+      fechaPago: g.egreso?.fechaPago ? g.egreso.fechaPago.toISOString() : null,
+      cfdi: cfdiDeGasto(g),
+      pagoPorOtraVia,
+      pagoRegistradoIndebido: pagoPorOtraVia !== null && tieneDatosDePago,
+    };
+  });
 
   const filasManuales: FilaEgreso[] = egresosManuales.map((e) => ({
     egresoId: e.id,
@@ -139,6 +159,8 @@ export async function obtenerEgresos(
     proyectoNombre: e.proyecto ? (e.proyecto.tipo === "OFICINA" ? EMPRESA_PROYECTO_LABEL : e.proyecto.nombre) : null,
     monto: Number(e.monto ?? 0),
     medioFinancieroNombre: e.medioFinanciero?.nombre ?? null,
+    medioFinancieroId: e.medioFinancieroId ?? null,
+    referenciaPago: e.referenciaPago ?? null,
     facturaId: e.factura?.id ?? null,
     facturaUuid: e.factura?.uuid ?? null,
     notasContables: e.notasContables,
@@ -146,9 +168,45 @@ export async function obtenerEgresos(
     cobroPago: e.fechaPago ? "PAGADO" : "POR_PAGAR",
     fechaPago: e.fechaPago ? e.fechaPago.toISOString() : null,
     cfdi: e.facturaId ? "VINCULADO" : "NO_REQUERIDO",
+    pagoPorOtraVia: null,
+    pagoRegistradoIndebido: false,
   }));
 
   return [...filasDeGasto, ...filasManuales].sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
+}
+
+// R1 — vía de pago ajena a Contabilidad: la persona que pagó (se le repone
+// desde Reposiciones / Reporte General) o la orden de compra (se liquida en
+// Reporte General). null = la Empresa pagó directo; solo ese gasto puede
+// tener un pago bancario propio aquí.
+export type ViaDePagoExterna = "PERSONA" | "ORDEN_COMPRA";
+
+function viaDePagoExterna(gasto: { pagadorBeneficiarioId: string | null; ordenCompraId: string | null }): ViaDePagoExterna | null {
+  if (gasto.ordenCompraId) return "ORDEN_COMPRA";
+  if (gasto.pagadorBeneficiarioId) return "PERSONA";
+  return null;
+}
+
+const MENSAJE_PAGO_POR_OTRA_VIA: Record<ViaDePagoExterna, string> = {
+  PERSONA:
+    "Este gasto lo pagó una persona: su pago se registra al liquidar la reposición (Reporte General / Reposiciones), no como pago bancario aquí. Puedes agregar factura y notas.",
+  ORDEN_COMPRA:
+    "Este gasto proviene de una orden de compra: su pago se registra al liquidarla en Reporte General, no como pago bancario aquí. Puedes agregar factura y notas.",
+};
+
+const mismoDia = (a: Date, b: Date) => a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10);
+
+// ¿Trae un dato de pago nuevo o distinto del que ya tenía? Vacío (eliminar)
+// y "el mismo valor" nunca cuentan como nuevos. La fecha se compara por día:
+// es lo que el formulario reenvía (input type="date").
+function registraPagoNuevo(
+  nuevo: { fechaPago: Date | null; medioFinancieroId: string | null; referenciaPago: string | null },
+  anterior: { fechaPago: Date | null; medioFinancieroId: string | null; referenciaPago: string | null } | null
+): boolean {
+  if (nuevo.fechaPago && !(anterior?.fechaPago && mismoDia(nuevo.fechaPago, anterior.fechaPago))) return true;
+  if (nuevo.medioFinancieroId && nuevo.medioFinancieroId !== anterior?.medioFinancieroId) return true;
+  if (nuevo.referenciaPago && nuevo.referenciaPago !== anterior?.referenciaPago) return true;
+  return false;
 }
 
 const DatosDecoracionSchema = z.object({
@@ -164,45 +222,109 @@ const DatosDecoracionSchema = z.object({
   referenciaPago: z.string().trim().optional().nullable(),
 });
 
+const CAMPOS_DECORACION = ["medioFinancieroId", "facturaId", "notasContables", "fechaPago", "referenciaPago"] as const;
+type CampoDecoracion = (typeof CAMPOS_DECORACION)[number];
+type ValoresDecoracion = {
+  medioFinancieroId: string | null;
+  facturaId: string | null;
+  notasContables: string | null;
+  fechaPago: Date | null;
+  referenciaPago: string | null;
+};
+
+const mismoValor = (a: string | Date | null, b: string | Date | null) =>
+  a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;
+
 // Crea o actualiza la decoración fiscal de un GastoObra existente — nunca
 // toca monto/fecha/concepto/proyecto/pagador del gasto.
+//
+// Contrato de actualización PARCIAL (octubre 2026), igual para cualquier
+// llamador:
+// - campo omitido (propiedad ausente o undefined) → se conserva lo guardado;
+// - campo explícito en null o "" → se limpia;
+// - campo con valor → se actualiza.
+// Al crear el Egreso, los campos omitidos quedan vacíos. Solo se escriben y
+// se auditan los campos que cambian de verdad.
+//
+// `opciones.tx` permite ejecutar dentro de la transacción del llamador (p.
+// ej. la vinculación de un documento, que debe ser atómica); sin ella, la
+// función abre su propia transacción.
 export async function guardarDecoracionEgreso(
   usuario: UsuarioSesion,
   gastoObraId: string,
-  datosCrudos: unknown
+  datosCrudos: unknown,
+  opciones: { tx?: Prisma.TransactionClient } = {}
 ) {
   const empresaId = requerirContabilidad(usuario);
   if (!puedeRegistrarMovimientoContable(usuario)) throw new SinPermisoError();
-  const datos = DatosDecoracionSchema.parse(datosCrudos);
 
-  const gasto = await db.gastoObra.findFirst({ where: { id: gastoObraId, empresaId } });
-  if (!gasto) throw new RegistroNoEncontradoError("El gasto");
-  await validarReferenciasEgreso(empresaId, datos);
+  // "" explícito = limpiar (mismo significado que null).
+  const crudo = { ...((datosCrudos ?? {}) as Record<string, unknown>) };
+  for (const campo of CAMPOS_DECORACION) if (crudo[campo] === "") crudo[campo] = null;
+  const datos = DatosDecoracionSchema.parse(crudo);
 
-  const data = {
-    medioFinancieroId: datos.medioFinancieroId || null,
-    facturaId: datos.facturaId || null,
-    notasContables: datos.notasContables || null,
-    fechaPago: datos.fechaPago || null,
-    referenciaPago: datos.referenciaPago || null,
+  const enviados: Partial<ValoresDecoracion> = {};
+  for (const campo of CAMPOS_DECORACION) {
+    if (datos[campo] === undefined) continue;
+    (enviados as Record<CampoDecoracion, unknown>)[campo] = datos[campo] || null;
+  }
+
+  const ejecutar = async (cliente: Prisma.TransactionClient) => {
+    // Serializa las decoraciones del mismo gasto (lectura → validación → escritura).
+    await cliente.$queryRaw`SELECT id FROM gastos_obra WHERE id = ${gastoObraId} FOR UPDATE`;
+    const gasto = await cliente.gastoObra.findFirst({ where: { id: gastoObraId, empresaId } });
+    if (!gasto) throw new RegistroNoEncontradoError("El gasto");
+    await validarReferenciasEgreso(empresaId, enviados, cliente);
+
+    const anterior = await cliente.egreso.findUnique({ where: { gastoObraId } });
+    const actuales: ValoresDecoracion = {
+      medioFinancieroId: anterior?.medioFinancieroId ?? null,
+      facturaId: anterior?.facturaId ?? null,
+      notasContables: anterior?.notasContables ?? null,
+      fechaPago: anterior?.fechaPago ?? null,
+      referenciaPago: anterior?.referenciaPago ?? null,
+    };
+    const finales: ValoresDecoracion = { ...actuales, ...enviados };
+
+    // R1 (C6, octubre 2026) — un gasto pagado por una persona (se repone) o
+    // generado por una orden de compra (se liquida en Reporte General) ya
+    // tiene su propio pago: nunca recibe además un pago bancario aquí. Se
+    // evalúa sobre los valores FINALES: conservar lo que un registro
+    // histórico ya tenía (sin alterarlo, ni siquiera la hora) o eliminarlo
+    // está permitido; solo se rechaza un valor de pago nuevo o distinto.
+    // Factura y notas, siempre.
+    const via = viaDePagoExterna(gasto);
+    if (via) {
+      if (registraPagoNuevo(finales, actuales)) throw new ValidacionError(MENSAJE_PAGO_POR_OTRA_VIA[via]);
+      if (finales.fechaPago && actuales.fechaPago) finales.fechaPago = actuales.fechaPago;
+    }
+
+    const cambios = CAMPOS_DECORACION.filter((campo) => !mismoValor(finales[campo], actuales[campo]));
+    const elegir = (valores: ValoresDecoracion) => Object.fromEntries(cambios.map((campo) => [campo, valores[campo]]));
+
+    let egreso;
+    if (!anterior) {
+      egreso = await cliente.egreso.create({ data: { empresaId, gastoObraId, registradoPorId: usuario.id, ...finales } });
+    } else if (cambios.length > 0) {
+      egreso = await cliente.egreso.update({ where: { gastoObraId }, data: elegir(finales) });
+    } else {
+      return anterior;
+    }
+
+    await registrarAuditoriaTx(cliente, {
+      empresaId,
+      usuarioId: usuario.id,
+      entidad: "Egreso",
+      entidadId: egreso.id,
+      accion: "EDITAR",
+      valorAnterior: anterior ? elegir(actuales) : undefined,
+      valorNuevo: { gastoObraId, ...elegir(finales) },
+    });
+
+    return egreso;
   };
 
-  const egreso = await db.egreso.upsert({
-    where: { gastoObraId },
-    update: data,
-    create: { empresaId, gastoObraId, registradoPorId: usuario.id, ...data },
-  });
-
-  await registrarAuditoria({
-    empresaId,
-    usuarioId: usuario.id,
-    entidad: "Egreso",
-    entidadId: egreso.id,
-    accion: "EDITAR",
-    valorNuevo: { gastoObraId, ...data },
-  });
-
-  return egreso;
+  return opciones.tx ? ejecutar(opciones.tx) : db.$transaction(ejecutar);
 }
 
 const DatosEgresoManualSchema = z.object({

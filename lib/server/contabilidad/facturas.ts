@@ -1,12 +1,13 @@
 import "server-only";
 import { db } from "@/lib/server/db";
 import { registrarAuditoria } from "@/lib/server/auditoria";
-import { puedeVerContabilidad, puedeCargarFacturaCFDI } from "@/lib/server/permisos";
+import { puedeVerContabilidad, puedeCargarFacturaCFDI, puedeVerInformacionPrivada } from "@/lib/server/permisos";
 import type { UsuarioSesion } from "@/lib/server/session";
 import { SinPermisoError, ValidacionError } from "@/lib/server/control-de-obra/proyectos";
 import { RegistroNoEncontradoError } from "@/lib/server/control-de-obra/estructura-contractual";
 import { registrarFacturaGasto } from "@/lib/server/control-de-obra/gastos";
 import { parsearCfdi } from "./cfdi";
+import { filtroMovimientoClienteVisible } from "./capa-privada";
 
 // El XML es SIEMPRE la fuente fiscal principal — se parsea y valida ANTES de
 // guardar nada; el PDF es solo la representación adjunta (Contabilidad,
@@ -223,8 +224,14 @@ export type FacturaConDiferencia = {
   origen: "EGRESO" | "INGRESO";
 };
 
-export async function obtenerFacturasConDiferencia(usuario: UsuarioSesion): Promise<FacturaConDiferencia[]> {
+// `incluirPrivado` — por omisión el acceso Privado del usuario; Inicio lo
+// pasa según la vista (General nunca incluye ingresos de capa PRIVADO).
+export async function obtenerFacturasConDiferencia(
+  usuario: UsuarioSesion,
+  opciones: { incluirPrivado?: boolean } = {}
+): Promise<FacturaConDiferencia[]> {
   const empresaId = requerirContabilidad(usuario);
+  const incluirPrivado = opciones.incluirPrivado ?? puedeVerInformacionPrivada(usuario);
 
   const [egresosVinculados, ingresosVinculados] = await Promise.all([
     db.egreso.findMany({
@@ -240,7 +247,7 @@ export async function obtenerFacturasConDiferencia(usuario: UsuarioSesion): Prom
         movimientoFinancieroClienteId: { not: null },
         facturaId: { not: null },
         estatus: "VIGENTE",
-        movimientoFinancieroCliente: { estatus: "VIGENTE" },
+        movimientoFinancieroCliente: { estatus: "VIGENTE", ...filtroMovimientoClienteVisible(incluirPrivado) },
       },
       select: {
         movimientoFinancieroCliente: { select: { monto: true } },

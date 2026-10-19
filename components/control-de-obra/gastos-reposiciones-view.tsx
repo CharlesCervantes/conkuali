@@ -254,6 +254,11 @@ export function GastosReposicionesView({
                           Reposición parcial
                         </span>
                       )}
+                      {r.requiereRevision && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                          Revisar abonos
+                        </span>
+                      )}
                       <p className="text-lg font-semibold tabular-nums text-[var(--foreground)]">
                         {formatMoney(r.total)}
                       </p>
@@ -277,7 +282,10 @@ export function GastosReposicionesView({
                     ))}
                   </div>
 
-                  {r.cerrada ? null : (
+                  {/* R2: una reposición con inconsistencias históricas (clase B)
+                      muestra sus cifras tal cual, sin corregirlas, y no admite
+                      abonos hasta revisarla. */}
+                  {r.cerrada && !r.requiereRevision ? null : (
                     <div className="mt-3 border-t border-[var(--border)] pt-3">
                       <div className="mb-2 flex items-center justify-between text-sm">
                         <span className="text-[var(--muted)]">Repuesto</span>
@@ -303,7 +311,13 @@ export function GastosReposicionesView({
                           ))}
                         </ul>
                       )}
-                      {puedeRegistrarAbono && r.saldoPendiente > 0 && (
+                      {r.requiereRevision && (
+                        <p className="mb-2 text-xs text-amber-800">
+                          Los abonos, el cierre o el importe de esta reposición no coinciden. Requiere
+                          revisión antes de registrar o liquidar pagos.
+                        </p>
+                      )}
+                      {puedeRegistrarAbono && !r.requiereRevision && r.saldoPendiente > 0 && (
                         <FormularioAbonoReposicion
                           proyectoId={proyectoId}
                           reposicionGastosId={r.id}

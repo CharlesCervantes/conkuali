@@ -9,7 +9,14 @@ import {
   obtenerOcurrenciasRecurrentesPendientes,
 } from "@/lib/server/control-de-obra/gastos-recurrentes";
 import { obtenerReposicionesPendientes } from "@/lib/server/control-de-obra/reposiciones";
-import { calcularMontoContrato, calcularFinancieroCapaEstimacion } from "@/lib/server/control-de-obra/financiero-cliente";
+import { calcularMontoContrato } from "@/lib/server/control-de-obra/financiero-cliente";
+import {
+  atribuirCobrosGeneral,
+  calcularCobroEstimacion,
+  capaRealDeEstimacion,
+  redondear,
+  type MovimientoCobro,
+} from "@/lib/control-de-obra/cobro-estimacion";
 import { obtenerResumenFiscalPeriodo } from "@/lib/server/contabilidad/resumen";
 import { obtenerFacturasPendientes } from "@/lib/server/contabilidad/facturas-pendientes";
 import { obtenerFacturasConDiferencia } from "@/lib/server/contabilidad/facturas";
@@ -47,8 +54,10 @@ import type { EsquemaContractual } from "@/lib/generated/prisma/enums";
 //   {LIQUIDADO, PAGADO_PUENTE} — dinero que YA salió, nunca PENDIENTE_PAGO)
 //   / Σ costoBase×cantidadContratada (motor privado, SIN margen — nunca
 //   calcularMontoContrato(capa="privado"), que sí incluye margen). Solo se
-//   calcula/regresa si puedeVerInformacionPrivada(usuario) — nunca se envía
-//   al cliente sin el permiso.
+//   calcula/regresa en vista Privado efectiva (AccesoDashboard.incluirPrivado,
+//   que ya exige puedeVerInformacionPrivada) — en vista General no se
+//   calcula ni influye en salud, orden ni alertas, aunque el usuario tenga
+//   el permiso (separación General/Privado, octubre 2026).
 // ---------------------------------------------------------------------------
 
 export type VistaDashboard = "general" | "privado";
@@ -78,9 +87,9 @@ function num(v: { toNumber(): number } | null): number {
 // periodo inmediato anterior; "acumulado" no tiene comparación (punto C.7).
 // ---------------------------------------------------------------------------
 
-type RangoPeriodo = { inicio: Date; fin: Date; inicioAnterior: Date | null; finAnterior: Date | null };
+export type RangoPeriodo = { inicio: Date; fin: Date; inicioAnterior: Date | null; finAnterior: Date | null };
 
-function resolverRangoPeriodo(periodo: PeriodoDashboard, hoy: Date): RangoPeriodo {
+export function resolverRangoPeriodo(periodo: PeriodoDashboard, hoy: Date): RangoPeriodo {
   if (periodo === "semana") {
     const dia = hoy.getDay() || 7;
     const inicio = new Date(hoy);
@@ -340,7 +349,10 @@ export type ResumenEjecutivo = {
   porPagarEmpresa: number | null;
   porPagarTotal: number | null;
   porCobrar: number | null;
-  flujoDinero: { entradas: number; pagosDeObra: number; gastosReposicionesDentro: number; neto: number } | null;
+  // base "general" = Flujo General (vista General: cobros a valores General,
+  // con tope cronológico por estimación — no necesariamente efectivo
+  // bancario); base "real" = Flujo real (vista Privado: todo cobro real).
+  flujoDinero: { base: "general" | "real"; entradas: number; pagosDeObra: number; gastosReposicionesDentro: number; neto: number } | null;
   resumenFiscal: ResumenFiscalDashboard | null;
   gastosProyectoPeriodo: number | null;
   gastosEmpresaPeriodo: number | null;
@@ -351,7 +363,38 @@ export type ResumenEjecutivo = {
 };
 
 // ---------------------------------------------------------------------------
-// Orquestador principal
+// Acceso — quién ve qué en Inicio
+// ---------------------------------------------------------------------------
+
+export type AccesoDashboard = {
+  // Corte de acceso real (Rediseño de Inicio, septiembre 2026) — Supervisor
+  // nunca ve montos financieros, Contabilidad ni compromisos, aunque siga
+  // originando los Gastos que los alimentan. Mismo permiso ya usado para
+  // gatear el módulo Contabilidad completo (Administrador/Director, nunca
+  // Master) — no se inventa un permiso nuevo para esto.
+  nivelAcceso: NivelAccesoDashboard;
+  // Permiso real de ver Privado (rol + switch personal + Empresa) — solo
+  // decide si se ofrece el selector General/Privado.
+  puedeVerPrivado: boolean;
+  vistaEfectiva: VistaDashboard;
+  // Única bandera que decide si un dato privado entra al cálculo: solo en
+  // vista Privado efectiva. En General nada privado se consulta, calcula ni
+  // influye en salud, orden o alertas — aunque el usuario tenga el permiso
+  // (separación General/Privado, octubre 2026).
+  incluirPrivado: boolean;
+};
+
+export function resolverAccesoDashboard(usuario: UsuarioSesion, vista: VistaDashboard): AccesoDashboard {
+  const puedeVerPrivado = puedeVerInformacionPrivada(usuario);
+  const vistaEfectiva: VistaDashboard = vista === "privado" && !puedeVerPrivado ? "general" : vista;
+  const nivelAcceso: NivelAccesoDashboard = puedeVerContabilidad(usuario) ? "completo" : "operativo";
+  return { nivelAcceso, puedeVerPrivado, vistaEfectiva, incluirPrivado: vistaEfectiva === "privado" };
+}
+
+// ---------------------------------------------------------------------------
+// Orquestador principal — carga (cargarDatosDashboard, única parte que toca
+// la BD) y proyección (proyectarResumenEjecutivo, pura) separadas para poder
+// probar la proyección sin base de datos.
 // ---------------------------------------------------------------------------
 
 export async function obtenerResumenEjecutivo(
@@ -361,14 +404,8 @@ export async function obtenerResumenEjecutivo(
 ): Promise<ResumenEjecutivo> {
   if (!usuario.empresa) throw new SinPermisoError();
   const empresaId = usuario.empresa.id;
-  const puedeVerPrivado = puedeVerInformacionPrivada(usuario);
-  const vistaEfectiva: VistaDashboard = vista === "privado" && !puedeVerPrivado ? "general" : vista;
-  // Corte de acceso real (Rediseño de Inicio, septiembre 2026) — Supervisor
-  // nunca ve montos financieros, Contabilidad ni compromisos, aunque siga
-  // originando los Gastos que los alimentan. Mismo permiso ya usado para
-  // gatear el módulo Contabilidad completo (Administrador/Director, nunca
-  // Master) — no se inventa un permiso nuevo para esto.
-  const nivelAcceso: NivelAccesoDashboard = puedeVerContabilidad(usuario) ? "completo" : "operativo";
+  const acceso = resolverAccesoDashboard(usuario, vista);
+  const { nivelAcceso, puedeVerPrivado, vistaEfectiva } = acceso;
 
   const hoy = new Date();
   const rango = resolverRangoPeriodo(periodo, hoy);
@@ -378,31 +415,17 @@ export async function obtenerResumenEjecutivo(
   // todavía (Gastos transversal — recurrentes, septiembre 2026).
   await asegurarGastosRecurrentesGenerados(empresaId, semanaActual.id);
 
-  const proyectos = await db.proyecto.findMany({
-    // tipo != OFICINA — ese Proyecto es el vehículo interno de Gastos de
-    // Empresa (ver proyecto-oficina.ts), nunca una obra real; no debe
-    // distorsionar el dashboard ejecutivo (Gastos transversal, sept. 2026).
-    where: { empresaId, estatus: { in: ["ACTIVO", "PAUSADO"] }, tipo: { not: "OFICINA" } },
-    select: {
-      id: true,
-      nombre: true,
-      tipo: true,
-      estatus: true,
-      imagenRef: true,
-      esquemaContractual: true,
-      porcentajeUtilidadDefault: true,
-      porcentajeAdministracionDefault: true,
-      porcentajeAdministracionPrivadoDefault: true,
-    },
-    orderBy: { nombre: "asc" },
-  });
-  const proyectoIds = proyectos.map((p) => p.id);
+  const encabezado = {
+    saludo: saludo(usuario.nombre),
+    empresaNombre: usuario.empresa.nombre,
+    semanaLabel: formatearRangoSemana(semanaActual),
+  };
 
-  if (proyectoIds.length === 0) {
+  const datos = await cargarDatosDashboard(usuario, empresaId, acceso, rango, hoy);
+
+  if (!datos) {
     return {
-      saludo: saludo(usuario.nombre),
-      empresaNombre: usuario.empresa.nombre,
-      semanaLabel: formatearRangoSemana(semanaActual),
+      ...encabezado,
       nivelAcceso,
       puedeVerPrivado,
       vista: vistaEfectiva,
@@ -424,6 +447,42 @@ export async function obtenerResumenEjecutivo(
     };
   }
 
+  return { ...encabezado, ...proyectarResumenEjecutivo(datos, acceso, periodo, rango, hoy) };
+}
+
+// Toda la lectura de BD de Inicio, agrupada por bloque (nunca una query por
+// proyecto). null = la Empresa no tiene obras activas/pausadas.
+async function cargarDatosDashboard(
+  usuario: UsuarioSesion,
+  empresaId: string,
+  acceso: AccesoDashboard,
+  rango: RangoPeriodo,
+  hoy: Date
+) {
+  const { nivelAcceso, incluirPrivado } = acceso;
+
+  const proyectos = await db.proyecto.findMany({
+    // tipo != OFICINA — ese Proyecto es el vehículo interno de Gastos de
+    // Empresa (ver proyecto-oficina.ts), nunca una obra real; no debe
+    // distorsionar el dashboard ejecutivo (Gastos transversal, sept. 2026).
+    where: { empresaId, estatus: { in: ["ACTIVO", "PAUSADO"] }, tipo: { not: "OFICINA" } },
+    select: {
+      id: true,
+      nombre: true,
+      tipo: true,
+      estatus: true,
+      imagenRef: true,
+      esquemaContractual: true,
+      porcentajeUtilidadDefault: true,
+      porcentajeAdministracionDefault: true,
+      porcentajeAdministracionPrivadoDefault: true,
+    },
+    orderBy: { nombre: "asc" },
+  });
+  const proyectoIds = proyectos.map((p) => p.id);
+
+  if (proyectoIds.length === 0) return null;
+
   // --- Carga por lote (nunca una query por proyecto) -----------------------
 
   const conceptosRaw = await db.concepto.findMany({
@@ -434,11 +493,12 @@ export async function obtenerResumenEjecutivo(
       cantidadContratada: true,
       precioUnitarioContratista: true,
       precioUnitarioMateriales: true,
-      precioUnitarioContratistaPrivado: true,
-      precioUnitarioIndirectos: true,
-      precioUnitarioHerramienta: true,
-      porcentajeUtilidad: true,
-      porcentajeAdministracion: true,
+      // Precios del Contrato General Privado — solo se leen en vista Privado.
+      precioUnitarioContratistaPrivado: incluirPrivado,
+      precioUnitarioIndirectos: incluirPrivado,
+      precioUnitarioHerramienta: incluirPrivado,
+      porcentajeUtilidad: incluirPrivado,
+      porcentajeAdministracion: incluirPrivado,
     },
   });
   const conceptoIds = conceptosRaw.map((c) => c.id);
@@ -480,10 +540,12 @@ export async function obtenerResumenEjecutivo(
   const movimientosFinancieros = await db.movimientoFinancieroCliente.findMany({
     where: { proyectoId: { in: proyectoIds }, estatus: "VIGENTE" },
     select: {
+      id: true,
       proyectoId: true,
       tipo: true,
       monto: true,
       fecha: true,
+      createdAt: true,
       estimacionClienteCapaId: true,
       estimacionClienteCapa: { select: { capa: true } },
     },
@@ -512,25 +574,196 @@ export async function obtenerResumenEjecutivo(
   // en memoria contra `cierresSemana` ya cargado. No recalcula el monto en
   // vivo (sería costoso por proyecto) — solo cuenta, tal como permite el
   // punto 10 del encargo ("mostrar cantidad; monto cuando aplique").
+  // En vista General solo cuentan las capas OPERATIVO — un borrador PRIVADO
+  // no debe ni revelarse como conteo.
   const capasBorrador = await db.estimacionClienteCapa.findMany({
-    where: { estatus: "BORRADOR", estimacionCliente: { proyectoId: { in: proyectoIds } } },
+    where: {
+      estatus: "BORRADOR",
+      estimacionCliente: { proyectoId: { in: proyectoIds } },
+      ...(incluirPrivado ? {} : { capa: "OPERATIVO" as const }),
+    },
     select: { capa: true, estimacionCliente: { select: { proyectoId: true, semanaId: true } } },
   });
-  const semanaCerradaIds = new Set(
-    cierresSemana.filter((c) => c.estatus === "CERRADA").map((c) => c.semanaId)
-  );
-  const capasListasParaEmitir = capasBorrador.filter((c) => semanaCerradaIds.has(c.estimacionCliente.semanaId));
 
   const tieneAlgunAvance = await db.avanceConcepto.groupBy({
     by: ["conceptoId"],
     where: { conceptoId: { in: conceptoIds }, estatusAprobacion: "APROBADO" },
   });
-  const conceptoIdsConAvance = new Set(tieneAlgunAvance.map((f) => f.conceptoId));
 
   const ultimaSemanaConAvance = await db.avanceConcepto.findMany({
     where: { conceptoId: { in: conceptoIds }, estatusAprobacion: "APROBADO" },
     select: { conceptoId: true, semana: { select: { fechaFin: true } } },
   });
+
+  // Monto de contrato (capa operativo) — se reutiliza `calcularMontoContrato`
+  // tal cual (fuente canónica, misma que usa Control Contractual) en vez de
+  // reimplementar la fórmula; se piden todas en paralelo, sobre la lista ya
+  // acotada de proyectos activos/pausados (no es un N+1 real — mismo
+  // trade-off ya usado por `obtenerControlContractual`, que llama a esta
+  // misma función internamente).
+  const montosContratoGeneral = new Map(
+    await Promise.all(
+      proyectos.map(async (p) => {
+        const pct: PorcentajesDefaultProyecto = {
+          utilidad: numOrNull(p.porcentajeUtilidadDefault),
+          administracion: numOrNull(p.porcentajeAdministracionDefault),
+          administracionPrivado: numOrNull(p.porcentajeAdministracionPrivadoDefault),
+        };
+        const monto = await calcularMontoContrato(p.id, p.esquemaContractual, pct, "operativo");
+        return [p.id, monto] as const;
+      })
+    )
+  );
+
+  // --- Gastos transversal / Contabilidad — SOLO si hay acceso completo o
+  // Privado, respectivamente. Supervisor (nivelAcceso "operativo") nunca
+  // dispara estas queries — ahorro real, no solo un campo oculto en la UI
+  // (Rediseño de Inicio, septiembre 2026).
+  //
+  // "Costo real pagado" (Privado) — audit deliberada para no doblar conteo:
+  // financieroPrivado.ejercido (ya existente) YA suma TODO MovimientoSemanal
+  // liquidado/pagado-puente sin filtrar por origen — cubre CORTE_CONTRATISTA
+  // (mano de obra), REPOSICION_GASTOS (gastos pagados personalmente, ya
+  // reembolsados) y ORDEN_COMPRA (compras a proveedor) en una sola suma, sin
+  // riesgo de contarlos dos veces porque son movimientos, no gastos. Lo único
+  // que ese número NUNCA ha incluido es un GastoObra pagado DIRECTO por la
+  // empresa (sin pagador, sin orden de compra) — ese nunca genera
+  // MovimientoSemanal (confirmado en gastos.ts: asignarGastoAReposicionTx
+  // solo corre si hay pagador), así que es invisible para `ejercido` y debe
+  // sumarse aparte, una sola vez, aquí. Solo en vista Privado.
+  const costoDirectoEmpresaPorProyecto = incluirPrivado
+    ? new Map(
+        (
+          await db.gastoObra.groupBy({
+            by: ["proyectoId"],
+            where: {
+              proyectoId: { in: proyectoIds },
+              estatus: "APROBADO",
+              pagadorBeneficiarioId: null,
+              ordenCompraId: null,
+            },
+            _sum: { monto: true },
+          })
+        ).map((g) => [g.proyectoId, num(g._sum.monto)] as const)
+      )
+    : new Map<string, number>();
+
+  const [
+    resumenFiscalPeriodo,
+    facturasPendientesLista,
+    facturasConDiferencia,
+    reposicionesPendientesLista,
+    ocurrenciasRecurrentesPendientesLista,
+    gastosProyectoPeriodoAgg,
+    gastosEmpresaPeriodoAgg,
+    porPagarEmpresaAgg,
+  ] = await Promise.all([
+    nivelAcceso === "completo" ? obtenerResumenFiscalPeriodo(usuario, rango.inicio, rango.fin) : Promise.resolve(null),
+    nivelAcceso === "completo" ? obtenerFacturasPendientes(usuario, { incluirPrivado }) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerFacturasConDiferencia(usuario, { incluirPrivado }) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerReposicionesPendientes(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo" ? obtenerOcurrenciasRecurrentesPendientes(usuario) : Promise.resolve([]),
+    nivelAcceso === "completo"
+      ? db.gastoObra.aggregate({
+          where: { proyectoId: { in: proyectoIds }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
+          _sum: { monto: true },
+        })
+      : Promise.resolve(null),
+    nivelAcceso === "completo"
+      ? db.gastoObra.aggregate({
+          where: { empresaId, proyecto: { tipo: "OFICINA" }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
+          _sum: { monto: true },
+        })
+      : Promise.resolve(null),
+    nivelAcceso === "completo"
+      ? db.movimientoSemanal.aggregate({
+          where: {
+            beneficiarioProyecto: { proyecto: { tipo: "OFICINA", empresaId } },
+            estatusAprobacion: "APROBADO",
+            estatusPago: "PENDIENTE_PAGO",
+          },
+          _sum: { montoFinSemana: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  return {
+    proyectos,
+    conceptosRaw,
+    acumuladoActual,
+    acumuladoAnterior,
+    capasEmitidas,
+    movimientosSemanales,
+    movimientosFinancieros,
+    gastosPendientes,
+    cierresSemana,
+    semanasCerradasVencidas,
+    capasBorrador,
+    tieneAlgunAvance,
+    ultimaSemanaConAvance,
+    montosContratoGeneral,
+    costoDirectoEmpresaPorProyecto,
+    resumenFiscalPeriodo,
+    facturasPendientesLista,
+    facturasConDiferencia,
+    reposicionesPendientesLista,
+    ocurrenciasRecurrentesPendientesLista,
+    gastosProyectoPeriodoAgg,
+    gastosEmpresaPeriodoAgg,
+    porPagarEmpresaAgg,
+  };
+}
+
+export type DatosDashboard = NonNullable<Awaited<ReturnType<typeof cargarDatosDashboard>>>;
+
+// Proyección pura de los datos ya cargados — sin BD. Todo lo que decide qué
+// ve cada quien vive aquí (y se prueba en tests/dashboard).
+export function proyectarResumenEjecutivo(
+  datos: DatosDashboard,
+  acceso: AccesoDashboard,
+  periodo: PeriodoDashboard,
+  rango: RangoPeriodo,
+  hoy: Date
+): Omit<ResumenEjecutivo, "saludo" | "empresaNombre" | "semanaLabel"> {
+  const {
+    proyectos,
+    conceptosRaw,
+    acumuladoActual,
+    acumuladoAnterior,
+    capasEmitidas,
+    movimientosSemanales,
+    movimientosFinancieros,
+    gastosPendientes,
+    cierresSemana,
+    semanasCerradasVencidas,
+    capasBorrador,
+    tieneAlgunAvance,
+    ultimaSemanaConAvance,
+    montosContratoGeneral,
+    costoDirectoEmpresaPorProyecto,
+    resumenFiscalPeriodo,
+    facturasPendientesLista,
+    facturasConDiferencia,
+    reposicionesPendientesLista,
+    ocurrenciasRecurrentesPendientesLista,
+    gastosProyectoPeriodoAgg,
+    gastosEmpresaPeriodoAgg,
+    porPagarEmpresaAgg,
+  } = datos;
+  const { nivelAcceso, puedeVerPrivado, vistaEfectiva, incluirPrivado } = acceso;
+
+  // "Listas para emitir" — cruce en memoria de capasBorrador contra los
+  // cierres ya cargados (ver comentario en cargarDatosDashboard). En General
+  // solo capas OPERATIVO (la carga ya las filtra; se repite aquí para que la
+  // proyección nunca dependa de ello).
+  const semanaCerradaIds = new Set(
+    cierresSemana.filter((c) => c.estatus === "CERRADA").map((c) => c.semanaId)
+  );
+  const capasListasParaEmitir = capasBorrador.filter(
+    (c) => (incluirPrivado || c.capa === "OPERATIVO") && semanaCerradaIds.has(c.estimacionCliente.semanaId)
+  );
+
+  const conceptoIdsConAvance = new Set(tieneAlgunAvance.map((f) => f.conceptoId));
 
   // --- Índices por proyecto --------------------------------------------------
 
@@ -574,98 +807,6 @@ export async function obtenerResumenEjecutivo(
     arr.push(c);
     cierresPorProyecto.set(c.proyectoId, arr);
   }
-
-  // Monto de contrato (capa operativo) — se reutiliza `calcularMontoContrato`
-  // tal cual (fuente canónica, misma que usa Control Contractual) en vez de
-  // reimplementar la fórmula; se piden todas en paralelo, sobre la lista ya
-  // acotada de proyectos activos/pausados (no es un N+1 real — mismo
-  // trade-off ya usado por `obtenerControlContractual`, que llama a esta
-  // misma función internamente).
-  const montosContratoGeneral = new Map(
-    await Promise.all(
-      proyectos.map(async (p) => {
-        const pct: PorcentajesDefaultProyecto = {
-          utilidad: numOrNull(p.porcentajeUtilidadDefault),
-          administracion: numOrNull(p.porcentajeAdministracionDefault),
-          administracionPrivado: numOrNull(p.porcentajeAdministracionPrivadoDefault),
-        };
-        const monto = await calcularMontoContrato(p.id, p.esquemaContractual, pct, "operativo");
-        return [p.id, monto] as const;
-      })
-    )
-  );
-
-  // --- Gastos transversal / Contabilidad — SOLO si hay acceso completo o
-  // Privado, respectivamente. Supervisor (nivelAcceso "operativo") nunca
-  // dispara estas queries — ahorro real, no solo un campo oculto en la UI
-  // (Rediseño de Inicio, septiembre 2026).
-  //
-  // "Costo real pagado" (Privado) — audit deliberada para no doblar conteo:
-  // financieroPrivado.ejercido (ya existente) YA suma TODO MovimientoSemanal
-  // liquidado/pagado-puente sin filtrar por origen — cubre CORTE_CONTRATISTA
-  // (mano de obra), REPOSICION_GASTOS (gastos pagados personalmente, ya
-  // reembolsados) y ORDEN_COMPRA (compras a proveedor) en una sola suma, sin
-  // riesgo de contarlos dos veces porque son movimientos, no gastos. Lo único
-  // que ese número NUNCA ha incluido es un GastoObra pagado DIRECTO por la
-  // empresa (sin pagador, sin orden de compra) — ese nunca genera
-  // MovimientoSemanal (confirmado en gastos.ts: asignarGastoAReposicionTx
-  // solo corre si hay pagador), así que es invisible para `ejercido` y debe
-  // sumarse aparte, una sola vez, aquí.
-  const costoDirectoEmpresaPorProyecto = puedeVerPrivado
-    ? new Map(
-        (
-          await db.gastoObra.groupBy({
-            by: ["proyectoId"],
-            where: {
-              proyectoId: { in: proyectoIds },
-              estatus: "APROBADO",
-              pagadorBeneficiarioId: null,
-              ordenCompraId: null,
-            },
-            _sum: { monto: true },
-          })
-        ).map((g) => [g.proyectoId, num(g._sum.monto)] as const)
-      )
-    : new Map<string, number>();
-
-  const [
-    resumenFiscalPeriodo,
-    facturasPendientesLista,
-    facturasConDiferencia,
-    reposicionesPendientesLista,
-    ocurrenciasRecurrentesPendientesLista,
-    gastosProyectoPeriodoAgg,
-    gastosEmpresaPeriodoAgg,
-    porPagarEmpresaAgg,
-  ] = await Promise.all([
-    nivelAcceso === "completo" ? obtenerResumenFiscalPeriodo(usuario, rango.inicio, rango.fin) : Promise.resolve(null),
-    nivelAcceso === "completo" ? obtenerFacturasPendientes(usuario) : Promise.resolve([]),
-    nivelAcceso === "completo" ? obtenerFacturasConDiferencia(usuario) : Promise.resolve([]),
-    nivelAcceso === "completo" ? obtenerReposicionesPendientes(usuario) : Promise.resolve([]),
-    nivelAcceso === "completo" ? obtenerOcurrenciasRecurrentesPendientes(usuario) : Promise.resolve([]),
-    nivelAcceso === "completo"
-      ? db.gastoObra.aggregate({
-          where: { proyectoId: { in: proyectoIds }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
-          _sum: { monto: true },
-        })
-      : Promise.resolve(null),
-    nivelAcceso === "completo"
-      ? db.gastoObra.aggregate({
-          where: { empresaId, proyecto: { tipo: "OFICINA" }, estatus: "APROBADO", fecha: { gte: rango.inicio, lt: rango.fin } },
-          _sum: { monto: true },
-        })
-      : Promise.resolve(null),
-    nivelAcceso === "completo"
-      ? db.movimientoSemanal.aggregate({
-          where: {
-            beneficiarioProyecto: { proyecto: { tipo: "OFICINA", empresaId } },
-            estatusAprobacion: "APROBADO",
-            estatusPago: "PENDIENTE_PAGO",
-          },
-          _sum: { montoFinSemana: true },
-        })
-      : Promise.resolve(null),
-  ]);
 
   // --- Cálculo por proyecto ---------------------------------------------------
 
@@ -741,12 +882,13 @@ export async function obtenerResumenEjecutivo(
       .filter((m) => m.estatusAprobacion === "APROBADO" && m.estatusPago === "PENDIENTE_PAGO")
       .reduce((t, m) => t + num(m.montoFinSemana), 0);
 
-    // Financiero Privado — se calcula UNA sola vez si hay permiso (sin
-    // importar la vista actual), y se reutiliza tanto para "Ejecutado" (si
-    // la vista es Privado) como para la desviación (que siempre usa esta
-    // relación, sin importar la vista — C.1/C.11 del plan).
+    // Financiero Privado — solo en vista Privado (incluirPrivado). Se
+    // reutiliza para "Ejecutado", utilidad y desviación; en General no
+    // existe, así que la desviación privada no influye en salud ni alertas
+    // (separación General/Privado, octubre 2026 — antes se calculaba con el
+    // solo permiso, sin importar la vista).
     let financieroPrivado: { presupuestoCosto: number; ejercido: number; porcentaje: number | null } | null = null;
-    if (puedeVerPrivado) {
+    if (incluirPrivado) {
       const conceptosCosto: ConceptoParaCostoInterno[] = conceptos.map((c) => ({
         id: c.id,
         proyectoId: proyecto.id,
@@ -799,7 +941,7 @@ export async function obtenerResumenEjecutivo(
           ? (ejecutadoGeneral / montoContratoGeneral) * 100
           : null;
 
-    // Desviación Privada — SIEMPRE la misma relación, solo si hay permiso.
+    // Desviación Privada — SIEMPRE la misma relación, solo en vista Privado.
     const desviacionPrivadaPP =
       financieroPrivado?.porcentaje !== null && financieroPrivado?.porcentaje !== undefined && avanceFisico.porcentaje !== null && !avanceFisico.incompleto
         ? financieroPrivado.porcentaje - avanceFisico.porcentaje
@@ -891,54 +1033,73 @@ export async function obtenerResumenEjecutivo(
     .reduce((t, m) => t + num(m.montoFinSemana), 0);
   const porPagarEmpresa = num(porPagarEmpresaAgg?._sum.montoFinSemana ?? null);
 
-  // Por cobrar — MISMA fórmula exacta que Cliente/Cliente Priv.
-  // (calcularFinancieroCapaEstimacion, financiero-cliente.ts), estimación
-  // por estimación, nunca reimplementada aparte. Necesario desde que una
-  // EstimacionCliente con AMBAS capas emitidas deja de registrar cobro real
-  // en Operativo (ver "una sola realidad de dinero", General/Privado,
-  // septiembre 2026) — sumar solo los movimientos propios de Operativo daría
-  // un "por cobrar" fantasma para esos proyectos.
-  const capaParaCobrar = vistaEfectiva === "privado" ? "PRIVADO" : "OPERATIVO";
+  // Cobro real por estimación — movimientos vigentes de AMBAS capas
+  // (incluidos los de Operativo registrados antes de emitir Privado, leídos
+  // tal cual). Misma fórmula que Cliente/Cliente Priv. y las validaciones de
+  // saldo (lib/control-de-obra/cobro-estimacion.ts), nunca reimplementada.
   const capasPorEstimacionClienteId = new Map<string, typeof capasEmitidas>();
   for (const c of capasEmitidas) {
     const arr = capasPorEstimacionClienteId.get(c.estimacionClienteId) ?? [];
     arr.push(c);
     capasPorEstimacionClienteId.set(c.estimacionClienteId, arr);
   }
-  const movimientosPorCapaId = new Map<string, typeof movimientosFinancieros>();
+  const estimacionPorCapaId = new Map(capasEmitidas.map((c) => [c.id, c.estimacionClienteId]));
+  const cobrosPorEstimacion = new Map<string, MovimientoCobro[]>();
   for (const m of movimientosFinancieros) {
-    if (!m.estimacionClienteCapaId) continue;
-    const arr = movimientosPorCapaId.get(m.estimacionClienteCapaId) ?? [];
+    if (m.tipo !== "PAGO_ESTIMACION" && m.tipo !== "APLICACION_ESTIMACION") continue;
+    const estimacionClienteId = m.estimacionClienteCapaId ? estimacionPorCapaId.get(m.estimacionClienteCapaId) : undefined;
+    if (!estimacionClienteId) continue;
+    const arr = cobrosPorEstimacion.get(estimacionClienteId) ?? [];
     arr.push(m);
-    movimientosPorCapaId.set(m.estimacionClienteCapaId, arr);
-  }
-  let porCobrarTotal = 0;
-  for (const c of capasEmitidas) {
-    if (c.capa !== capaParaCobrar) continue;
-    const siblingPrivado =
-      capaParaCobrar === "OPERATIVO"
-        ? (capasPorEstimacionClienteId.get(c.estimacionClienteId) ?? []).find((s) => s.capa === "PRIVADO")
-        : undefined;
-    const { pendiente } = calcularFinancieroCapaEstimacion(
-      capaParaCobrar,
-      num(c.total),
-      movimientosPorCapaId.get(c.id) ?? [],
-      siblingPrivado
-        ? { total: num(siblingPrivado.total), movimientos: movimientosPorCapaId.get(siblingPrivado.id) ?? [] }
-        : null
-    );
-    porCobrarTotal += pendiente;
+    cobrosPorEstimacion.set(estimacionClienteId, arr);
   }
 
-  // Flujo operativo — TODO movimiento real, con o sin factura. Deliberadamente
+  // Por cobrar — General: importe Operativo menos cobro real (con tope).
+  // Privado: total real de cada estimación (Privado emitida si existe; si no,
+  // Operativo — nunca ambas capas sumadas como obligaciones distintas).
+  let porCobrarTotal = 0;
+  for (const [estimacionClienteId, capasEstimacion] of capasPorEstimacionClienteId) {
+    // capasEmitidas solo trae capas EMITIDA.
+    const capaReal = capaRealDeEstimacion(capasEstimacion.map((c) => ({ capa: c.capa, estatus: "EMITIDA" })));
+    const capaBase = capasEstimacion.find((c) => c.capa === (vistaEfectiva === "privado" ? capaReal : "OPERATIVO"));
+    if (!capaBase) continue;
+    porCobrarTotal += calcularCobroEstimacion(num(capaBase.total), cobrosPorEstimacion.get(estimacionClienteId) ?? []).pendiente;
+  }
+
+  // Flujo — TODO movimiento real, con o sin factura. Deliberadamente
   // distinto de `resumenFiscal` (Contabilidad, abajo) — nunca se muestran
   // como si fueran el mismo número (Rediseño de Inicio, C. Fiscal vs
   // Operativo).
-  const entradas = movimientosFinancieros
-    .filter((m) => m.tipo === "PAGO_ESTIMACION" && m.fecha >= rango.inicio && m.fecha < rango.fin)
-    .reduce((t, m) => t + num(m.monto), 0);
+  // - Vista Privado: Flujo real — todo cobro real del periodo.
+  // - Vista General: Flujo General (E1) — cada cobro de una estimación solo
+  //   entra hasta completar su importe Operativo, en orden cronológico
+  //   (pagos y aplicaciones de fondo consumen el tope en conjunto; las
+  //   aplicaciones nunca son entrada). Nunca revela el excedente privado.
+  const enPeriodo = (fecha: Date) => fecha >= rango.inicio && fecha < rango.fin;
+  let entradas: number;
+  if (vistaEfectiva === "privado") {
+    entradas = movimientosFinancieros
+      .filter((m) => m.tipo === "PAGO_ESTIMACION" && enPeriodo(m.fecha))
+      .reduce((t, m) => t + num(m.monto), 0);
+  } else {
+    entradas = 0;
+    for (const [estimacionClienteId, capasEstimacion] of capasPorEstimacionClienteId) {
+      const operativo = capasEstimacion.find((c) => c.capa === "OPERATIVO");
+      // Estimación solo con Privado emitida: no existe en General.
+      if (!operativo) continue;
+      for (const cobro of atribuirCobrosGeneral(num(operativo.total), cobrosPorEstimacion.get(estimacionClienteId) ?? [])) {
+        if (enPeriodo(cobro.fecha)) entradas += cobro.entradaGeneral;
+      }
+    }
+    // Pagos sin capa (registros anteriores a las capas): no hay importe que
+    // topar, mismo criterio que Contabilidad.
+    entradas += movimientosFinancieros
+      .filter((m) => m.tipo === "PAGO_ESTIMACION" && !m.estimacionClienteCapaId && enPeriodo(m.fecha))
+      .reduce((t, m) => t + num(m.monto), 0);
+    entradas = redondear(entradas);
+  }
   const aportaciones = movimientosFinancieros
-    .filter((m) => m.tipo === "APORTACION_FONDO" && m.fecha >= rango.inicio && m.fecha < rango.fin)
+    .filter((m) => m.tipo === "APORTACION_FONDO" && enPeriodo(m.fecha))
     .reduce((t, m) => t + num(m.monto), 0);
   const pagosDeObraDelPeriodo = movimientosSemanales.filter(
     (m) => m.estatusPago === "LIQUIDADO" && m.fechaPago && m.fechaPago >= rango.inicio && m.fechaPago < rango.fin
@@ -948,7 +1109,8 @@ export async function obtenerResumenEjecutivo(
     .filter((m) => m.origen === "REPOSICION_GASTOS")
     .reduce((t, m) => t + num(m.montoFinSemana), 0);
 
-  const flujoDinero = {
+  const flujoDinero: NonNullable<ResumenEjecutivo["flujoDinero"]> = {
+    base: vistaEfectiva === "privado" ? "real" : "general",
     entradas: entradas + aportaciones,
     pagosDeObra,
     gastosReposicionesDentro,
@@ -968,7 +1130,7 @@ export async function obtenerResumenEjecutivo(
           proyectos: filas,
           capasListasParaEmitirCount: capasListasParaEmitir.length,
           porCobrarTotal,
-          puedeVerPrivado,
+          incluirPrivado,
           facturasPendientesCount: facturasPendientesLista.length,
           facturasConDiferencia,
           reposicionesPendientes: reposicionesPendientesLista,
@@ -985,11 +1147,11 @@ export async function obtenerResumenEjecutivo(
         })
       : [];
 
-  const resumenFiscal: ResumenFiscalDashboard | null = resumenFiscalPeriodo;
+  const resumenFiscal: ResumenFiscalDashboard | null = nivelAcceso === "completo" ? resumenFiscalPeriodo : null;
   const gastosProyectoPeriodo = nivelAcceso === "completo" ? num(gastosProyectoPeriodoAgg?._sum.monto ?? null) : null;
   const gastosEmpresaPeriodo = nivelAcceso === "completo" ? num(gastosEmpresaPeriodoAgg?._sum.monto ?? null) : null;
 
-  const utilidadConsolidada: UtilidadConsolidada | null = puedeVerPrivado
+  const utilidadConsolidada: UtilidadConsolidada | null = incluirPrivado
     ? (() => {
         const utilidadPresupuestada = sumaMontoContratoGeneral - sumaPresupuestoCosto;
         const utilidadReal = sumaEjecutadoGeneral - sumaCostoRealPagado;
@@ -1003,9 +1165,6 @@ export async function obtenerResumenEjecutivo(
     : null;
 
   return {
-    saludo: saludo(usuario.nombre),
-    empresaNombre: usuario.empresa.nombre,
-    semanaLabel: formatearRangoSemana(semanaActual),
     nivelAcceso,
     puedeVerPrivado,
     vista: vistaEfectiva,
@@ -1082,7 +1241,7 @@ function construirAlertas(ctx: {
   proyectos: FilaProyectoDashboard[];
   capasListasParaEmitirCount: number;
   porCobrarTotal: number;
-  puedeVerPrivado: boolean;
+  incluirPrivado: boolean;
   facturasPendientesCount: number;
   facturasConDiferencia: { facturaId: string; razonSocial: string; diferencia: number }[];
   reposicionesPendientes: { id: string; beneficiarioNombre: string; saldoPendiente: number; diasAbierta: number }[];
@@ -1153,9 +1312,9 @@ function construirAlertas(ctx: {
   }
 
   // Desviación físico-financiera — SIEMPRE con la relación Privada, y solo
-  // si el usuario tiene el permiso (nunca se calcula ni se llega a este
-  // punto con el dato si no lo tiene, ver obtenerResumenEjecutivo).
-  if (ctx.puedeVerPrivado) {
+  // en vista Privado (en General el dato ni siquiera se calcula, ver
+  // proyectarResumenEjecutivo).
+  if (ctx.incluirPrivado) {
     const conDesviacion = ctx.proyectos.filter((p) => (p.desviacionPrivadaPP ?? 0) > UMBRAL_DESVIACION_PP);
     if (conDesviacion.length > 0) {
       alertas.push({

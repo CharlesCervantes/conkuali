@@ -10,6 +10,11 @@ import { liquidarMovimientoTx } from "../reporte-general/liquidar";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
 import { EMPRESA_PROYECTO_LABEL } from "./proyecto-oficina";
+import {
+  estadoDeReposicion,
+  type EstadoReposicion,
+  type MotivoRevisionReposicion,
+} from "@/lib/control-de-obra/reposicion-estado";
 
 type Cliente = Prisma.TransactionClient;
 
@@ -102,23 +107,46 @@ export async function asignarGastoAReposicionTx(
   });
 
   if (reposicion) {
-    await tx.$queryRaw`SELECT id FROM reposiciones_gastos WHERE id = ${reposicion.id} FOR UPDATE`;
-    reposicion = await tx.reposicionGastos.findUniqueOrThrow({ where: { id: reposicion.id } });
-
-    // Defensivo: liquidarMovimiento ya marca `cerrada` en el momento real de
-    // liquidar, pero nunca se confía ciegamente en la columna — si se
-    // encuentra desincronizada (datos históricos u otra vía), se cierra aquí
-    // mismo antes de continuar.
-    if (!reposicion.cerrada && reposicion.movimientoSemanalId) {
-      const movimiento = await tx.movimientoSemanal.findUnique({
-        where: { id: reposicion.movimientoSemanalId },
-        select: { estatusPago: true },
-      });
-      if (movimiento?.estatusPago === "LIQUIDADO") {
-        await tx.reposicionGastos.update({ where: { id: reposicion.id }, data: { cerrada: true } });
-        reposicion = null;
-      }
+    // Orden de bloqueo único en todo el ciclo de reposiciones (R2, octubre
+    // 2026): primero su MovimientoSemanal, después la reposición — igual que
+    // liquidar y registrar abonos, para que nunca se bloqueen en orden
+    // inverso. El movimiento de una reposición nunca cambia una vez creado.
+    if (reposicion.movimientoSemanalId) {
+      await tx.$queryRaw`SELECT id FROM movimientos_semanales WHERE id = ${reposicion.movimientoSemanalId} FOR UPDATE`;
     }
+    await tx.$queryRaw`SELECT id FROM reposiciones_gastos WHERE id = ${reposicion.id} FOR UPDATE`;
+    const releida = await tx.reposicionGastos.findUniqueOrThrow({
+      where: { id: reposicion.id },
+      include: {
+        gastos: { select: { monto: true } },
+        abonos: { select: { monto: true } },
+        movimientoSemanal: { select: { estatusPago: true, montoEntreSemana: true, montoFinSemana: true } },
+      },
+    });
+
+    // Una reposición inconsistente (p. ej. liquidada sin cerrar, abonos que
+    // exceden el total) nunca se corrige en silencio ni recibe gastos nuevos:
+    // queda tal cual para revisión y la operación completa (incluida la
+    // aprobación del gasto) se revierte. Antes de esta corrección, una
+    // liquidada sin cerrar se marcaba `cerrada` aquí mismo.
+    const { estado } = estadoDeReposicion({
+      total: releida.gastos.reduce((t, g) => t + Number(g.monto), 0),
+      abonado: releida.abonos.reduce((t, a) => t + Number(a.monto), 0),
+      cerrada: releida.cerrada,
+      estatusPago: releida.movimientoSemanal?.estatusPago ?? null,
+      montoMovimiento: releida.movimientoSemanal
+        ? Number(releida.movimientoSemanal.montoEntreSemana) + Number(releida.movimientoSemanal.montoFinSemana)
+        : null,
+    });
+    if (estado === "REQUIERE_REVISION") {
+      throw new ValidacionError(
+        `La reposición ${releida.folio} de este beneficiario requiere revisión (sus abonos, su cierre o su importe no coinciden). No se aprobó el gasto ni se modificó la reposición.`
+      );
+    }
+
+    // Se liquidó mientras se esperaba el bloqueo: el gasto va a una
+    // reposición complementaria nueva, nunca a una ya cerrada.
+    reposicion = releida.cerrada ? null : releida;
   }
 
   if (!reposicion) {
@@ -231,6 +259,12 @@ export type FilaReposicion = {
   abonado: number;
   saldoPendiente: number;
   esParcial: boolean;
+  // R2 (octubre 2026) — ver reposicion-estado.ts. PAGADA incluye las
+  // históricas liquidadas sin abonos (clase A, pendiente 0);
+  // REQUIERE_REVISION señala inconsistencias (clase B) sin corregirlas.
+  estado: EstadoReposicion;
+  requiereRevision: boolean;
+  motivosRevision: MotivoRevisionReposicion[];
 };
 
 export async function obtenerReposiciones(
@@ -247,7 +281,7 @@ export async function obtenerReposiciones(
       beneficiario: { select: { nombre: true } },
       creadoPor: { select: { nombre: true } },
       gastos: { select: { id: true, descripcion: true, fecha: true, monto: true } },
-      movimientoSemanal: { select: { estatusPago: true } },
+      movimientoSemanal: { select: { estatusPago: true, montoEntreSemana: true, montoFinSemana: true } },
       abonos: {
         include: { registradoPor: { select: { nombre: true } } },
         orderBy: { fecha: "desc" },
@@ -259,7 +293,15 @@ export async function obtenerReposiciones(
   return reposiciones.map((r) => {
     const total = r.gastos.reduce((t, g) => t + Number(g.monto), 0);
     const abonado = r.abonos.reduce((t, a) => t + Number(a.monto), 0);
-    const saldoPendiente = total - abonado;
+    const { estado, motivos, saldoPendiente } = estadoDeReposicion({
+      total,
+      abonado,
+      cerrada: r.cerrada,
+      estatusPago: r.movimientoSemanal?.estatusPago ?? null,
+      montoMovimiento: r.movimientoSemanal
+        ? Number(r.movimientoSemanal.montoEntreSemana) + Number(r.movimientoSemanal.montoFinSemana)
+        : null,
+    });
     return {
       id: r.id,
       folio: r.folio,
@@ -287,7 +329,10 @@ export async function obtenerReposiciones(
       })),
       abonado,
       saldoPendiente,
-      esParcial: abonado > 0 && saldoPendiente > 0,
+      esParcial: estado === "ABIERTA" && abonado > 0 && saldoPendiente > 0,
+      estado,
+      requiereRevision: estado === "REQUIERE_REVISION",
+      motivosRevision: motivos,
     };
   });
 }
@@ -320,6 +365,18 @@ export async function registrarAbonoReposicion(
   const datos = DatosAbonoSchema.parse(datosCrudos);
 
   return db.$transaction(async (tx) => {
+    // Orden de bloqueo único en todo el ciclo de reposiciones (R2, octubre
+    // 2026): primero su MovimientoSemanal, después la reposición — el mismo
+    // que liquidar en Reporte General, así un abono y una liquidación
+    // simultáneos siempre se serializan. Se relee todo con el bloqueo tomado.
+    const referencia = await tx.reposicionGastos.findFirst({
+      where: { id: reposicionGastosId, empresaId },
+      select: { movimientoSemanalId: true },
+    });
+    if (!referencia) throw new RegistroNoEncontradoError("La reposición");
+    if (referencia.movimientoSemanalId) {
+      await tx.$queryRaw`SELECT id FROM movimientos_semanales WHERE id = ${referencia.movimientoSemanalId} FOR UPDATE`;
+    }
     await tx.$queryRaw`SELECT id FROM reposiciones_gastos WHERE id = ${reposicionGastosId} FOR UPDATE`;
 
     const reposicion = await tx.reposicionGastos.findFirst({
@@ -327,10 +384,11 @@ export async function registrarAbonoReposicion(
       include: {
         gastos: { select: { monto: true } },
         abonos: { select: { monto: true } },
+        movimientoSemanal: { select: { estatusPago: true } },
       },
     });
     if (!reposicion) throw new RegistroNoEncontradoError("La reposición");
-    if (reposicion.cerrada) {
+    if (reposicion.cerrada || reposicion.movimientoSemanal?.estatusPago === "LIQUIDADO") {
       throw new ValidacionError("Esta reposición ya está liquidada — no admite más abonos.");
     }
 

@@ -32,6 +32,19 @@ import {
   vincularFacturaAIngreso,
 } from "@/lib/server/contabilidad/facturas";
 import { CfdiInvalidoError, CfdiNotaCreditoError } from "@/lib/server/contabilidad/cfdi";
+import { decoracionEgresoDesdeFormulario } from "@/lib/contabilidad/formulario-egreso";
+import { decoracionIngresoDesdeFormulario, ingresoManualDesdeFormulario } from "@/lib/contabilidad/formulario-ingreso";
+import {
+  subirDocumentosEgreso,
+  obtenerDocumentosDelLote,
+} from "@/lib/server/contabilidad/documentos/documento-egreso";
+import {
+  confirmarComoGastoNuevo,
+  confirmarVinculadoAExistente,
+  confirmarComoEgresoManual,
+  crearProveedorDesdeDocumento,
+  descartarDocumentoEgreso,
+} from "@/lib/server/contabilidad/documentos/confirmar-propuesta";
 import { SinPermisoError, ValidacionError, ProyectoNoEncontradoError } from "@/lib/server/control-de-obra/proyectos";
 import { RegistroNoEncontradoError } from "@/lib/server/control-de-obra/estructura-contractual";
 
@@ -120,6 +133,27 @@ export async function cambiarEstatusMedioFinancieroAction(id: string, activo: bo
 // Egresos
 // ---------------------------------------------------------------------------
 
+
+export async function guardarDecoracionEgresoAction(
+  gastoObraId: string,
+  _state: ContabilidadFormState,
+  formData: FormData
+): Promise<ContabilidadFormState> {
+  const usuario = await requireSession();
+  try {
+    // Solo los campos que el usuario cambió (ver formulario-egreso.ts): lo no
+    // modificado se omite y el servidor lo conserva.
+    await guardarDecoracionEgreso(usuario, gastoObraId, decoracionEgresoDesdeFormulario(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath("/contabilidad/egresos");
+  revalidatePath("/contabilidad");
+  return { guardado: true };
+}
+
+// Campos contables de un egreso MANUAL (crear/editar) — todos explícitos;
+// no usa el contrato parcial de la decoración de gastos.
 function datosDecoracionEgresoDesdeFormData(formData: FormData) {
   return {
     medioFinancieroId: opcional(formData.get("medioFinancieroId")),
@@ -129,22 +163,6 @@ function datosDecoracionEgresoDesdeFormData(formData: FormData) {
     fechaPago: opcional(formData.get("fechaPago")),
     referenciaPago: opcional(formData.get("referenciaPago")),
   };
-}
-
-export async function guardarDecoracionEgresoAction(
-  gastoObraId: string,
-  _state: ContabilidadFormState,
-  formData: FormData
-): Promise<ContabilidadFormState> {
-  const usuario = await requireSession();
-  try {
-    await guardarDecoracionEgreso(usuario, gastoObraId, datosDecoracionEgresoDesdeFormData(formData));
-  } catch (error) {
-    return { error: mensajeError(error) };
-  }
-  revalidatePath("/contabilidad/egresos");
-  revalidatePath("/contabilidad");
-  return { guardado: true };
 }
 
 function datosEgresoManualDesdeFormData(formData: FormData) {
@@ -242,8 +260,10 @@ export async function guardarDecoracionIngresoAction(
       comprobanteRef = subido.ref;
       comprobanteNombre = subido.nombre;
     }
+    // Contrato parcial (corrección de pérdida de datos, octubre 2026): solo
+    // viaja lo que el usuario cambió — ver lib/contabilidad/formulario-ingreso.ts.
     await guardarDecoracionIngreso(usuario, movimientoFinancieroClienteId, {
-      ...datosDecoracionIngresoDesdeFormData(formData),
+      ...decoracionIngresoDesdeFormulario(formData),
       comprobanteRef,
       comprobanteNombre,
     });
@@ -292,13 +312,9 @@ export async function editarIngresoManualAction(
 ): Promise<ContabilidadFormState> {
   const usuario = await requireSession();
   try {
-    await editarIngresoManual(usuario, id, {
-      fecha: formData.get("fecha"),
-      concepto: formData.get("concepto"),
-      monto: formData.get("monto"),
-      proyectoId: opcional(formData.get("proyectoId")),
-      ...datosIngresoManualDesdeFormData(formData),
-    });
+    // Contrato parcial: solo viaja lo que el usuario cambió (este formulario
+    // todavía no permite reemplazar el comprobante — se conserva).
+    await editarIngresoManual(usuario, id, ingresoManualDesdeFormulario(formData));
   } catch (error) {
     return { error: mensajeError(error) };
   }
@@ -430,4 +446,99 @@ export async function marcarInclusionMovimientoFondoAction(
   }
   revalidarContabilidad();
   return { guardado: true };
+}
+
+// ---------------------------------------------------------------------------
+// Carga inteligente de documentos (V1 — octubre 2026)
+// ---------------------------------------------------------------------------
+
+export type SubirDocumentosFormState =
+  | { error?: string; loteId?: string; documentos?: { documentoEgresoId: string; duplicado: boolean; nombre: string }[] }
+  | undefined;
+
+export async function subirDocumentosEgresoAction(formData: FormData): Promise<SubirDocumentosFormState> {
+  const usuario = await requireSession();
+  const archivosForm = formData.getAll("documentos").filter((a): a is File => a instanceof File && a.size > 0);
+  const contexto = formData.get("contexto");
+  try {
+    const archivos = await Promise.all(
+      archivosForm.map(async (f) => ({ nombre: f.name, tipoMime: f.type, bytes: Buffer.from(await f.arrayBuffer()) }))
+    );
+    const resultado = await subirDocumentosEgreso(usuario, archivos, typeof contexto === "string" ? contexto : undefined);
+    revalidarContabilidad();
+    return resultado;
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+}
+
+export async function obtenerDocumentosDelLoteAction(loteId: string) {
+  const usuario = await requireSession();
+  return obtenerDocumentosDelLote(usuario, loteId);
+}
+
+export type ConfirmarPropuestaFormState = { error?: string; guardado?: boolean } | undefined;
+
+export async function confirmarComoGastoNuevoAction(
+  documentoEgresoId: string,
+  _state: ConfirmarPropuestaFormState,
+  formData: FormData
+): Promise<ConfirmarPropuestaFormState> {
+  const usuario = await requireSession();
+  try {
+    await confirmarComoGastoNuevo(usuario, documentoEgresoId, Object.fromEntries(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
+}
+
+export async function confirmarVinculadoAExistenteAction(
+  documentoEgresoId: string,
+  _state: ConfirmarPropuestaFormState,
+  formData: FormData
+): Promise<ConfirmarPropuestaFormState> {
+  const usuario = await requireSession();
+  try {
+    await confirmarVinculadoAExistente(usuario, documentoEgresoId, Object.fromEntries(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
+}
+
+export async function confirmarComoEgresoManualDesdeDocumentoAction(
+  documentoEgresoId: string,
+  _state: ConfirmarPropuestaFormState,
+  formData: FormData
+): Promise<ConfirmarPropuestaFormState> {
+  const usuario = await requireSession();
+  try {
+    await confirmarComoEgresoManual(usuario, documentoEgresoId, Object.fromEntries(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidarContabilidad();
+  return { guardado: true };
+}
+
+export async function crearProveedorDesdeDocumentoAction(
+  _state: ConfirmarPropuestaFormState,
+  formData: FormData
+): Promise<ConfirmarPropuestaFormState> {
+  const usuario = await requireSession();
+  try {
+    await crearProveedorDesdeDocumento(usuario, Object.fromEntries(formData));
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  return { guardado: true };
+}
+
+export async function descartarDocumentoEgresoAction(documentoEgresoId: string) {
+  const usuario = await requireSession();
+  await descartarDocumentoEgreso(usuario, documentoEgresoId);
+  revalidarContabilidad();
 }

@@ -6,7 +6,7 @@ import { GRID_PROYECTOS } from "./grid-proyectos";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatMoneyOrDash } from "@/lib/dinero";
 import { calcularEstadoProyecto } from "@/lib/reporte-general/estado";
-import type { ReporteObra } from "@/lib/server/reporte-general/queries";
+import type { ReporteObra, ResumenReposicionFila } from "@/lib/server/reporte-general/queries";
 import type { EstatusPago } from "@/lib/generated/prisma/enums";
 
 function formatFechaCorta(iso: string): string {
@@ -21,13 +21,30 @@ function formatFechaCorta(iso: string): string {
 // Administración) — un movimiento LIQUIDADO muestra su fecha discreta debajo
 // del badge; uno PENDIENTE_PAGO ofrece "Liquidar" solo si el usuario tiene
 // permiso, sin llenar la tabla de botones para el resto de los estados.
+// R2: una reposición con abonos parciales muestra, discreto, lo abonado y el
+// saldo (lo que realmente se liquidará); una con inconsistencias históricas
+// (clase B) muestra "Revisar abonos" en lugar de "Liquidar". El importe de la
+// fila y los totales no cambian.
 function CeldaEstado({
   fila,
   puedeLiquidar,
 }: {
-  fila: { estatusPago: EstatusPago | null; fechaPago: string | null; movimientoId: string | null };
+  fila: {
+    estatusPago: EstatusPago | null;
+    fechaPago: string | null;
+    movimientoId: string | null;
+    reposicion: ResumenReposicionFila | null;
+  };
   puedeLiquidar: boolean;
 }) {
+  const reposicion = fila.reposicion;
+  const requiereRevision = reposicion?.requiereRevision ?? false;
+  const conAbonosParciales =
+    fila.estatusPago === "PENDIENTE_PAGO" &&
+    reposicion !== null &&
+    !requiereRevision &&
+    reposicion.abonado > 0 &&
+    reposicion.saldoPendiente > 0;
   return (
     <div>
       <EstadoPagoBadge estatus={fila.estatusPago} />
@@ -36,8 +53,21 @@ function CeldaEstado({
           {formatFechaCorta(fila.fechaPago)}
         </p>
       )}
-      {fila.estatusPago === "PENDIENTE_PAGO" && puedeLiquidar && fila.movimientoId && (
-        <BotonLiquidar movimientoId={fila.movimientoId} />
+      {conAbonosParciales && (
+        <p className="mt-0.5 text-[11px] text-[var(--muted)]">
+          Abonado {formatMoney(reposicion.abonado)} · Saldo {formatMoney(reposicion.saldoPendiente)}
+        </p>
+      )}
+      {requiereRevision && (
+        <p
+          className="mt-0.5 text-[11px] font-medium text-amber-700"
+          title="Los abonos, el cierre o el importe de esta reposición no coinciden. Revísala en Reposiciones antes de liquidar."
+        >
+          Revisar abonos
+        </p>
+      )}
+      {fila.estatusPago === "PENDIENTE_PAGO" && puedeLiquidar && fila.movimientoId && !requiereRevision && (
+        <BotonLiquidar movimientoId={fila.movimientoId} reposicion={reposicion} />
       )}
     </div>
   );
