@@ -18,6 +18,7 @@ import {
 import type { FilaIngreso } from "@/lib/server/contabilidad/ingresos";
 import type { FilaMedioFinanciero } from "@/lib/server/contabilidad/medios-financieros";
 import type { FilaFactura } from "@/lib/server/contabilidad/facturas";
+import { CAMPOS_DECORACION_INGRESO, CAMPOS_INGRESO_MANUAL, prefijoOriginal } from "@/lib/contabilidad/formulario-ingreso";
 
 const METODO_INGRESO_LABEL: Record<string, string> = {
   TRANSFERENCIA: "Transferencia",
@@ -120,6 +121,29 @@ export function IngresosView({
   );
 }
 
+const CAMPO_CLASE =
+  "w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]";
+
+// Valores actuales del registro, tal como los muestra el formulario — se
+// envían también como `original:<campo>` para que el servidor solo reciba
+// lo que el usuario cambió (contrato parcial, lib/contabilidad/formulario-ingreso.ts).
+function valoresActuales(ingreso: FilaIngreso): Record<string, string> {
+  return {
+    clienteNombre: ingreso.clienteNombre ?? "",
+    metodoIngreso: ingreso.medioIngreso ?? "",
+    cuentaReceptoraId: ingreso.cuentaReceptoraId ?? "",
+    facturaId: ingreso.facturaId ?? "",
+    comentarios: ingreso.comentarios ?? "",
+    fecha: ingreso.fecha.slice(0, 10),
+    concepto: ingreso.concepto,
+    monto: String(ingreso.monto),
+    proyectoId: ingreso.proyectoId ?? "",
+    clasificacionManual: ingreso.clasificacionManual ?? "",
+    fechaCobro: ingreso.fechaCobro ? ingreso.fechaCobro.slice(0, 10) : "",
+    referencia: ingreso.referencia ?? "",
+  };
+}
+
 function ModalIngreso({
   ingreso,
   mediosFinancieros,
@@ -146,6 +170,19 @@ function ModalIngreso({
     if (state?.guardado) onClose();
   }
 
+  // Registro existente: precarga + originales. Registro nuevo: vacío, sin
+  // originales (se envía todo, con las validaciones obligatorias de siempre).
+  const actuales = ingreso ? valoresActuales(ingreso) : null;
+  const camposVisibles = esDecoracionDePago ? CAMPOS_DECORACION_INGRESO : CAMPOS_INGRESO_MANUAL;
+  // Un valor guardado que la lista ya no ofrece (cuenta inactiva, factura o
+  // proyecto que no aparece) se muestra como "(actual)" para que guardar sin
+  // tocarlo nunca lo cambie.
+  const cuentaFueraDeLista =
+    ingreso?.cuentaReceptoraId && !mediosFinancieros.some((m) => m.id === ingreso.cuentaReceptoraId) ? ingreso : null;
+  const facturaFueraDeLista = ingreso?.facturaId && !facturasEmitidas.some((f) => f.id === ingreso.facturaId) ? ingreso : null;
+  const proyectoFueraDeLista =
+    !esDecoracionDePago && ingreso?.proyectoId && !proyectosDisponibles.some((p) => p.id === ingreso.proyectoId) ? ingreso : null;
+
   return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
@@ -165,6 +202,15 @@ function ModalIngreso({
         )}
 
         <form action={formAction} className="mt-4 space-y-3">
+          {actuales && (
+            <>
+              {camposVisibles.map((campo) => (
+                <input key={campo} type="hidden" name={prefijoOriginal(campo)} value={actuales[campo]} />
+              ))}
+              <input type="hidden" name={prefijoOriginal("facturaEsperada")} value={ingreso!.facturaEsperada ? "true" : "false"} />
+            </>
+          )}
+
           {!esDecoracionDePago && (
             <>
               <div className="grid grid-cols-2 gap-3">
@@ -172,8 +218,8 @@ function ModalIngreso({
                   name="fecha"
                   type="date"
                   required
-                  defaultValue={ingreso ? ingreso.fecha.slice(0, 10) : new Date().toISOString().slice(0, 10)}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+                  defaultValue={actuales?.fecha ?? new Date().toISOString().slice(0, 10)}
+                  className={CAMPO_CLASE}
                 />
                 <input
                   name="monto"
@@ -182,23 +228,22 @@ function ModalIngreso({
                   min="0.01"
                   required
                   placeholder="Monto"
-                  defaultValue={ingreso?.monto ?? ""}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+                  defaultValue={actuales?.monto ?? ""}
+                  className={CAMPO_CLASE}
                 />
               </div>
               <input
                 name="concepto"
                 required
                 placeholder="Concepto"
-                defaultValue={ingreso?.concepto ?? ""}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+                defaultValue={actuales?.concepto ?? ""}
+                className={CAMPO_CLASE}
               />
-              <select
-                name="proyectoId"
-                defaultValue=""
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-              >
+              <select name="proyectoId" defaultValue={actuales?.proyectoId ?? ""} className={CAMPO_CLASE}>
                 <option value="">Sin proyecto</option>
+                {proyectoFueraDeLista && (
+                  <option value={proyectoFueraDeLista.proyectoId!}>{proyectoFueraDeLista.proyectoNombre ?? "Proyecto actual"} (actual)</option>
+                )}
                 {proyectosDisponibles.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.nombre}
@@ -206,11 +251,13 @@ function ModalIngreso({
                 ))}
               </select>
 
+              {/* Obligatoria al crear. Al editar se precarga; un ingreso
+                  histórico sin clasificación la conserva vacía si no se elige. */}
               <select
                 name="clasificacionManual"
-                required
-                defaultValue=""
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+                required={!ingreso}
+                defaultValue={actuales?.clasificacionManual ?? ""}
+                className={CAMPO_CLASE}
               >
                 <option value="" disabled>
                   ¿A qué línea del Estado de Resultados pertenece?
@@ -221,12 +268,7 @@ function ModalIngreso({
 
               <div>
                 <label className="text-xs text-[var(--muted)]">Fecha de cobro (vacío = por cobrar)</label>
-                <input
-                  name="fechaCobro"
-                  type="date"
-                  defaultValue={ingreso?.fecha && ingreso.cobroPago === "COBRADO" ? ingreso.fecha.slice(0, 10) : ""}
-                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-                />
+                <input name="fechaCobro" type="date" defaultValue={actuales?.fechaCobro ?? ""} className={`mt-1 ${CAMPO_CLASE}`} />
               </div>
             </>
           )}
@@ -234,16 +276,12 @@ function ModalIngreso({
           <input
             name="clienteNombre"
             placeholder="Cliente (opcional)"
-            defaultValue={ingreso?.clienteNombre ?? ""}
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+            defaultValue={actuales?.clienteNombre ?? ""}
+            className={CAMPO_CLASE}
           />
 
           <div className="grid grid-cols-2 gap-3">
-            <select
-              name="metodoIngreso"
-              defaultValue={ingreso?.medioIngreso ?? ""}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-            >
+            <select name="metodoIngreso" defaultValue={actuales?.metodoIngreso ?? ""} className={CAMPO_CLASE}>
               <option value="">Método (opcional)</option>
               {Object.entries(METODO_INGRESO_LABEL).map(([value, label]) => (
                 <option key={value} value={value}>
@@ -251,12 +289,13 @@ function ModalIngreso({
                 </option>
               ))}
             </select>
-            <select
-              name="cuentaReceptoraId"
-              defaultValue=""
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-            >
+            <select name="cuentaReceptoraId" defaultValue={actuales?.cuentaReceptoraId ?? ""} className={CAMPO_CLASE}>
               <option value="">Cuenta receptora (opcional)</option>
+              {cuentaFueraDeLista && (
+                <option value={cuentaFueraDeLista.cuentaReceptoraId!}>
+                  {cuentaFueraDeLista.cuentaReceptoraNombre ?? "Cuenta actual"} (actual)
+                </option>
+              )}
               {mediosFinancieros.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.nombre}
@@ -265,18 +304,30 @@ function ModalIngreso({
             </select>
           </div>
 
-          <input
-            name="referencia"
-            placeholder="Referencia (opcional)"
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-          />
+          {esDecoracionDePago ? (
+            // D-b: la referencia vive en el cobro (Control de Obra) — aquí
+            // solo se consulta; nunca se edita ni se descarta en silencio.
+            <p className="text-sm text-[var(--muted)]">
+              Referencia del cobro:{" "}
+              <span className="text-[var(--foreground)]">{ingreso!.referencia || "sin referencia"}</span>
+              <span className="block text-xs">Se edita desde el cobro en Control de Obra.</span>
+            </p>
+          ) : (
+            <input
+              name="referencia"
+              placeholder="Referencia (opcional)"
+              defaultValue={actuales?.referencia ?? ""}
+              className={CAMPO_CLASE}
+            />
+          )}
 
-          <select
-            name="facturaId"
-            defaultValue=""
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
-          >
+          <select name="facturaId" defaultValue={actuales?.facturaId ?? ""} className={CAMPO_CLASE}>
             <option value="">Sin factura vinculada</option>
+            {facturaFueraDeLista && (
+              <option value={facturaFueraDeLista.facturaId!}>
+                Factura {facturaFueraDeLista.facturaUuid ? `${facturaFueraDeLista.facturaUuid.slice(0, 8)}…` : ""} (actual)
+              </option>
+            )}
             {facturasEmitidas.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.razonSocialEmisor} — {formatMoney(f.total)} ({f.uuid.slice(0, 8)}…)
@@ -285,23 +336,26 @@ function ModalIngreso({
           </select>
 
           <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
-            <input type="checkbox" name="facturaEsperada" />
+            <input type="checkbox" name="facturaEsperada" defaultChecked={ingreso?.facturaEsperada ?? false} />
             Se espera factura para este ingreso
           </label>
 
-          <Campo label={ingreso ? "Reemplazar comprobante (opcional)" : "Comprobante (opcional)"}>
-            <FileInput
-              name="comprobante"
-              accept="image/*,application/pdf"
-              className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
-            />
-          </Campo>
+          {(esDecoracionDePago || !ingreso) && (
+            <Campo label={ingreso ? "Reemplazar comprobante (opcional)" : "Comprobante (opcional)"}>
+              <FileInput
+                name="comprobante"
+                accept="image/*,application/pdf"
+                className="block w-full text-sm text-[var(--muted)] file:mr-3 file:rounded-lg file:border file:border-[var(--border)] file:bg-[var(--surface)] file:px-3 file:py-1.5 file:text-sm file:font-medium"
+              />
+            </Campo>
+          )}
 
           <textarea
             name="comentarios"
             rows={2}
             placeholder="Comentarios (opcional)"
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3.5 py-2.5 text-sm text-[var(--foreground)]"
+            defaultValue={actuales?.comentarios ?? ""}
+            className={CAMPO_CLASE}
           />
 
           <div className="flex items-center gap-3 pt-1">

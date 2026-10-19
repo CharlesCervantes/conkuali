@@ -4,6 +4,7 @@ import { obtenerEgresos } from "@/lib/server/contabilidad/egresos";
 import { listarMediosFinancieros } from "@/lib/server/contabilidad/medios-financieros";
 import { listarFacturas } from "@/lib/server/contabilidad/facturas";
 import { listarProyectos } from "@/lib/server/control-de-obra/proyectos";
+import { inteligenciaHabilitadaParaEmpresa } from "@/lib/server/inteligencia/capacidades";
 import { parametroAPeriodo } from "@/lib/contabilidad/periodo";
 import { NavContabilidad } from "@/components/contabilidad/nav-contabilidad";
 import { NavegacionMes } from "@/components/contabilidad/navegacion-mes";
@@ -26,11 +27,12 @@ export default async function EgresosContabilidadPage(props: PageProps<"/contabi
   const searchParams = await props.searchParams;
   const periodo = parametroAPeriodo(typeof searchParams.periodo === "string" ? searchParams.periodo : undefined);
 
-  const [egresos, medios, facturas, proyectos] = await Promise.all([
+  const [egresos, medios, facturas, proyectos, capturaInteligenteHabilitada] = await Promise.all([
     obtenerEgresos(usuario, periodo.anio, periodo.mes),
     listarMediosFinancieros(usuario, true),
     listarFacturas(usuario),
     listarProyectos(usuario),
+    inteligenciaHabilitadaParaEmpresa(usuario.empresa.id),
   ]);
 
   return (
@@ -48,6 +50,7 @@ export default async function EgresosContabilidadPage(props: PageProps<"/contabi
         mediosFinancieros={medios}
         facturasRecibidas={facturas.filter((f) => f.direccion === "RECIBIDA")}
         proyectosDisponibles={proyectos.map((p) => ({ id: p.id, nombre: p.nombre }))}
+        capturaInteligenteHabilitada={capturaInteligenteHabilitada}
       />
     </div>
   );

@@ -293,6 +293,27 @@ rango de fechas. Fuentes: `MovimientoFinancieroCliente` (cobros, incluye fondo),
 de Flujo de Efectivo real — deliberadamente separada del Estado de Resultados
 (sección 7).
 
+**Pendiente para C7 — una sola fuente de pagos por reposición (R2, octubre 2026).**
+Desde R2, toda reposición se paga *siempre* con `AbonoReposicion`: los abonos
+parciales desde Reposiciones y, al liquidar en Reporte General, un abono final
+automático por el saldo pendiente (nunca por el total original). El
+`MovimientoSemanal` de origen `REPOSICION_GASTOS` conserva su importe original y
+solo marca el estado LIQUIDADO — es la *misma* obligación, no un segundo pago.
+Por lo tanto, cuando se implemente Tesorería (C7) deberá:
+
+- Tomar el dinero pagado de una reposición **solo** de `Σ AbonoReposicion`, y
+  excluir los `MovimientoSemanal` LIQUIDADO con origen `REPOSICION_GASTOS` que
+  tengan `ReposicionGastos` ligada (si se sumaran ambos, el pago se contaría doble).
+- Para reposiciones históricas liquidadas antes de R2 sin ningún abono (clase A),
+  la única evidencia del pago es el `MovimientoSemanal` LIQUIDADO: no se crean
+  abonos retroactivos, así que C7 debe definir cómo representarlas sin duplicarlas.
+- Las reposiciones marcadas "Requiere revisión" (clase B: abonos que exceden el
+  total, abonos parciales + liquidación completa, cierre sin liquidación, importe
+  del movimiento distinto al total) se muestran tal cual y no se corrigen
+  automáticamente; C7 debe decidir su tratamiento con Administración.
+
+Clasificación implementada en `lib/control-de-obra/reposicion-estado.ts`.
+
 ---
 
 ## 11. Facturas / CFDI

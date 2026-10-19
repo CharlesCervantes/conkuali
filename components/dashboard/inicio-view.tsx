@@ -657,6 +657,10 @@ function BarraComparativa({ valor, color }: { valor: number | null; color: strin
 // C. Fiscal vs Operativo — nunca el mismo número con otro nombre).
 // ---------------------------------------------------------------------------
 
+// Flujo General (vista General) vs. Flujo real (vista Privado) — el servidor
+// decide la base (ver proyectarResumenEjecutivo); aquí solo se rotula.
+const TITULO_FLUJO = { general: "Flujo General", real: "Flujo real" } as const;
+
 function FlujoOperativo({
   flujo,
   periodo,
@@ -675,8 +679,13 @@ function FlujoOperativo({
 
   return (
     <Card className={cn("enter flex flex-col overflow-hidden p-4", ALTURA_FILA_INFERIOR)}>
-      <p className="mb-1.5 shrink-0 truncate text-sm font-semibold text-[var(--foreground)]">
-        Flujo operativo de {PERIODO_LABEL[periodo]}
+      <p className="shrink-0 truncate text-sm font-semibold text-[var(--foreground)]">
+        {TITULO_FLUJO[flujo.base]} de {PERIODO_LABEL[periodo]}
+      </p>
+      <p className="mb-1.5 shrink-0 truncate text-[11px] text-[var(--muted)]">
+        {flujo.base === "general"
+          ? "A valores General; no necesariamente efectivo bancario."
+          : "Todo cobro y pago real del periodo."}
       </p>
       {vacio ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-center">

@@ -5,15 +5,24 @@ import {
   listarPlanesCatalogo,
   EmpresaNoEncontradaError,
 } from "@/lib/server/master/empresas";
+import {
+  obtenerConfiguracionInteligenciaEmpresa,
+  obtenerDashboardInteligenciaEmpresa,
+  resolverRangoInteligencia,
+  type TipoRangoInteligencia,
+} from "@/lib/server/master/inteligencia";
 import { EmpresaDetalleView } from "@/components/master/empresa-detalle-view";
 
 export default async function MasterEmpresaDetallePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ periodo?: string; desde?: string; hasta?: string }>;
 }) {
   const usuario = await requireSession();
   const { id } = await params;
+  const sp = await searchParams;
 
   let empresa;
   try {
@@ -22,7 +31,21 @@ export default async function MasterEmpresaDetallePage({
     if (error instanceof EmpresaNoEncontradaError) notFound();
     throw error;
   }
-  const planes = await listarPlanesCatalogo(usuario);
 
-  return <EmpresaDetalleView empresa={empresa} planes={planes} />;
+  const tipoRango = (sp.periodo as TipoRangoInteligencia | undefined) ?? "ESTE_MES";
+  const rango = resolverRangoInteligencia(tipoRango, { desde: sp.desde, hasta: sp.hasta });
+
+  const [planes, configuracionInteligencia, dashboardInteligencia] = await Promise.all([
+    listarPlanesCatalogo(usuario),
+    obtenerConfiguracionInteligenciaEmpresa(usuario, id),
+    obtenerDashboardInteligenciaEmpresa(usuario, id, rango),
+  ]);
+
+  return (
+    <EmpresaDetalleView
+      empresa={empresa}
+      planes={planes}
+      inteligencia={{ configuracion: configuracionInteligencia, dashboard: dashboardInteligencia, rango, tipoRango }}
+    />
+  );
 }

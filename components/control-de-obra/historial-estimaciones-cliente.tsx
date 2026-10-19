@@ -124,6 +124,17 @@ export function HistorialEstimacionesCliente({
                         >
                           {ESTADO_LABEL[f.financiero.estado]}
                         </span>
+                        {/* Sobrecobro histórico — el servidor solo lo informa en la capa
+                            real de la estimación (nunca revela el excedente privado en
+                            Operativo). No se corrige automáticamente; no admite cobros nuevos. */}
+                        {f.financiero.sobrecobro > 0 && (
+                          <p
+                            className="mt-1 text-xs font-medium text-amber-700"
+                            title="Hay cobros registrados por encima del importe de esta estimación. Revisa sus pagos; no se pueden registrar cobros nuevos mientras no exista saldo."
+                          >
+                            Cobrado de más: {formatMoney(f.financiero.sobrecobro)}
+                          </p>
+                        )}
                       </Td>
                     </>
                   )}

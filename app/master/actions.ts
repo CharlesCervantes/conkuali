@@ -20,6 +20,12 @@ import {
   UsuarioNoEncontradoError,
   ValidacionMasterError,
 } from "@/lib/server/master/empresas";
+import {
+  cambiarEstatusInteligenciaEmpresa,
+  actualizarCapacidadInteligenciaEmpresa,
+  actualizarLimiteInteligenciaEmpresa,
+} from "@/lib/server/master/inteligencia";
+import type { CapacidadInteligencia } from "@/lib/generated/prisma/client";
 
 export type MasterFormState =
   | { error?: string; guardado?: boolean; passwordTemporal?: string; usuarioNombre?: string }
@@ -210,6 +216,45 @@ export async function cambiarEstatusUsuarioEmpresaAction(
   const usuario = await requireSession();
   await cambiarEstatusUsuarioEmpresa(usuario, empresaId, usuarioObjetivoId, activo);
   revalidatePath(`/master/empresas/${empresaId}`);
+}
+
+// ---------------------------------------------------------------------------
+// ARQENTO IA (Master → Empresa → ARQENTO IA, V1.3 — octubre 2026)
+// ---------------------------------------------------------------------------
+
+export async function cambiarEstatusInteligenciaEmpresaAction(empresaId: string, habilitado: boolean) {
+  const usuario = await requireSession();
+  await cambiarEstatusInteligenciaEmpresa(usuario, empresaId, habilitado);
+  revalidatePath(`/master/empresas/${empresaId}`);
+}
+
+export async function actualizarCapacidadInteligenciaEmpresaAction(
+  empresaId: string,
+  capacidad: CapacidadInteligencia,
+  habilitado: boolean
+) {
+  const usuario = await requireSession();
+  await actualizarCapacidadInteligenciaEmpresa(usuario, empresaId, capacidad, habilitado);
+  revalidatePath(`/master/empresas/${empresaId}`);
+}
+
+export async function actualizarLimiteInteligenciaEmpresaAction(
+  empresaId: string,
+  _state: MasterFormState,
+  formData: FormData
+): Promise<MasterFormState> {
+  const usuario = await requireSession();
+  try {
+    await actualizarLimiteInteligenciaEmpresa(usuario, empresaId, {
+      limiteOperacionesMensual: formData.get("limiteOperacionesMensual"),
+      porcentajeAlerta: formData.get("porcentajeAlerta"),
+      comportamientoLimite: formData.get("comportamientoLimite"),
+    });
+  } catch (error) {
+    return { error: mensajeError(error) };
+  }
+  revalidatePath(`/master/empresas/${empresaId}`);
+  return { guardado: true };
 }
 
 export type RegenerarPasswordState = { error?: string; passwordTemporal?: string } | undefined;

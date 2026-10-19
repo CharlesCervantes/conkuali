@@ -18,7 +18,7 @@ export default async function CuentasContabilidadPage() {
     return <Card className="p-6 text-sm text-[var(--muted)]">No tienes permiso para ver Contabilidad.</Card>;
   }
 
-  const medios = await obtenerSaldosMediosFinancieros(usuario);
+  const { medios, saldosRestringidos } = await obtenerSaldosMediosFinancieros(usuario);
 
   return (
     <div className="space-y-6">
@@ -29,7 +29,7 @@ export default async function CuentasContabilidadPage() {
 
       <NavContabilidad />
 
-      <MediosFinancierosView medios={medios} />
+      <MediosFinancierosView medios={medios} saldosRestringidos={saldosRestringidos} />
     </div>
   );
 }

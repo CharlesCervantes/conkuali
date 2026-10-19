@@ -7,6 +7,19 @@ import type {
   EstatusPago,
   OrigenMovimientoSemanal,
 } from "@/lib/generated/prisma/enums";
+import { estadoDeReposicion, type EstadoReposicion } from "@/lib/control-de-obra/reposicion-estado";
+
+// R2 (octubre 2026) — estado de pago de la reposición que paga un movimiento
+// de origen REPOSICION_GASTOS. Solo informativo: los montos y totales de
+// Reporte General siguen leyendo el importe original del movimiento (nunca
+// se suman abonos al movimiento). Ver reposicion-estado.ts.
+export type ResumenReposicionFila = {
+  total: number;
+  abonado: number;
+  saldoPendiente: number;
+  estado: EstadoReposicion;
+  requiereRevision: boolean;
+};
 
 // Un beneficiario puede tener más de un MovimientoSemanal la misma semana
 // desde que existen Gastos de Obra (p. ej. un contratista con su corte Y una
@@ -31,6 +44,7 @@ export type FilaContratista = {
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
   fechaPago: string | null;
+  reposicion: ResumenReposicionFila | null;
 };
 
 export type FilaProveedor = {
@@ -44,6 +58,7 @@ export type FilaProveedor = {
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
   fechaPago: string | null;
+  reposicion: ResumenReposicionFila | null;
 };
 
 export type FilaAdministracion = {
@@ -57,6 +72,7 @@ export type FilaAdministracion = {
   estatusAprobacion: EstatusAprobacion | null;
   estatusPago: EstatusPago | null;
   fechaPago: string | null;
+  reposicion: ResumenReposicionFila | null;
 };
 
 export type ReporteObra = {
@@ -91,7 +107,18 @@ export async function obtenerReporteSemana(
           orderBy: { beneficiario: { nombre: "asc" } },
           include: {
             beneficiario: { include: { proveedor: true } },
-            movimientos: { where: { semanaId } },
+            movimientos: {
+              where: { semanaId },
+              include: {
+                reposicionGastos: {
+                  select: {
+                    cerrada: true,
+                    gastos: { select: { monto: true } },
+                    abonos: { select: { monto: true } },
+                  },
+                },
+              },
+            },
             aditivas: { where: { estatus: "AUTORIZADA" } },
           },
         },
@@ -161,6 +188,7 @@ export async function obtenerReporteSemana(
         const movimientoId = movimiento?.id ?? null;
         const origen = movimiento?.origen ?? null;
         const fechaPago = movimiento?.fechaPago ? movimiento.fechaPago.toISOString() : null;
+        const reposicion = resumirReposicion(movimiento, montoEntreSemana + montoFinSemana);
 
         if (bp.beneficiario.tipo === "CONTRATISTA") {
           // Fuente de verdad: si el contratista ya tiene ContratoContratista
@@ -199,6 +227,7 @@ export async function obtenerReporteSemana(
             estatusAprobacion,
             estatusPago,
             fechaPago,
+            reposicion,
           });
         } else if (bp.beneficiario.tipo === "PROVEEDOR") {
           proveedores.push({
@@ -212,6 +241,7 @@ export async function obtenerReporteSemana(
             estatusAprobacion,
             estatusPago,
             fechaPago,
+            reposicion,
           });
         } else {
           administracion.push({
@@ -225,6 +255,7 @@ export async function obtenerReporteSemana(
             estatusAprobacion,
             estatusPago,
             fechaPago,
+            reposicion,
           });
         }
       }
@@ -259,6 +290,32 @@ export async function obtenerReporteSemana(
       pendienteSemana,
     };
   });
+}
+
+function resumirReposicion(
+  movimiento: {
+    origen: OrigenMovimientoSemanal;
+    estatusPago: EstatusPago;
+    reposicionGastos: {
+      cerrada: boolean;
+      gastos: { monto: unknown }[];
+      abonos: { monto: unknown }[];
+    } | null;
+  } | null,
+  montoMovimiento: number
+): ResumenReposicionFila | null {
+  if (!movimiento || movimiento.origen !== "REPOSICION_GASTOS" || !movimiento.reposicionGastos) return null;
+  const r = movimiento.reposicionGastos;
+  const total = r.gastos.reduce((t: number, g) => t + Number(g.monto), 0);
+  const abonado = r.abonos.reduce((t: number, a) => t + Number(a.monto), 0);
+  const { estado, saldoPendiente } = estadoDeReposicion({
+    total,
+    abonado,
+    cerrada: r.cerrada,
+    estatusPago: movimiento.estatusPago,
+    montoMovimiento,
+  });
+  return { total, abonado, saldoPendiente, estado, requiereRevision: estado === "REQUIERE_REVISION" };
 }
 
 // Solo los movimientos ya Aprobados cuentan en los totales oficiales

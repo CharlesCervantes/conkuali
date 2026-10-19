@@ -122,8 +122,61 @@ model Empresa {
   egresos                Egreso[]
   ingresos               Ingreso[]
   facturas               Factura[]
+  trabajosProcesamiento  TrabajoProcesamientoDocumento[]
+  consumoInteligencia    RegistroConsumoInteligencia[]
+  documentosEgreso       DocumentoEgreso[]
+  capacidadesInteligencia EmpresaCapacidadInteligencia[]
+
+  // Administración de ARQENTO IA por Empresa (Master → Empresa → ARQENTO IA,
+  // octubre 2026) — switch maestro, independiente de cada capacidad
+  // individual (EmpresaCapacidadInteligencia). Seguro por defecto: una
+  // Empresa nueva nunca la recibe automáticamente, igual criterio que
+  // privadoHabilitado.
+  inteligenciaHabilitada Boolean @default(false)
+
+  // Límite OPERATIVO/DE SEGURIDAD (número de operaciones de IA por mes),
+  // NUNCA la unidad comercial de ARQENTO IA — una operación de texto, una
+  // de visión con varias páginas, y después una de Chat, tienen costos y
+  // "peso" muy distintos entre sí. Este contador solo protege contra
+  // consumo descontrolado; cuando exista el sistema comercial
+  // (Plan → capacidades → créditos/unidades → overrides Empresa), ese
+  // sistema será un concepto SEPARADO, nunca una reinterpretación de este
+  // campo ni de costoTotal de RegistroConsumoInteligencia (decisión de
+  // sesión, octubre 2026). null = sin límite.
+  limiteOperacionesMensualInteligencia Int?
+  // Umbral informativo (ej. 80) para resaltar en el dashboard de Master que
+  // el consumo del mes se acerca al límite — nunca bloquea nada por sí solo.
+  porcentajeAlertaInteligencia         Int?
+  comportamientoLimiteInteligencia     ComportamientoLimiteInteligencia @default(SOLO_ALERTAR)
 
   @@map("empresas")
+}
+
+enum ComportamientoLimiteInteligencia {
+  SOLO_ALERTAR
+  BLOQUEAR
+}
+
+// Capacidades de ARQENTO IA — catálogo extensible por enum (igual patrón que
+// TipoConsumoInteligencia/TipoDocumentoEgreso): agregar OCR/Chat/embeddings
+// después es solo agregar un valor aquí, sin rediseñar nada.
+enum CapacidadInteligencia {
+  ANALISIS_DOCUMENTAL_TEXTO
+  ANALISIS_VISUAL
+}
+
+// Override de Empresa — mismo patrón que EmpresaModulo (fila ausente =
+// deshabilitada; cuando exista PlanCapacidadInteligencia más adelante, esta
+// tabla se reinterpreta como override del default del Plan, sin ninguna
+// migración de datos).
+model EmpresaCapacidadInteligencia {
+  empresa    Empresa               @relation(fields: [empresaId], references: [id], onDelete: Cascade)
+  empresaId  String
+  capacidad  CapacidadInteligencia
+  habilitado Boolean
+
+  @@id([empresaId, capacidad])
+  @@map("empresa_capacidades_inteligencia")
 }
 
 // Dato secundario/opcional: solo empresas con dominio de correo propio lo usan,
@@ -249,6 +302,10 @@ model Usuario {
   egresosRegistrados  Egreso[]  @relation("EgresoRegistrado")
   ingresosRegistrados Ingreso[] @relation("IngresoRegistrado")
   facturasSubidas     Factura[] @relation("FacturaSubida")
+
+  trabajosProcesamientoCreados TrabajoProcesamientoDocumento[]
+  documentosEgresoSubidos      DocumentoEgreso[]               @relation("DocumentoEgresoSubido")
+  documentosEgresoConfirmados  DocumentoEgreso[]               @relation("DocumentoEgresoConfirmado")
 
   // Vínculo opcional con la identidad de pago (Beneficiario) de esta misma
   // persona — ver Beneficiario.usuarioId para la relación completa. Un
@@ -2341,6 +2398,12 @@ model Egreso {
   registradoPor   Usuario @relation("EgresoRegistrado", fields: [registradoPorId], references: [id])
   registradoPorId String
 
+  // Documentos originales (cotización/comprobante de pago) de los que nació
+  // o que se vincularon a este Egreso — Carga inteligente de documentos, V1
+  // (octubre 2026). Puede haber más de uno (ej. cotización + SPEI del mismo
+  // pago).
+  documentosEgreso DocumentoEgreso[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2422,4 +2485,257 @@ model Ingreso {
   @@index([facturaId])
   @@index([cuentaReceptoraId, fechaCobro])
   @@map("ingresos")
+}
+
+// ---------------------------------------------------------------------------
+// Carga inteligente de documentos — V1 (octubre 2026). Dos capas:
+//
+// 1) Infraestructura GENÉRICA de procesamiento (TrabajoProcesamientoDocumento,
+//    RegistroConsumoInteligencia) — nunca referencia Egreso/GastoObra/
+//    Proveedor ni ningún otro modelo de Contabilidad. Reutilizable después
+//    por Compras/Facturas/Contratos sin tocar este bloque.
+// 2) Dominio de Contabilidad (DocumentoEgreso) — el único modelo que conoce
+//    Egreso. Los snapshots Json (resultadoDeterministico/resultadoIA/
+//    propuestaReconciliada/valoresFinalesUsuario) son EVIDENCIA/AUDITORÍA,
+//    nunca la fuente operativa: después de confirmarse, todo cálculo de
+//    Contabilidad sigue leyendo Egreso/GastoObra/Proveedor directamente,
+//    igual que siempre — nada lee estos Json para operar.
+// ---------------------------------------------------------------------------
+
+enum EstatusTrabajoProcesamiento {
+  PENDIENTE
+  PROCESANDO
+  COMPLETADO
+  ERROR
+}
+
+// Qué tipo de capacidad de inteligencia se registró — hoy solo
+// EXTRACCION_LLM se usa; el resto queda listo para OCR/chat/embeddings
+// futuros sin requerir otra migración (decisión de sesión, octubre 2026).
+enum TipoConsumoInteligencia {
+  EXTRACCION_LLM
+  EXTRACCION_LLM_VISUAL // misma extracción de hechos, pero sobre imagen(es) en vez de texto — ver estrategiaExtraccion
+  OCR
+  CHAT
+  EMBEDDING
+  OTRO
+}
+
+// Cola de trabajos GENÉRICA — "referenciaModulo" es un id opaco (ej.
+// DocumentoEgreso.id) que el módulo dueño interpreta por su cuenta; esta
+// tabla nunca tiene una relación real hacia ningún modelo de dominio, así
+// permanece reutilizable por cualquier módulo futuro sin modificarse.
+model TrabajoProcesamientoDocumento {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  modulo           String // "contabilidad"
+  operacion        String // "extraccion_documento_egreso"
+  referenciaModulo String // DocumentoEgreso.id — opaco, sin FK real
+
+  archivoRef String // reutiliza lib/server/archivos.ts, sin cambios
+  tipoMime   String
+
+  estatus EstatusTrabajoProcesamiento @default(PENDIENTE)
+
+  // Idempotencia y recuperación (decisión de sesión, octubre 2026):
+  // - procesandoDesde: cuándo un worker tomó el lock (estatus→PROCESANDO).
+  //   Un job cuyo procesandoDesde es más viejo que el timeout de abandono
+  //   (ver lib/server/inteligencia/worker.ts) se considera abandonado
+  //   (el proceso que lo tomó murió/expiró) y vuelve a quedar disponible —
+  //   así ningún job puede quedarse bloqueado para siempre.
+  // - intentos/maxIntentos + ultimoIntentoEn: backoff creciente entre
+  //   reintentos; al llegar a maxIntentos, el estatus ERROR se vuelve
+  //   terminal (ya no se reintenta solo, pero el documento sigue existiendo
+  //   para completarse a mano — nunca bloquea al usuario).
+  procesandoDesde DateTime?
+  intentos        Int       @default(0)
+  maxIntentos     Int       @default(3)
+  ultimoIntentoEn DateTime?
+
+  // Resultados parciales de cada subetapa — permiten que un retry NUNCA
+  // vuelva a pagar una llamada a IA que ya había funcionado, aunque un paso
+  // posterior (persistir, reconciliar) haya fallado después.
+  resultadoDeterministicoListo Boolean @default(false)
+  resultadoIAListo             Boolean @default(false)
+
+  // Trazabilidad de versión — si el prompt/schema/modelo cambia después,
+  // cada trabajo histórico conserva qué versión realmente lo procesó.
+  extractorVersion String? // "pdf-nativo-v1"
+  modeloIA         String? // "gpt-5-mini"
+  promptVersion    String? // "hechos-egreso-v1"
+
+  error String?
+
+  creadoPor   Usuario @relation(fields: [creadoPorId], references: [id])
+  creadoPorId String
+
+  createdAt   DateTime  @default(now())
+  terminadoEn DateTime?
+
+  consumos         RegistroConsumoInteligencia[]
+  documentoEgresos DocumentoEgreso[]
+
+  @@index([estatus, procesandoDesde])
+  @@index([estatus, ultimoIntentoEn])
+  @@index([empresaId, modulo, operacion])
+  @@index([referenciaModulo])
+  @@map("trabajos_procesamiento_documento")
+}
+
+// Registro de consumo GENÉRICO — una fila por llamada real a un proveedor de
+// inteligencia (un trabajo puede generar 0, 1 o varias filas). El costo
+// histórico nunca se recalcula: se congela la tarifa vigente al momento de
+// la llamada, igual criterio que EstimacionClienteCapa.total al emitir —
+// decisión de sesión, octubre 2026.
+model RegistroConsumoInteligencia {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  modulo    String // "contabilidad"
+  operacion String // "extraccion_documento_egreso"
+
+  trabajo   TrabajoProcesamientoDocumento? @relation(fields: [trabajoId], references: [id])
+  trabajoId String?
+
+  tipoConsumo TipoConsumoInteligencia
+  proveedor   String // "openai"
+  modelo      String // "gpt-5-mini"
+
+  tokensEntrada Int?
+  tokensSalida  Int?
+  unidades      Int? // genérico — páginas/requests, según lo que el proveedor facture
+
+  // Tarifa realmente aplicada en este momento (por millón de tokens) y el
+  // costo ya calculado con ella — ambos se guardan juntos para que un
+  // cambio de precio futuro nunca altere este registro histórico.
+  tarifaEntradaPorMillion Decimal? @db.Decimal(10, 4)
+  tarifaSalidaPorMillion  Decimal? @db.Decimal(10, 4)
+  costoTotal              Decimal  @default(0) @db.Decimal(12, 6)
+
+  duracionMs Int?
+  estatus    String // "EXITO" | "ERROR"
+
+  fecha DateTime @default(now())
+
+  @@index([empresaId, fecha])
+  @@index([empresaId, modulo])
+  @@index([empresaId, tipoConsumo, fecha])
+  @@index([trabajoId])
+  @@map("registro_consumo_inteligencia")
+}
+
+enum TipoDocumentoEgreso {
+  COTIZACION
+  COMPROBANTE_PAGO
+  FACTURA
+  TICKET
+  RECIBO
+  OTRO
+}
+
+// Nunca se borra — solo cambia de estatus. PENDIENTE = subido, sin
+// propuesta automática todavía (o el procesamiento automático falló; el
+// usuario puede seguir completándolo a mano en cualquier momento).
+enum EstatusDocumentoEgreso {
+  PENDIENTE
+  PROCESADO
+  // LEGADO — ya no lo asigna el flujo automático (octubre 2026): las causas
+  // que antes caían aquí (sin texto nativo y sin estrategia disponible) se
+  // modelan ahora con el motivo real (CAPACIDAD_NO_HABILITADA/
+  // LIMITE_ALCANZADO), nunca mezcladas en este estatus genérico. Se
+  // conserva en el enum solo por compatibilidad con filas históricas.
+  SIN_TEXTO
+  // La capacidad de IA necesaria (texto o visión) no está habilitada para
+  // esta Empresa — ya sea por el switch maestro, la capacidad específica, o
+  // el kill-switch global de visión. Terminal, nunca llama IA.
+  CAPACIDAD_NO_HABILITADA
+  // Se alcanzó el límite mensual de operaciones de IA configurado para esta
+  // Empresa (comportamiento BLOQUEAR). Terminal, nunca llama IA.
+  LIMITE_ALCANZADO
+  VINCULADO
+  CONVERTIDO
+  DESCARTADO
+}
+
+// Dominio de Contabilidad — el único modelo de este bloque que conoce
+// Egreso. Relación canónica única vía egresoId (nunca gastoObraId directo:
+// Egreso ya es la capa de decoración canónica de cualquier operación de
+// gasto — ver docs/negocio/05-modulo-contabilidad.md).
+model DocumentoEgreso {
+  id        String  @id @default(cuid())
+  empresa   Empresa @relation(fields: [empresaId], references: [id])
+  empresaId String
+
+  archivoRef    String
+  archivoNombre String
+  tipoMime      String
+
+  // SHA-256 del archivo original, calculado al subir — permite detectar
+  // duplicados DENTRO de la misma Empresa y evitar reprocesar/pagar IA de
+  // nuevo por el mismo archivo. Nunca se compara entre empresas distintas:
+  // el índice está scoped por empresaId a propósito, y ninguna función de
+  // este módulo consulta hashArchivo sin empresaId como filtro obligatorio
+  // (decisión de sesión, octubre 2026 — nunca debe revelar información
+  // entre tenants).
+  hashArchivo String
+
+  tipoDocumento TipoDocumentoEgreso @default(OTRO)
+
+  // Agrupa los documentos subidos juntos en una misma sesión ("cotización +
+  // SPEI a la vez") antes de que exista cualquier operación destino.
+  loteId String
+
+  // Referencia opaca al trabajo que lo procesó — dirección permitida
+  // (Contabilidad SÍ puede conocer la infraestructura genérica; la
+  // infraestructura genérica nunca conoce Contabilidad).
+  trabajoProcesamiento   TrabajoProcesamientoDocumento? @relation(fields: [trabajoProcesamientoId], references: [id])
+  trabajoProcesamientoId String?
+
+  // Snapshots de AUDITORÍA — nunca la fuente operativa. Cada uno es
+  // evidencia de qué produjo esa etapa específica, en ese momento; después
+  // de confirmar, todo cálculo de Contabilidad sigue leyendo Egreso/
+  // GastoObra/Proveedor directamente, nunca estos campos.
+  resultadoDeterministico Json?
+  resultadoIA             Json?
+  propuestaReconciliada   Json? // estados por campo: CONFIRMADO/PROPUESTO/CONFLICTO/NO_DETECTADO
+  valoresFinalesUsuario   Json? // lo que el usuario realmente confirmó/editó
+
+  estatus EstatusDocumentoEgreso @default(PENDIENTE)
+
+  // Texto libre opcional capturado al subir ("Contexto para ARQENTO IA") —
+  // viaja como fuente DISTINTA de la evidencia documental en la misma
+  // llamada a IA, nunca sobrescribe hechos del documento. Es el contexto
+  // ORIGINAL: nunca se sobreescribe. Si el mismo archivo (mismo hash) se
+  // vuelve a subir después con un contexto distinto, ese texto nuevo se
+  // agrega a contextosAdicionales en vez de perderse o pisar el original
+  // (decisión de sesión, octubre 2026).
+  contextoUsuario      String?
+  contextosAdicionales Json? // [{ texto, fecha, usuarioId }, ...]
+
+  // Qué estrategia de extracción se usó — decidida una vez en el paso
+  // determinístico (según tieneTextoNativo/tipoMime) y leída después por el
+  // paso de IA y por la reconciliación, para no tener que re-derivarla en
+  // cada retry. null = todavía no se decidió (documento recién subido).
+  estrategiaExtraccion String? // "TEXTO_NATIVO" | "VISION"
+
+  egreso   Egreso? @relation(fields: [egresoId], references: [id])
+  egresoId String?
+
+  subidoPor   Usuario  @relation("DocumentoEgresoSubido", fields: [subidoPorId], references: [id])
+  subidoPorId String
+  createdAt   DateTime @default(now())
+
+  confirmadoPor   Usuario?  @relation("DocumentoEgresoConfirmado", fields: [confirmadoPorId], references: [id])
+  confirmadoPorId String?
+  confirmadoEn    DateTime?
+
+  @@index([empresaId, estatus])
+  @@index([empresaId, hashArchivo])
+  @@index([loteId])
+  @@index([egresoId])
+  @@index([trabajoProcesamientoId])
+  @@map("documentos_egreso")
 }

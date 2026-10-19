@@ -19,6 +19,12 @@ import {
   calcularImportesOperativoConcepto,
   type PorcentajesDefaultProyecto,
 } from "@/lib/control-de-obra/contrato-general";
+import {
+  capaRealDeEstimacion,
+  saldoDisponible,
+  situacionCobroCapa,
+  type EstadoCobro,
+} from "@/lib/control-de-obra/cobro-estimacion";
 import { SinPermisoError, ValidacionError, obtenerProyecto } from "./proyectos";
 import { RegistroNoEncontradoError } from "./estructura-contractual";
 
@@ -41,14 +47,6 @@ export type CapaValorizacion = "operativo" | "privado";
 
 function aCapaEstimacion(capa: CapaValorizacion): CapaEstimacion {
   return capa === "privado" ? "PRIVADO" : "OPERATIVO";
-}
-
-// Redondeo a centavos — solo para el saldo PROYECTADO de Operativo (ver
-// obtenerCapaCobroReal), que se deriva multiplicando por un factor
-// proporcional y puede dejar residuos de punto flotante que no deben decidir
-// si una estimación quedó "Cubierta" o "Parcial".
-function redondear(n: number): number {
-  return Math.round(n * 100) / 100;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,42 +72,37 @@ async function obtenerCapaCobroReal(cliente: Cliente, estimacionClienteId: strin
   return privado ? "PRIVADO" : "OPERATIVO";
 }
 
-// Cobro real (aplicadoFondo/pagoDirecto/pendiente/estado) de UNA estimación
-// en UNA capa — único lugar donde vive esta fórmula, reutilizado tanto por
-// obtenerHistorialEstimacionesCliente (fila por estimación) como por
-// obtenerControlContractual (suma de todas), para que ambas pantallas nunca
-// puedan mostrar números distintos del mismo hecho.
-// Exportada para el Dashboard ejecutivo (Inicio) — mismo cálculo exacto de
-// "cobro real" reutilizado ahí para el consolidado de "Por cobrar", nunca
-// reimplementado (una sola realidad de dinero, General/Privado, septiembre
-// 2026).
-export function calcularFinancieroCapaEstimacion(
-  capa: CapaEstimacion,
-  importe: number,
-  movimientosPropios: { tipo: string; monto: Prisma.Decimal }[],
-  siblingPrivado: { total: number; movimientos: { tipo: string; monto: Prisma.Decimal }[] } | null
-): { aplicadoFondo: number; pagoDirecto: number; pendiente: number; estado: EstadoPagoEstimacion } {
-  if (capa === "OPERATIVO" && siblingPrivado) {
-    const aplicadoFondoReal = suma(siblingPrivado.movimientos, "APLICACION_ESTIMACION");
-    const pagoDirectoReal = suma(siblingPrivado.movimientos, "PAGO_ESTIMACION");
-    const cobradoReal = aplicadoFondoReal + pagoDirectoReal;
-    const cobradoProyectado = Math.min(cobradoReal, importe);
-    // Reparte el monto proyectado entre "aplicado"/"pago directo" en la misma
-    // proporción real — nunca inventa una composición distinta de la real.
-    const factor = cobradoReal > 0 ? cobradoProyectado / cobradoReal : 0;
-    const aplicadoFondo = redondear(aplicadoFondoReal * factor);
-    const pagoDirecto = redondear(pagoDirectoReal * factor);
-    const pendiente = redondear(importe - aplicadoFondo - pagoDirecto);
-    const estado: EstadoPagoEstimacion = pendiente <= 0 ? "CUBIERTA" : cobradoProyectado > 0 ? "PARCIAL" : "PENDIENTE";
-    return { aplicadoFondo, pagoDirecto, pendiente, estado };
-  }
-
-  const aplicadoFondo = suma(movimientosPropios, "APLICACION_ESTIMACION");
-  const pagoDirecto = suma(movimientosPropios, "PAGO_ESTIMACION");
-  const pendiente = redondear(importe - aplicadoFondo - pagoDirecto);
-  const estado: EstadoPagoEstimacion = pendiente <= 0 ? "CUBIERTA" : aplicadoFondo > 0 || pagoDirecto > 0 ? "PARCIAL" : "PENDIENTE";
-  return { aplicadoFondo, pagoDirecto, pendiente, estado };
+// Cobro real de una estimación (E1 / Por cobrar, octubre 2026) — la fórmula
+// vive en lib/control-de-obra/cobro-estimacion.ts (pura, una sola fuente
+// para Control de Obra, validaciones e Inicio). Cobro real = movimientos
+// VIGENTES de AMBAS capas de la estimación — incluidos los cobros de
+// Operativo registrados antes de emitir Privado, que se leen tal cual (nunca
+// se mueven ni se modifican). El saldo para cobros nuevos se mide contra el
+// total de la capa real (Privado emitida si existe, si no Operativo).
+//
+// Debe llamarse con el lock del proyecto ya tomado (todas las rutas que
+// escriben cobros toman `proyectos … FOR UPDATE` primero), para que dos
+// registros simultáneos nunca validen contra el mismo saldo.
+async function situacionCobroRealTx(tx: Cliente, estimacionClienteId: string) {
+  const capas = await tx.estimacionClienteCapa.findMany({
+    where: { estimacionClienteId },
+    select: { id: true, capa: true, estatus: true, total: true },
+  });
+  const movimientos = await tx.movimientoFinancieroCliente.findMany({
+    where: {
+      estimacionClienteCapaId: { in: capas.map((c) => c.id) },
+      estatus: "VIGENTE",
+      tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] },
+    },
+    select: { id: true, tipo: true, monto: true, fecha: true, createdAt: true },
+  });
+  const capaReal = capaRealDeEstimacion(capas);
+  const totalReal = Number(capas.find((c) => c.capa === capaReal && c.estatus === "EMITIDA")?.total ?? 0);
+  return { capaReal, totalReal, movimientos };
 }
+
+const MENSAJE_SIN_SALDO =
+  "Esta estimación no tiene saldo pendiente: ya está cubierta o tiene cobros registrados por encima de su importe. Revisa su historial de cobros.";
 
 // ---------------------------------------------------------------------------
 // Aplicación de fondo contra una estimación (una capa) — toda obra se cobra
@@ -135,8 +128,15 @@ export async function aplicarFondoAEstimacionTx(
   // undefined = aplicar el máximo posible; con valor = tope adicional.
   montoSolicitado?: number
 ): Promise<{ aplicado: number }> {
+  // Aislamiento multiempresa — la capa debe pertenecer a la Empresa y al
+  // proyecto del contexto, aunque los llamadores ya lo validen (función
+  // exportada: nunca confía en un id suelto).
+  const capaRow = await tx.estimacionClienteCapa.findFirstOrThrow({
+    where: { id: estimacionClienteCapaId, estimacionCliente: { empresaId: ctx.empresaId, proyectoId: ctx.proyectoId } },
+  });
+
   const movimientosProyecto = await tx.movimientoFinancieroCliente.findMany({
-    where: { proyectoId: ctx.proyectoId, estatus: "VIGENTE" },
+    where: { proyectoId: ctx.proyectoId, empresaId: ctx.empresaId, estatus: "VIGENTE" },
     select: { tipo: true, monto: true, estimacionClienteCapaId: true },
   });
   // Fondo disponible del proyecto — SIEMPRE todas las capas juntas, nunca
@@ -145,7 +145,6 @@ export async function aplicarFondoAEstimacionTx(
     suma(movimientosProyecto, "APORTACION_FONDO") - suma(movimientosProyecto, "APLICACION_ESTIMACION");
   if (disponible <= 0) return { aplicado: 0 };
 
-  const capaRow = await tx.estimacionClienteCapa.findFirstOrThrow({ where: { id: estimacionClienteCapaId } });
   // Una sola realidad de dinero (ver obtenerCapaCobroReal) — si esta capa ya
   // no es la que recibe movimientos reales (existe una capa Privado emitida
   // hermana), no aplicar nada aquí. No es un error: esta función también la
@@ -155,10 +154,10 @@ export async function aplicarFondoAEstimacionTx(
   const capaReal = await obtenerCapaCobroReal(tx, capaRow.estimacionClienteId);
   if (capaRow.capa !== capaReal) return { aplicado: 0 };
 
-  const cubiertoDeEsta = movimientosProyecto
-    .filter((m) => m.estimacionClienteCapaId === estimacionClienteCapaId && m.tipo !== "APORTACION_FONDO")
-    .reduce((t, m) => t + Number(m.monto), 0);
-  const saldo = Number(capaRow.total) - cubiertoDeEsta;
+  // Saldo REAL de la estimación (cobros vigentes de ambas capas) — nunca se
+  // aplica fondo por encima de lo que realmente falta cobrar.
+  const situacion = await situacionCobroRealTx(tx, capaRow.estimacionClienteId);
+  const saldo = saldoDisponible(situacion.totalReal, situacion.movimientos);
   if (saldo <= 0) return { aplicado: 0 };
 
   const tope = montoSolicitado !== undefined ? Math.min(montoSolicitado, disponible) : disponible;
@@ -524,9 +523,8 @@ export async function obtenerControlContractual(
       where: { proyectoId, estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
       select: { tipo: true, monto: true },
     }),
-    // Cobro real por estimación de esta capa, con su capa Privado hermana
-    // (si existe y ya fue emitida) para poder proyectar Operativo sin crear
-    // un segundo movimiento (ver calcularFinancieroCapaEstimacion).
+    // Cobro real por estimación de esta capa: los movimientos vigentes de
+    // TODAS las capas de su estimación (ver situacionCobroCapa).
     db.estimacionClienteCapa.findMany({
       where: {
         capa: capaEnum,
@@ -538,24 +536,7 @@ export async function obtenerControlContractual(
       },
       select: {
         total: true,
-        movimientosFinancieros: {
-          select: { tipo: true, monto: true },
-          where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
-        },
-        estimacionCliente: {
-          select: {
-            capas: {
-              where: { capa: "PRIVADO", estatus: "EMITIDA" },
-              select: {
-                total: true,
-                movimientosFinancieros: {
-                  select: { tipo: true, monto: true },
-                  where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
-                },
-              },
-            },
-          },
-        },
+        estimacionCliente: { select: { capas: selectCapasConCobros(corte) } },
       },
     }),
   ]);
@@ -575,19 +556,11 @@ export async function obtenerControlContractual(
 
     // Situación financiera de ESTA capa — suma, estimación por estimación,
     // el mismo cálculo que usa el historial (una sola fórmula, ver
-    // calcularFinancieroCapaEstimacion) para que ambas pantallas nunca
+    // situacionCobroCapa) para que ambas pantallas nunca
     // puedan mostrar números distintos del mismo hecho.
     let totalCubierto = 0;
     for (const c of capasEstaCapa) {
-      const siblingPrivado = c.estimacionCliente.capas[0] ?? null;
-      const { aplicadoFondo, pagoDirecto } = calcularFinancieroCapaEstimacion(
-        capaEnum,
-        Number(c.total),
-        c.movimientosFinancieros,
-        siblingPrivado
-          ? { total: Number(siblingPrivado.total), movimientos: siblingPrivado.movimientosFinancieros }
-          : null
-      );
+      const { aplicadoFondo, pagoDirecto } = situacionCobroCapa(capaEnum, Number(c.total), aCapasDeEstimacion(c.estimacionCliente.capas));
       totalCubierto += aplicadoFondo + pagoDirecto;
     }
 
@@ -620,7 +593,7 @@ export async function obtenerControlContractual(
 // persistido ni anclado a la otra capa.
 // ---------------------------------------------------------------------------
 
-export type EstadoPagoEstimacion = "PENDIENTE" | "PARCIAL" | "CUBIERTA";
+export type EstadoPagoEstimacion = EstadoCobro;
 
 export type FilaHistorialEstimacion = {
   id: string;
@@ -634,8 +607,39 @@ export type FilaHistorialEstimacion = {
     pagoDirecto: number;
     pendiente: number;
     estado: EstadoPagoEstimacion;
+    // Cobros registrados por encima del total real de la estimación (> 0 =
+    // sobrecobro histórico). Solo en la capa real — en Operativo con Privado
+    // emitida siempre es 0 (el excedente sería información privada).
+    sobrecobro: number;
   } | null;
 };
+
+// Capas de una estimación con sus cobros vigentes (respetando el corte de un
+// documento histórico) — insumo de situacionCobroCapa.
+function selectCapasConCobros(corte?: CorteHistorico) {
+  return {
+    select: {
+      capa: true,
+      estatus: true,
+      total: true,
+      movimientosFinancieros: {
+        select: { id: true, tipo: true, monto: true, fecha: true, createdAt: true },
+        where: { estatus: "VIGENTE" as const, ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+      },
+    },
+  };
+}
+
+function aCapasDeEstimacion(
+  capas: {
+    capa: CapaEstimacion;
+    estatus: string;
+    total: Prisma.Decimal;
+    movimientosFinancieros: { id: string; tipo: string; monto: Prisma.Decimal; fecha: Date; createdAt: Date }[];
+  }[]
+) {
+  return capas.map((c) => ({ capa: c.capa, estatus: c.estatus, total: Number(c.total), movimientos: c.movimientosFinancieros }));
+}
 
 export async function obtenerHistorialEstimacionesCliente(
   usuario: UsuarioSesion,
@@ -658,53 +662,24 @@ export async function obtenerHistorialEstimacionesCliente(
       },
     },
     include: {
-      estimacionCliente: { include: { semana: { select: { numero: true, anio: true, fechaInicio: true } } } },
-      movimientosFinancieros: {
-        select: { tipo: true, monto: true },
-        where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
+      // Todas las capas de la estimación con sus cobros vigentes — el cobro
+      // real es uno solo por estimación (ver situacionCobroCapa).
+      estimacionCliente: {
+        include: {
+          semana: { select: { numero: true, anio: true, fechaInicio: true } },
+          capas: selectCapasConCobros(corte),
+        },
       },
     },
     orderBy: { estimacionCliente: { semana: { fechaInicio: "asc" } } },
   });
 
-  // Capas Privado EMITIDA hermanas — una consulta aparte (no un N+1 por fila,
-  // es una sola query por el lote completo) para proyectar Operativo cuando
-  // corresponda (ver calcularFinancieroCapaEstimacion).
-  const siblingsPorEstimacionClienteId =
-    capaEnum === "OPERATIVO"
-      ? new Map(
-          (
-            await db.estimacionClienteCapa.findMany({
-              where: {
-                capa: "PRIVADO",
-                estatus: "EMITIDA",
-                estimacionClienteId: { in: capas.map((c) => c.estimacionClienteId) },
-              },
-              select: {
-                estimacionClienteId: true,
-                total: true,
-                movimientosFinancieros: {
-                  select: { tipo: true, monto: true },
-                  where: { estatus: "VIGENTE", ...(corte && { createdAt: { lte: corte.fechaCorte } }) },
-                },
-              },
-            })
-          ).map((s) => [s.estimacionClienteId, s] as const)
-        )
-      : new Map<string, { total: Prisma.Decimal; movimientosFinancieros: { tipo: string; monto: Prisma.Decimal }[] }>();
-
   return capas.map((c) => {
     const importe = Number(c.total);
-    const sibling = siblingsPorEstimacionClienteId.get(c.estimacionClienteId) ?? null;
 
     let financiero: FilaHistorialEstimacion["financiero"] = null;
     if (puedeVerFinanciero) {
-      financiero = calcularFinancieroCapaEstimacion(
-        capaEnum,
-        importe,
-        c.movimientosFinancieros,
-        sibling ? { total: Number(sibling.total), movimientos: sibling.movimientosFinancieros } : null
-      );
+      financiero = situacionCobroCapa(capaEnum, importe, aCapasDeEstimacion(c.estimacionCliente.capas));
     }
 
     return {
@@ -898,14 +873,13 @@ export async function registrarPagoEstimacion(
       );
     }
 
-    const movimientosPrevios = await tx.movimientoFinancieroCliente.findMany({
-      where: { estimacionClienteCapaId, estatus: "VIGENTE", tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
-      select: { tipo: true, monto: true },
-    });
-    const totalPagado = suma(movimientosPrevios, "PAGO_ESTIMACION");
-    const totalAplicado = suma(movimientosPrevios, "APLICACION_ESTIMACION");
-    const saldoPendiente = Number(capaRow.total) - totalPagado - totalAplicado;
+    // Saldo REAL de la estimación (cobros vigentes de ambas capas, bajo el
+    // lock del proyecto) — esta capa es la real, así que el saldo nunca
+    // revela nada que el usuario no pueda ver.
+    const situacion = await situacionCobroRealTx(tx, capaRow.estimacionClienteId);
+    const saldoPendiente = saldoDisponible(situacion.totalReal, situacion.movimientos);
 
+    if (saldoPendiente <= 0) throw new ValidacionError(MENSAJE_SIN_SALDO);
     if (datos.monto > saldoPendiente) {
       throw new ValidacionError(`El pago excede el saldo pendiente (${formatMoney(saldoPendiente)}).`);
     }
@@ -1057,21 +1031,29 @@ export async function editarMontoPagoEstimacion(usuario: UsuarioSesion, movimien
   if (!puedeRegistrarParaCapa(usuario, movimiento.estimacionClienteCapa.capa)) throw new SinPermisoError();
 
   return db.$transaction(async (tx) => {
+    // Mismo orden de bloqueo que registrar/aplicar fondo (proyecto primero,
+    // luego la capa): un cobro de Operativo histórico y uno nuevo en Privado
+    // de la misma estimación nunca validan a la vez contra el mismo saldo.
+    await tx.$queryRaw`SELECT id FROM proyectos WHERE id = ${movimiento.proyectoId} FOR UPDATE`;
     await tx.$queryRaw`SELECT id FROM estimacion_cliente_capas WHERE id = ${movimiento.estimacionClienteCapaId} FOR UPDATE`;
+    const vigente = await tx.movimientoFinancieroCliente.findFirst({ where: { id: movimientoId, estatus: "VIGENTE" } });
+    if (!vigente) throw new ValidacionError("Este pago está cancelado — no se puede editar.");
     const capaRow = await tx.estimacionClienteCapa.findFirstOrThrow({ where: { id: movimiento.estimacionClienteCapaId! } });
-    const otros = await tx.movimientoFinancieroCliente.findMany({
-      where: {
-        estimacionClienteCapaId: movimiento.estimacionClienteCapaId!,
-        estatus: "VIGENTE",
-        tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] },
-        id: { not: movimientoId },
-      },
-      select: { tipo: true, monto: true },
-    });
-    const saldoSinEste = Number(capaRow.total) - suma(otros, "PAGO_ESTIMACION") - suma(otros, "APLICACION_ESTIMACION");
-    if (nuevoMonto > saldoSinEste) {
+
+    // Saldo REAL de la estimación sin este movimiento (ambas capas).
+    const situacion = await situacionCobroRealTx(tx, capaRow.estimacionClienteId);
+    const saldoSinEste = saldoDisponible(situacion.totalReal, situacion.movimientos, movimientoId);
+    // Reducir un cobro siempre se permite (nunca agrega dinero, aunque la
+    // estimación ya tenga un sobrecobro histórico).
+    if (nuevoMonto > saldoSinEste && nuevoMonto > Number(vigente.monto)) {
+      // Si el saldo se mide contra la capa Privado y el usuario no tiene
+      // acceso a ella (p. ej. corrige un cobro histórico de Operativo), el
+      // mensaje nunca incluye el monto: lo revelaría.
+      const puedeVerSaldo = situacion.capaReal === "OPERATIVO" || puedeRegistrarParaCapa(usuario, "PRIVADO");
       throw new ValidacionError(
-        `El nuevo monto excede el saldo disponible (${formatMoney(saldoSinEste)}). Cancela este pago y registra uno nuevo si necesitas otra cifra.`
+        puedeVerSaldo
+          ? `El nuevo monto excede el saldo disponible (${formatMoney(Math.max(0, saldoSinEste))}). Cancela este pago y registra uno nuevo si necesitas otra cifra.`
+          : "El nuevo monto excede el saldo disponible de la estimación. Cancela este pago y registra uno nuevo si necesitas otra cifra."
       );
     }
     await tx.movimientoFinancieroCliente.update({ where: { id: movimientoId }, data: { monto: nuevoMonto } });
@@ -1252,13 +1234,22 @@ export async function obtenerMovimientosCapa(
   usuario: UsuarioSesion,
   estimacionClienteCapaId: string
 ): Promise<FilaMovimientoCapa[]> {
-  const capaRow = await db.estimacionClienteCapa.findFirst({ where: { id: estimacionClienteCapaId } });
+  // Aislamiento multiempresa (C1, octubre 2026) — la capa se busca SIEMPRE
+  // dentro de la Empresa del usuario; una capa de otra Empresa responde
+  // igual que una inexistente (no revela que el id existe). Además se valida
+  // el acceso al proyecto con el mismo mecanismo que el resto del módulo.
+  const empresaId = requerirEmpresa(usuario);
+  const capaRow = await db.estimacionClienteCapa.findFirst({
+    where: { id: estimacionClienteCapaId, estimacionCliente: { empresaId } },
+    select: { capa: true, estimacionCliente: { select: { proyectoId: true } } },
+  });
   if (!capaRow) throw new RegistroNoEncontradoError("La estimación");
+  await obtenerProyecto(usuario, capaRow.estimacionCliente.proyectoId);
   const puedeVer = capaRow.capa === "PRIVADO" ? puedeVerFinancieroCliente(usuario) : puedeVerFinancieroClienteOperativo(usuario);
   if (!puedeVer) throw new SinPermisoError();
 
   const movimientos = await db.movimientoFinancieroCliente.findMany({
-    where: { estimacionClienteCapaId, tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
+    where: { estimacionClienteCapaId, empresaId, tipo: { in: ["PAGO_ESTIMACION", "APLICACION_ESTIMACION"] } },
     include: { registradoPor: { select: { nombre: true } } },
     orderBy: { fecha: "desc" },
   });

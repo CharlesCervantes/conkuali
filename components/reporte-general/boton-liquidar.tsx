@@ -9,6 +9,8 @@ import {
   liquidarMovimientoAction,
   type LiquidarFormState,
 } from "@/app/(app)/reporte-general/actions";
+import { formatMoney } from "@/lib/dinero";
+import type { ResumenReposicionFila } from "@/lib/server/reporte-general/queries";
 
 const METODOS_PAGO = [
   { value: "EFECTIVO", label: "Efectivo" },
@@ -24,7 +26,13 @@ const CAMPO_CLASE =
 // mayoría de las filas (todas menos las PENDIENTE_PAGO con permiso) no
 // pagan el costo de un modal fuera de pantalla (mismo criterio que
 // FormularioGasto/FormularioOrdenCompra).
-export function BotonLiquidar({ movimientoId }: { movimientoId: string }) {
+export function BotonLiquidar({
+  movimientoId,
+  reposicion = null,
+}: {
+  movimientoId: string;
+  reposicion?: ResumenReposicionFila | null;
+}) {
   const [abierto, setAbierto] = useState(false);
 
   return (
@@ -36,16 +44,24 @@ export function BotonLiquidar({ movimientoId }: { movimientoId: string }) {
       >
         Liquidar
       </button>
-      {abierto && <ModalLiquidar movimientoId={movimientoId} onClose={() => setAbierto(false)} />}
+      {abierto && (
+        <ModalLiquidar
+          movimientoId={movimientoId}
+          reposicion={reposicion}
+          onClose={() => setAbierto(false)}
+        />
+      )}
     </>
   );
 }
 
 function ModalLiquidar({
   movimientoId,
+  reposicion,
   onClose,
 }: {
   movimientoId: string;
+  reposicion: ResumenReposicionFila | null;
   onClose: () => void;
 }) {
   const action = liquidarMovimientoAction.bind(null, movimientoId);
@@ -70,6 +86,18 @@ function ModalLiquidar({
     >
       <Card className="enter w-full max-w-sm p-6">
         <h2 className="text-lg font-semibold text-[var(--foreground)]">Liquidar pago</h2>
+        {/* R2: en una reposición con abonos solo se paga el saldo — el
+            servidor registra ese saldo como abono final, nunca el total otra vez. */}
+        {reposicion && reposicion.abonado > 0 && (
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Se liquidará el saldo pendiente:{" "}
+            <span className="font-semibold text-[var(--foreground)]">
+              {formatMoney(reposicion.saldoPendiente)}
+            </span>{" "}
+            (importe original {formatMoney(reposicion.total)}, ya abonado{" "}
+            {formatMoney(reposicion.abonado)}).
+          </p>
+        )}
 
         <form action={formAction} className="mt-4 space-y-3">
           <Campo label="Fecha de pago">
